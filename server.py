@@ -964,12 +964,27 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
     library = get_library(user["id"])
     if library.get(track_id) is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    max_bytes = 2 * 1024 * 1024
-    data, _ = library.audio_bytes(track_id, max_bytes=max_bytes)
+    # Do not guess a prefix length: a large embedded cover can place USLT or
+    # SYLT frames well beyond the old fixed 2 MiB cutoff. Read the ID3 header
+    # first, then return the complete tag so the browser can parse every frame.
+    header, _ = library.audio_bytes(track_id, max_bytes=10)
+    if not header:
+        return Response(content=b"", media_type="application/octet-stream")
+    if len(header) < 10 or header[:3] != b"ID3":
+        data, _ = library.audio_bytes(track_id, max_bytes=10)
+    else:
+        tag_size = sum((header[index] & 0x7F) << shift for index, shift in zip(range(6, 10), (21, 14, 7, 0)))
+        tag_bytes = 10 + tag_size
+        if tag_bytes > 32 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Embedded metadata tag is too large")
+        data, _ = library.audio_bytes(track_id, max_bytes=tag_bytes)
     return Response(
         content=data or b"",
         media_type="application/octet-stream",
-        headers={"Cache-Control": "private, max-age=3600"},
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Length": str(len(data or b"")),
+        },
     )
 
 
