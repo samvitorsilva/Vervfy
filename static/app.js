@@ -20,21 +20,23 @@ window.fetch = async (...args) => {
     args[0] = apiUrl(args[0]);
   }
 
-  // Send session cookies with cross-origin API requests
-  if (typeof args[1] === "object" && args[1] !== null) {
-    args[1].credentials = "include";
-  } else {
-    args[1] = { credentials: "include" };
-  }
-
-  const res = await _fetch(...args);
-
+  // Only attach session cookies to our own API. Third-party calls (e.g. LRCLIB)
+  // use Access-Control-Allow-Origin: * without Allow-Credentials — forcing
+  // credentials: "include" on those requests makes the browser block them.
   const url =
     typeof args[0] === "string"
       ? args[0]
       : (args[0] && args[0].url) || "";
+  const isOurApi = typeof url === "string" && url.startsWith(API_BASE);
+  if (isOurApi) {
+    if (typeof args[1] === "object" && args[1] !== null) {
+      args[1] = { ...args[1], credentials: "include" };
+    } else {
+      args[1] = { credentials: "include" };
+    }
+  }
 
-  return res;
+  return _fetch(...args);
 };
 })();
 
@@ -473,13 +475,15 @@ const LyricsEngine = (() => {
   }
   async function fromOnline(track){
     if(!track || !track.title){ LyricsDebug.log("online: skipped, no title to search with"); return null; }
-    if(!track.artist || track.artist === "Unknown artist"){
+    const artist = (track.artist || "").trim();
+    if(!artist || /^unknown artist$/i.test(artist)){
       LyricsDebug.log(`online: skipped for "${track.title}" — artist is unknown, a search would be unreliable`);
       return null;
     }
     const durationSec = Math.round(track.duration || 0);
-    const baseParams = { track_name: track.title, artist_name: track.artist };
-    if(track.album && track.album !== "Unknown album") baseParams.album_name = track.album;
+    const baseParams = { track_name: track.title, artist_name: artist };
+    const album = (track.album || "").trim();
+    if(album && !/^unknown album$/i.test(album)) baseParams.album_name = album;
 
     // 1) exact match (only meaningful once we know the track's duration)
     if(durationSec > 0){
