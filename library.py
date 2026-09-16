@@ -116,11 +116,19 @@ class Library:
         with SessionLocal() as s:s.add(row);s.commit();return self._track(row)
 
     def remove(self, track_id: str):
-        from db import Favorite, PlaylistTrack
+        from db import Favorite, Playlist, PlaylistTrack
         with SessionLocal() as s:
             row=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
             if not row:return False
-            s.delete(row);s.query(Favorite).filter_by(user_id=self.user_id,track_id=track_id).delete();s.query(PlaylistTrack).filter_by(track_id=track_id).delete();s.commit();return True
+            s.delete(row)
+            s.query(Favorite).filter_by(user_id=self.user_id,track_id=track_id).delete()
+            owned_playlist_ids = s.scalars(select(Playlist.id).where(Playlist.user_id == self.user_id)).all()
+            if owned_playlist_ids:
+                s.query(PlaylistTrack).filter(
+                    PlaylistTrack.playlist_id.in_(owned_playlist_ids),
+                    PlaylistTrack.track_id == track_id,
+                ).delete(synchronize_session=False)
+            s.commit();return True
 
     def cover_bytes(self, track_id: str):
         with SessionLocal() as s:
