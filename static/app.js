@@ -2319,8 +2319,13 @@ function renderArtistDetailView(){
 /* ---------- queue view (full page) ---------- */
 function renderQueueView(){
   const content = $("#content");
+  const addBtn = `<button class="btn" id="btnAddQueueView" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add from library
+    </button>`;
   if(state.queue.length===0){
-    content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>Queue is empty</h3><p>Use the queue button on a track, or choose Add to queue from the menu.</p></div>`;
+    content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>Queue is empty</h3><p>Add songs from your library to build an up-next list.</p><div style="margin-top:6px;">${addBtn}</div></div>`;
+    $("#btnAddQueueView")?.addEventListener("click", openQueueLibraryPicker);
     return;
   }
   const rows = state.queue.map((id,i)=>{
@@ -2336,7 +2341,8 @@ function renderQueueView(){
       <div class="row-actions"><button data-act="remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     </div>`;
   }).join("");
-  content.innerHTML = `<div class="list">${rows}</div>`;
+  content.innerHTML = `<div class="queue-toolbar">${addBtn}</div><div class="list">${rows}</div>`;
+  $("#btnAddQueueView")?.addEventListener("click", openQueueLibraryPicker);
   let dragSrcIndex = null;
   $$(".row[data-qi]").forEach(row=>{
     row.addEventListener("click",(e)=>{
@@ -2380,7 +2386,11 @@ function renderQueueView(){
 /* ---------- queue side panel ---------- */
 function renderQueuePanel(){
   const el = $("#queueList");
-  if(state.queue.length===0){ el.innerHTML = `<div style="padding:30px 14px;color:var(--text-dim);font-size:12.5px;text-align:center;">Nothing queued yet.</div>`; return; }
+  if(state.queue.length===0){
+    el.innerHTML = `<div class="side-empty"><p>Nothing queued yet.</p><button class="btn" id="btnAddQueueEmpty" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add from library</button></div>`;
+    $("#btnAddQueueEmpty")?.addEventListener("click", openQueueLibraryPicker);
+    return;
+  }
   el.innerHTML = state.queue.map((id,i)=>{
     const t = state.tracks.find(x=>x.id===id); if(!t) return "";
     return `
@@ -2421,6 +2431,52 @@ function renderQueuePanel(){
       dragSrcIndex = null;
       renderQueuePanel();
       if(state.view==="queue") renderQueueView();
+    });
+  });
+}
+
+/* ---------- add-from-library picker ---------- */
+function openQueueLibraryPicker(){
+  const overlay = $("#queuePicker");
+  if(!overlay) return;
+  const search = $("#queuePickerSearch");
+  if(search) search.value = "";
+  renderQueueLibraryPicker();
+  overlay.classList.add("open");
+  setTimeout(()=> search?.focus(), 30);
+}
+function closeQueueLibraryPicker(){
+  $("#queuePicker")?.classList.remove("open");
+}
+function renderQueueLibraryPicker(){
+  const listEl = $("#queuePickerList");
+  if(!listEl) return;
+  if(state.tracks.length === 0){
+    listEl.innerHTML = `<div class="queue-picker-empty">Your library is empty. Add music first, then come back to build a queue.</div>`;
+    return;
+  }
+  const q = ($("#queuePickerSearch")?.value || "").trim().toLowerCase();
+  const tracks = q
+    ? state.tracks.filter(t => (t.title+" "+t.artist+" "+t.album).toLowerCase().includes(q))
+    : state.tracks;
+  if(!tracks.length){
+    listEl.innerHTML = `<div class="queue-picker-empty">No matches for that search.</div>`;
+    return;
+  }
+  listEl.innerHTML = tracks.map(t => `
+    <button type="button" class="qp-row" data-id="${t.id}">
+      <img src="${t.art}" alt="">
+      <div class="qp-meta">
+        <div class="qp-title">${escapeHtml(t.title)}</div>
+        <div class="qp-artist">${escapeHtml(t.artist)}</div>
+      </div>
+      <span class="qp-add" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+    </button>
+  `).join("");
+  listEl.querySelectorAll(".qp-row").forEach(row=>{
+    row.addEventListener("click", ()=>{
+      const t = state.tracks.find(x=>x.id===row.dataset.id);
+      if(t) addToQueue(t);
     });
   });
 }
@@ -2522,6 +2578,10 @@ on("#vizOverlay", "click",(e)=>{ if(e.target.id==="vizOverlay") closeViz(); });
 
 on("#btnQueueToggle", "click", ()=> $("#sidePanel").classList.toggle("open"));
 on("#btnCloseQueue", "click", ()=> $("#sidePanel").classList.remove("open"));
+on("#btnAddQueueSide", "click", openQueueLibraryPicker);
+on("#btnCloseQueuePicker", "click", closeQueueLibraryPicker);
+on("#queuePicker", "click", (e)=>{ if(e.target.id==="queuePicker") closeQueueLibraryPicker(); });
+on("#queuePickerSearch", "input", ()=> renderQueueLibraryPicker());
 
 on("#btnLogout", "click", async () => {
   try {
@@ -2568,12 +2628,16 @@ on("#shortcutsOverlay", "click",(e)=>{ if(e.target.id==="shortcutsOverlay") $("#
 document.addEventListener("keydown",(e)=>{
   const tag = (e.target.tagName||"").toLowerCase();
   if(tag==="input" || tag==="textarea"){
-    if(e.key==="Escape") e.target.blur();
+    if(e.key==="Escape"){
+      if($("#queuePicker")?.classList.contains("open")) closeQueueLibraryPicker();
+      else e.target.blur();
+    }
     return;
   }
   if(e.key==="/"){ e.preventDefault(); $("#searchInput")?.focus(); return; }
   if(e.key==="?"){ $("#shortcutsOverlay")?.classList.toggle("open"); return; }
   if(e.key==="Escape"){
+    if($("#queuePicker")?.classList.contains("open")){ closeQueueLibraryPicker(); return; }
     $("#mobilePlayer")?.classList.remove("open");
     $("#shortcutsOverlay")?.classList.remove("open");
     $("#sidePanel")?.classList.remove("open");

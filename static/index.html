@@ -9,7 +9,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=7">
+<link rel="stylesheet" href="/static/styles.css?v=8">
 <script>
 /* Clear stale service workers / caches that can leave the UI dead after updates.
    Do NOT register a new worker here — /sw.js is only served so an already-installed
@@ -238,8 +238,35 @@
 
   <!-- QUEUE / SIDE PANEL -->
   <div class="side-panel" id="sidePanel">
-    <div class="side-head"><h3>Up next</h3><button class="icon-btn" id="btnCloseQueue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
+    <div class="side-head">
+      <h3>Up next</h3>
+      <div class="side-head-actions">
+        <button class="icon-btn" id="btnAddQueueSide" title="Add from library">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="icon-btn" id="btnCloseQueue" title="Close queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>
+        </button>
+      </div>
+    </div>
     <div class="side-body" id="queueList"></div>
+  </div>
+
+  <!-- ADD TO QUEUE FROM LIBRARY -->
+  <div class="queue-picker-overlay" id="queuePicker" role="dialog" aria-modal="true" aria-label="Add from library">
+    <div class="queue-picker-card">
+      <div class="queue-picker-head">
+        <h3>Add from library</h3>
+        <button class="icon-btn" id="btnCloseQueuePicker" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>
+        </button>
+      </div>
+      <div class="queue-picker-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-3.8-3.8"/></svg>
+        <input id="queuePickerSearch" placeholder="Search library" autocomplete="off">
+      </div>
+      <div class="queue-picker-list" id="queuePickerList"></div>
+    </div>
   </div>
 
   <!-- LYRICS OVERLAY -->
@@ -287,6 +314,6 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>
