@@ -1844,6 +1844,7 @@ function trackRowMarkup(t, idx, showAlbum=true){
   const artistText = escapeHtml(artistCreditsLabel(t));
   const title = escapeHtml(t.title);
   const albumText = showAlbum ? escapeHtml(t.album) : "";
+  const metaTitle = showAlbum && albumText ? `${artistText} — ${albumText}` : artistText;
   return `
   <div class="row" data-id="${t.id}" draggable="true">
     <div class="row-idx">
@@ -1855,15 +1856,16 @@ function trackRowMarkup(t, idx, showAlbum=true){
       <img class="row-art" src="${t.art}" alt="">
       <div class="row-title-stack">
         <div class="row-title" title="${title}">${title}</div>
+        <div class="row-meta" title="${metaTitle}">
+          <div class="row-artist">${artistLinksMarkup(t)}</div>
+          ${showAlbum ? `<span class="row-meta-sep" aria-hidden="true">·</span><div class="row-album" title="${albumText}">${albumText}</div>` : ""}
+        </div>
       </div>
-    </div>
-    <div class="row-artist-group" title="${showAlbum ? `${artistText} — ${albumText}` : artistText}">
-      <div class="row-artist">${artistLinksMarkup(t)}</div>
-      ${showAlbum ? `<div class="row-album" title="${albumText}">${albumText}</div>` : ""}
     </div>
     <div class="row-album-cell" title="${albumText}">${showAlbum ? albumText : ""}</div>
     <div class="row-time" data-track-time="${t.id}">${t.duration?fmtTime(t.duration):"--:--"}</div>
     <div class="row-actions">
+      <button data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
       <button data-action="fav" class="${t.favorite?'fav-on':''}" title="Favorite"><svg viewBox="0 0 24 24" fill="${t.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg></button>
       <button data-action="menu" title="More"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
     </div>
@@ -1877,7 +1879,8 @@ function cardMarkup(t){
       <img src="${t.art}" alt="">
       <div class="card-play"><button data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button></div>
     </div>
-    <button class="card-fav ${t.favorite?'on':''}" data-action="fav"><svg viewBox="0 0 24 24" fill="${t.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg></button>
+    <button class="card-queue" data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
+    <button class="card-fav ${t.favorite?'on':''}" data-action="fav" title="Favorite"><svg viewBox="0 0 24 24" fill="${t.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg></button>
     <div class="card-title">${escapeHtml(t.title)}</div>
     <div class="card-sub">${artistLinksMarkup(t)}</div>
   </div>`;
@@ -1902,7 +1905,7 @@ function renderTrackListView(){
   } else {
     content.innerHTML = `
       <div class="list">
-        <div class="list-head"><div></div><div>Title</div><div>Artist / Album</div><div>Album</div><div>Time</div><div></div></div>
+        <div class="list-head"><div></div><div>Title</div><div>Album</div><div>Time</div><div></div></div>
         ${list.map((t,i)=>trackRowMarkup(t,i)).join("")}
       </div>`;
   }
@@ -1934,20 +1937,24 @@ function wireTrackInteractions(list){
   $$(".card").forEach(card => {
     const t = state.tracks.find(x=>x.id===card.dataset.id);
     card.addEventListener("click",(e)=>{
-      if(e.target.closest('[data-action="fav"],[data-action="artist"]')) return;
+      if(e.target.closest('[data-action="fav"],[data-action="queue"],[data-action="artist"]')) return;
       playTrackFromList(list, t.id);
     });
     card.querySelector('[data-action="fav"]').addEventListener("click",(e)=>{ e.stopPropagation(); toggleFavorite(t); });
+    card.querySelector('[data-action="queue"]')?.addEventListener("click",(e)=>{ e.stopPropagation(); addToQueue(t); });
+    card.addEventListener("contextmenu",(e)=>{ e.preventDefault(); openTrackMenu(e, t); });
   });
   $$(".row").forEach(row => {
     const t = state.tracks.find(x=>x.id===row.dataset.id);
     row.addEventListener("click",(e)=>{
-      if(e.target.closest('[data-action="fav"],[data-action="menu"],[data-action="artist"]')) return;
+      if(e.target.closest('[data-action="fav"],[data-action="queue"],[data-action="menu"],[data-action="artist"]')) return;
       playTrackFromList(list, t.id);
     });
     row.querySelector('[data-action="fav"]').addEventListener("click",(e)=>{ e.stopPropagation(); toggleFavorite(t); });
+    row.querySelector('[data-action="queue"]')?.addEventListener("click",(e)=>{ e.stopPropagation(); addToQueue(t); });
     const menuBtn = row.querySelector('[data-action="menu"]');
     if(menuBtn) menuBtn.addEventListener("click",(e)=>{ e.stopPropagation(); openTrackMenu(e, t); });
+    row.addEventListener("contextmenu",(e)=>{ e.preventDefault(); openTrackMenu(e, t); });
     row.addEventListener("dragstart", e=>{ e.dataTransfer.setData("text/plain", t.id); });
   });
   wireArtistLinks($("#content"));
@@ -1964,9 +1971,15 @@ function openTrackMenu(e, t){
   closeMenus();
   const menu = document.createElement("div");
   menu.className = "menu";
-  const rect = e.target.closest("button").getBoundingClientRect();
-  menu.style.top = rect.bottom+6+"px";
-  menu.style.left = Math.min(window.innerWidth-210, rect.left-150)+"px";
+  const anchor = e.target.closest?.("button");
+  if(anchor){
+    const rect = anchor.getBoundingClientRect();
+    menu.style.top = rect.bottom+6+"px";
+    menu.style.left = Math.min(window.innerWidth-210, rect.left-150)+"px";
+  } else {
+    menu.style.top = Math.min(window.innerHeight-160, e.clientY+4)+"px";
+    menu.style.left = Math.min(window.innerWidth-210, e.clientX)+"px";
+  }
   const inPlaylist = state.view.startsWith("playlist:") ? state.view.slice(9) : null;
   menu.innerHTML = `
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
@@ -2079,6 +2092,7 @@ function addToQueue(t){
   if(state.queueIndex < 0) state.queueIndex = 0;
   toast(`Added “${t.title}” to the queue.`);
   renderQueuePanel();
+  if(state.view === "queue") renderQueueView();
 }
 
 /* ---------- playlists view ---------- */
@@ -2272,7 +2286,7 @@ function renderArtistDetailView(){
     : (state.listMode === "grid"
       ? `<div class="grid">${list.map(t=>cardMarkup(t)).join("")}</div>`
       : `<div class="list">
-          <div class="list-head"><div></div><div>Title</div><div>Artist / Album</div><div>Album</div><div>Time</div><div></div></div>
+          <div class="list-head"><div></div><div>Title</div><div>Album</div><div>Time</div><div></div></div>
           ${list.map((t,i)=>trackRowMarkup(t,i)).join("")}
         </div>`);
   content.innerHTML = `
@@ -2306,7 +2320,7 @@ function renderArtistDetailView(){
 function renderQueueView(){
   const content = $("#content");
   if(state.queue.length===0){
-    content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>Queue is empty</h3><p>Play a track from your library to start building a queue.</p></div>`;
+    content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>Queue is empty</h3><p>Use the queue button on a track, or choose Add to queue from the menu.</p></div>`;
     return;
   }
   const rows = state.queue.map((id,i)=>{
