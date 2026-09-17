@@ -1104,8 +1104,7 @@ function playNext(auto=false){
   } else {
     state.queueIndex++;
     if(state.queueIndex >= state.queue.length){
-      if(state.repeat === "all") state.queueIndex = 0;
-      else { state.queueIndex = state.queue.length-1; audioEl.pause(); return; }
+      state.queueIndex = 0; // wrap to first track when the list ends
     }
   }
   playCurrent();
@@ -1217,18 +1216,78 @@ function mobilePlayerContext(){
 function updateMobileLyricsPreview(track){
   const el = $("#mobileLyricsText");
   if(!el) return;
+  if(track && !track.lyricsResolved && !track.lyricsLoading){
+    ensureTrackLyrics(track);
+  }
   if(track?.lyrics?.lines?.length){
     const time = (audioEl.currentTime || 0) * 1000;
     let index = 0;
     track.lyrics.lines.forEach((line, i)=>{ if(line.time <= time) index = i; });
-    el.textContent = track.lyrics.lines.slice(index, index + 2).map(line => line.text).filter(Boolean).join("\n") || "Lyrics are ready.";
+    const active = track.lyrics.lines[index]?.text || "";
+    const next = track.lyrics.lines[index + 1]?.text || "";
+    el.innerHTML = [
+      active ? `<span class="lyric-active">${escapeHtml(active)}</span>` : "",
+      next ? `<span class="lyric-next">${escapeHtml(next)}</span>` : "",
+    ].filter(Boolean).join("\n") || "Lyrics are ready.";
   } else if(track?.lyrics?.text){
-    el.textContent = track.lyrics.text.split(/\n+/).filter(Boolean).slice(0, 2).join("\n");
+    const lines = track.lyrics.text.split(/\n+/).filter(Boolean).slice(0, 2);
+    el.innerHTML = lines.map((line, i) =>
+      `<span class="${i === 0 ? "lyric-active" : "lyric-next"}">${escapeHtml(line)}</span>`
+    ).join("\n");
   } else if(track && !track.lyricsResolved){
     el.textContent = "Finding lyrics for this song…";
   } else {
-    el.textContent = "No lyrics available for this song.";
+    el.textContent = track ? "No lyrics available for this song." : "Play a song to see its lyrics here.";
   }
+}
+
+/** Resolve lyrics for a track once (ID3 → LRCLIB). Safe to call from preview or overlay. */
+function ensureTrackLyrics(track){
+  if(!track || track.lyricsResolved || track.lyricsLoading) return;
+  track.lyricsLoading = true;
+  const requestedTrackId = track.id;
+  LyricsDebug.log(`state: lyrics lookup started for "${track.title}" by ${track.artist}`);
+  (async () => {
+    let result = track.customLyrics
+      ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
+      : null;
+    try{
+      const headRes = result ? null : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
+      if(headRes?.ok){
+        const blob = await headRes.blob();
+        const file = new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
+        const meta = await parseID3(file);
+        result = LyricsEngine.fromID3(meta);
+        if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
+      }
+    }catch(e){
+      LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
+    }
+    if(!result){
+      result = await LyricsEngine.fromOnline(track);
+    }
+    return result;
+  })().then(result => {
+    if(track.customLyrics){
+      track.lyricsLoading = false;
+      return;
+    }
+    track.lyrics = result;
+    track.lyricsResolved = true;
+    track.lyricsLoading = false;
+    LyricsDebug.log(`state: lyrics lookup finished for "${track.title}" →`, result ? result.source : "nothing found");
+    if(currentTrack()?.id !== requestedTrackId) return;
+    updateMobileLyricsPreview(track);
+    if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
+  }).catch(e => {
+    track.lyricsResolved = true;
+    track.lyricsLoading = false;
+    LyricsDebug.warn("state: lyrics lookup threw —", e.message);
+    if(currentTrack()?.id === requestedTrackId){
+      updateMobileLyricsPreview(track);
+      if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
+    }
+  });
 }
 
 function updateNowPlayingUI(){
@@ -1325,56 +1384,10 @@ function renderLyricsStage(){
     stage.innerHTML = sideMarkup + `<div class="lyrics-plain">${paragraphs}<button class="btn btn-primary lyrics-sync-btn" id="btnSyncLyrics">Sync to audio</button></div>`;
     $("#btnSyncLyrics").addEventListener("click", () => openLyricsSyncEditor(t));
   } else if(!t.lyricsResolved){
-    // Nothing cached yet. Prefer lyrics embedded in the saved file's ID3 tags
-    // (instant, offline, already on disk), then fall back to LRCLIB.
+    // Nothing cached yet — kick off shared lookup (ID3 → LRCLIB).
     stage.innerHTML = sideMarkup + lyricsEmptyMarkup("Searching for lyrics…", "Checking this file and LRCLIB for a match.");
     stage.querySelector(".empty-orb")?.classList.add("lyrics-loading-orb");
-    if(!t.lyricsLoading){
-      t.lyricsLoading = true;
-      const requestedTrackId = t.id;
-      LyricsDebug.log(`state: lyrics lookup started for "${t.title}" by ${t.artist}`);
-      (async () => {
-        // `customLyrics` comes from this account's library record. It is
-        // deliberately checked before any tag or network lookup so a saved
-        // manual entry can never be replaced by LRCLIB's "not found" result.
-        let result = t.customLyrics
-          ? (LyricsEngine.fromLRC(t.customLyrics) || { source:"custom", text:t.customLyrics })
-          : null;
-        try{
-          const headRes = result ? null : await fetch(`/api/tracks/${encodeURIComponent(t.id)}/tag-head`);
-          if(headRes?.ok){
-            const blob = await headRes.blob();
-            const file = new File([blob], `${t.title || "track"}.mp3`, { type: "audio/mpeg" });
-            const meta = await parseID3(file);
-            result = LyricsEngine.fromID3(meta);
-            if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
-          }
-        }catch(e){
-          LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
-        }
-        if(!result){
-          result = await LyricsEngine.fromOnline(t);
-        }
-        return result;
-      })().then(result => {
-        // A manual lyric save wins over an older lookup that was still pending.
-        if(t.customLyrics){
-          t.lyricsLoading = false;
-          return;
-        }
-        t.lyrics = result;
-        t.lyricsResolved = true;
-        t.lyricsLoading = false;
-        LyricsDebug.log(`state: lyrics lookup finished for "${t.title}" →`, result ? result.source : "nothing found");
-        const stillRelevant = currentTrack()?.id === requestedTrackId && $("#lyricsOverlay").classList.contains("open");
-        LyricsDebug.log(`render: ${stillRelevant ? "re-rendering (still viewing this track)" : "skipping re-render (user moved on)"}`);
-        if(stillRelevant) renderLyricsStage();
-      }).catch(e => {
-        t.lyricsResolved = true;
-        t.lyricsLoading = false;
-        LyricsDebug.warn("state: lyrics lookup threw —", e.message);
-      });
-    }
+    ensureTrackLyrics(t);
   } else {
     stage.innerHTML = sideMarkup + lyricsEmptyMarkup(
       "No lyrics available",
@@ -1572,7 +1585,12 @@ function updateLyricsHighlight(instant){
     }
   }
 }
-function openLyrics(){ closeViz(); renderLyricsStage(); $("#lyricsOverlay").classList.add("open"); }
+function openLyrics(){
+  $("#mobilePlayer")?.classList.remove("open");
+  closeViz();
+  renderLyricsStage();
+  $("#lyricsOverlay").classList.add("open");
+}
 function closeLyrics(){
   $("#lyricsOverlay").classList.remove("open");
   if(lyricsSyncClockRaf){
@@ -2551,7 +2569,15 @@ on("#mobilePrev", "click", playPrev);
 on("#mobileShuffle", "click", ()=> $("#btnShuffle").click());
 on("#mobileRepeat", "click", ()=> $("#btnRepeat").click());
 on("#mobileLyrics", "click", ()=>{ $("#mobilePlayer").classList.remove("open"); openLyrics(); });
-on("#mobileLyricsOpen", "click", ()=>{ $("#mobilePlayer").classList.remove("open"); openLyrics(); });
+on("#mobileLyricsOpen", "click", (e)=>{ e.stopPropagation(); $("#mobilePlayer").classList.remove("open"); openLyrics(); });
+on("#mobileLyricsCard", "click", ()=>{ $("#mobilePlayer").classList.remove("open"); openLyrics(); });
+on("#mobileLyricsCard", "keydown", (e)=>{
+  if(e.key === "Enter" || e.key === " "){
+    e.preventDefault();
+    $("#mobilePlayer").classList.remove("open");
+    openLyrics();
+  }
+});
 on("#mobileQueue", "click", ()=>{ $("#mobilePlayer").classList.remove("open"); $("#sidePanel").classList.add("open"); });
 
 function seekTo(clientX, seekEl){
