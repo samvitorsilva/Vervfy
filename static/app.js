@@ -851,6 +851,7 @@ function trackFromServer(payload){
 }
 
 let serverLibraryRequest = null;
+let serverLibraryLoading = true;
 let serverLibraryLoaded = false;
 let serverLibraryLoadFailed = false;
 
@@ -903,10 +904,12 @@ async function loadServerLibrary(force = false){
         }
       } else relinkPersistedLibrary();
       serverLibraryLoaded = true;
+      serverLibraryLoading = false;
       serverLibraryLoadFailed = false;
       return state.tracks.length;
     }catch(e){
       console.warn("Could not load server library", e);
+      serverLibraryLoading = false;
       serverLibraryLoadFailed = true;
       return 0;
     } finally {
@@ -1985,6 +1988,14 @@ function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":
 
 function renderTrackListView(){
   const content = $("#content");
+  if(serverLibraryLoading){
+    content.innerHTML = `<div class="library-skeleton" aria-label="Loading library" aria-busy="true">
+      <div class="skeleton-row"><span class="skeleton-art"></span><span class="skeleton-copy"><i></i><i></i></span><span class="skeleton-time"></span></div>
+      <div class="skeleton-row"><span class="skeleton-art"></span><span class="skeleton-copy"><i></i><i></i></span><span class="skeleton-time"></span></div>
+      <div class="skeleton-row"><span class="skeleton-art"></span><span class="skeleton-copy"><i></i><i></i></span><span class="skeleton-time"></span></div>
+    </div>`;
+    return;
+  }
   const list = getVisibleTracks();
   const playlistId = state.view.startsWith("playlist:") ? state.view.slice(9) : null;
   const playlist = playlistId ? state.playlists.find(p=>p.id===playlistId) : null;
