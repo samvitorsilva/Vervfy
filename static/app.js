@@ -1293,8 +1293,14 @@ function ensureTrackLyrics(track){
 function updateNowPlayingUI(){
   const t = currentTrack();
   const bar = $("#nowbar");
-  if(!t){ bar.classList.add("hidden"); $("#mobilePlayer")?.classList.remove("open"); return; }
+  if(!t){
+    bar.classList.add("hidden");
+    document.body.classList.remove("now-playing");
+    $("#mobilePlayer")?.classList.remove("open");
+    return;
+  }
   bar.classList.remove("hidden");
+  document.body.classList.add("now-playing");
   $("#nowArt").src = t.art; $("#miniArt").src = t.art;
   $("#nowTitle").textContent = t.title; $("#miniTitle").textContent = t.title;
   const credits = artistCreditsLabel(t);
