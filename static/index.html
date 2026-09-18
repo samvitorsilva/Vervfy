@@ -315,6 +315,18 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
-<script src="/static/app.js?v=9"></script>
+<script>
+/* Older TV browsers can load the page but fail to parse modern JavaScript
+   syntax, which prevents every click handler from being registered. */
+(function(){
+  var modern = true;
+  try{
+    new Function("var value = null; return value?.foo ?? true;");
+  }catch(_){ modern = false; }
+  var script = document.createElement("script");
+  script.src = "/static/" + (modern ? "app.js" : "app.legacy.js") + "?v=10";
+  document.body.appendChild(script);
+})();
+</script>
 </body>
 </html>
