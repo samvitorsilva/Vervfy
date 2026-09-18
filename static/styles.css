@@ -337,7 +337,7 @@ input{ background:none; border:none; }
   display:block; min-width:0; max-width:100%;
   font-size:12.5px; color:var(--text-mid); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
-.row-artist{ display:inline; }
+.row-artist{ display:inline; font-size:12px; color:var(--text-mid); }
 .row-artist .artist-link{ display:inline; max-width:none; white-space:nowrap; }
 .row-artist .artist-sep{ color:var(--text-dim); }
 .row-meta-sep, .row-album{ display:none; }
@@ -354,12 +354,24 @@ input{ background:none; border:none; }
 .row-actions button.fav-on{ color:var(--amber); opacity:1; }
 .row-actions svg{ width:14px; height:14px; }
 
+/* Queue page: title + artist stacked (no separate artist column) */
+.row[data-qi]{
+  grid-template-columns:36px minmax(0, 1fr) 60px 44px;
+}
+.row[data-qi] .row-actions{ opacity:1; }
+.row[data-qi] .row-artist{
+  display:block; max-width:100%;
+  font-size:12px; color:var(--text-mid);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+
 @media (max-width:900px){
   .list-head, .row{ grid-template-columns:36px minmax(0, 1fr) 52px 96px; }
   .list-head > :nth-child(3), .row > .row-album-cell{ display:none; }
   .row-meta-sep{ display:inline; margin:0 0.35em; color:var(--text-dim); flex:0 0 auto; }
   .row-album{ display:inline; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .row-time{ padding-right:4px; }
+  .row[data-qi]{ grid-template-columns:36px minmax(0, 1fr) 52px 44px; }
 }
 
 /* playlists */
@@ -1005,32 +1017,44 @@ body.mini-mode .mini-player{ display:block; }
      via body.now-playing so the last row clears the elevated mini-player. */
   .list{ overflow-x:hidden; margin-inline:0; padding-inline:0; }
   .list-head{ display:none; }
-  .row:not([data-qi]){
+  .row:not([data-qi]),
+  .row[data-qi]{
     display:grid;
     grid-template-columns:minmax(0, 1fr) auto;
     gap:8px; align-items:center;
     min-width:0; padding:10px 2px;
   }
-  .row:not([data-qi]) .row-idx{ display:none; }
-  .row:not([data-qi]) .row-title-wrap{ min-width:0; gap:10px; }
-  .row:not([data-qi]) .row-art{ width:44px; height:44px; border-radius:10px; }
-  .row:not([data-qi]) .row-title{ font-size:14px; line-height:1.25; }
-  .row:not([data-qi]) .row-meta{
+  .row:not([data-qi]) .row-idx,
+  .row[data-qi] .row-idx{ display:none; }
+  .row:not([data-qi]) .row-title-wrap,
+  .row[data-qi] .row-title-wrap{ min-width:0; gap:10px; }
+  .row:not([data-qi]) .row-art,
+  .row[data-qi] .row-art{ width:44px; height:44px; border-radius:10px; }
+  .row:not([data-qi]) .row-title,
+  .row[data-qi] .row-title{ font-size:14px; line-height:1.25; }
+  .row:not([data-qi]) .row-meta,
+  .row[data-qi] .row-meta{
     display:flex; flex-direction:column; align-items:flex-start; gap:1px;
     white-space:normal; overflow:hidden;
   }
   .row:not([data-qi]) .row-meta-sep{ display:none; }
   .row:not([data-qi]) .row-artist,
-  .row:not([data-qi]) .row-album{
+  .row:not([data-qi]) .row-album,
+  .row[data-qi] .row-artist{
     display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
-  .row:not([data-qi]) .row-artist{ font-size:12px; color:var(--text-mid); }
+  .row:not([data-qi]) .row-artist,
+  .row[data-qi] .row-artist{ font-size:12px; color:var(--text-mid); }
   .row:not([data-qi]) .row-album{ font-size:11px; color:var(--text-dim); }
   .row:not([data-qi]) .row-album-cell{ display:none; }
-  .row:not([data-qi]) .row-time{ display:none; }
-  .row:not([data-qi]) .row-actions{ display:flex; opacity:1; gap:0; align-self:center; }
-  .row:not([data-qi]):hover .row-actions{ opacity:1; }
-  .row:not([data-qi]) .row-actions button{ width:34px; height:34px; }
+  .row:not([data-qi]) .row-time,
+  .row[data-qi] .row-time{ display:none; }
+  .row:not([data-qi]) .row-actions,
+  .row[data-qi] .row-actions{ display:flex; opacity:1; gap:0; align-self:center; }
+  .row:not([data-qi]):hover .row-actions,
+  .row[data-qi]:hover .row-actions{ opacity:1; }
+  .row:not([data-qi]) .row-actions button,
+  .row[data-qi] .row-actions button{ width:34px; height:34px; }
   .row:not([data-qi]) .row-actions [data-action="queue"]{ display:none; }
   .nowbar{
     left:8px; right:8px;

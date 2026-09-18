@@ -2356,11 +2356,17 @@ function renderQueueView(){
     const t = state.tracks.find(x=>x.id===id);
     if(!t) return "";
     const playing = i === state.queueIndex;
+    const title = escapeHtml(t.title);
     return `
-    <div class="row" data-id="${t.id}" data-qi="${i}" draggable="true" style="grid-template-columns:36px 1fr 1fr 90px 44px;">
+    <div class="row" data-id="${t.id}" data-qi="${i}" draggable="true">
       <div class="row-idx"><span class="num">${i+1}</span></div>
-      <div class="row-title-wrap"><img class="row-art" src="${t.art}"><div class="row-title">${escapeHtml(t.title)}</div></div>
-      <div class="row-artist">${artistLinksMarkup(t)}</div>
+      <div class="row-title-wrap">
+        <img class="row-art" src="${t.art}" alt="">
+        <div class="row-title-stack">
+          <div class="row-title" title="${title}">${title}</div>
+          <div class="row-meta"><div class="row-artist">${artistLinksMarkup(t)}</div></div>
+        </div>
+      </div>
       <div class="row-time">${t.duration?fmtTime(t.duration):"--:--"}</div>
       <div class="row-actions"><button data-act="remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     </div>`;
