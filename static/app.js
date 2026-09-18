@@ -12,6 +12,23 @@ function apiUrl(path) {
   return `${API_BASE}${path}`;
 }
 
+function loginPageUrl() {
+  // Always hit the FastAPI login page (not a static-host rewrite).
+  return apiUrl("/login");
+}
+
+async function logoutAndRedirect() {
+  try {
+    // Do not follow the 303 — a broken Location must not block navigation.
+    await fetch(apiUrl("/logout"), {
+      method: "POST",
+      headers: { "X-CSRF-Token": await ensureCsrfToken() },
+      redirect: "manual",
+    });
+  } catch (_) {}
+  window.location.assign(loginPageUrl());
+}
+
 /* If the session cookie expires mid-use, any /api/* call will start
    returning 401 — send the user back to the login page instead of
    leaving them staring at a library that silently stopped loading. */
@@ -42,7 +59,7 @@ window.fetch = async (...args) => {
 
   const response = await _fetch(...args);
   if (isOurApi && response.status === 401) {
-    window.location.assign("/login");
+    window.location.assign(loginPageUrl());
   }
   return response;
 };
@@ -772,10 +789,13 @@ async function saveLibraryMeta(){
   }catch(error){ console.warn("Could not sync library state", error); }
 }
 async function loadPersisted(){
+  const [settings, library] = await Promise.all([
+    AuralisDB.get("auralis:settings"),
+    AuralisDB.get("auralis:library"),
+  ]);
   try{
-    const s = await AuralisDB.get("auralis:settings");
-    if(s){
-      const v = JSON.parse(s);
+    if(settings){
+      const v = JSON.parse(settings);
       state.volume = v.volume ?? 0.7; state.muted = !!v.muted;
       state.shuffle = !!v.shuffle; state.repeat = v.repeat || "off";
       state.listMode = v.listMode || "grid";
@@ -783,8 +803,7 @@ async function loadPersisted(){
   }catch(e){}
   window._persistedLibrary = null;
   try{
-    const l = await AuralisDB.get("auralis:library");
-    if(l) window._persistedLibrary = JSON.parse(l);
+    if(library) window._persistedLibrary = JSON.parse(library);
   }catch(e){}
 }
 
@@ -833,7 +852,6 @@ function trackFromServer(payload){
 
 let serverLibraryRequest = null;
 let serverLibraryLoaded = false;
-let serverLibraryLoading = false;
 let serverLibraryLoadFailed = false;
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -864,14 +882,15 @@ async function loadServerLibrary(force = false){
   if(!force && serverLibraryRequest){ return serverLibraryRequest; }
 
   serverLibraryRequest = (async () => {
-    serverLibraryLoading = true;
     try{
-      const res = await fetchWithRetry("/api/tracks");
-      if(!res.ok) throw new Error("bad status "+res.status);
-      const data = await res.json();
+      const [tracksRes, stateRes] = await Promise.all([
+        fetchWithRetry("/api/tracks"),
+        fetch("/api/library/state"),
+      ]);
+      if(!tracksRes.ok) throw new Error("bad status "+tracksRes.status);
+      const data = await tracksRes.json();
       state.tracks = (data.tracks || []).map(trackFromServer);
       const legacy = window._persistedLibrary;
-      const stateRes = await fetch("/api/library/state");
       if(stateRes.ok){
         const remote = await stateRes.json();
         if(!(remote.favorites||[]).length && !(remote.playlists||[]).length && legacy &&
@@ -891,7 +910,6 @@ async function loadServerLibrary(force = false){
       serverLibraryLoadFailed = true;
       return 0;
     } finally {
-      serverLibraryLoading = false;
       serverLibraryRequest = null;
     }
   })();
@@ -1968,6 +1986,12 @@ function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":
 function renderTrackListView(){
   const content = $("#content");
   const list = getVisibleTracks();
+  const playlistId = state.view.startsWith("playlist:") ? state.view.slice(9) : null;
+  const playlist = playlistId ? state.playlists.find(p=>p.id===playlistId) : null;
+  const addPlaylistBtn = playlist ? `<button class="btn" id="btnAddPlaylistTracks" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add from library
+    </button>` : "";
   if(serverLibraryLoadFailed){
     content.innerHTML = '<div class="empty"><div class="empty-orb"></div><h3>Music server unavailable</h3><p>The server may still be waking up. Try connecting again.</p><button class="btn btn-primary" id="retryLibrary">Retry connection</button></div>';
     $("#retryLibrary")?.addEventListener("click", async () => {
@@ -1986,18 +2010,26 @@ function renderTrackListView(){
     return;
   }
   if(list.length === 0){
+    if(playlist && !state.search.trim()){
+      content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>This playlist is empty</h3><p>Add songs from your library to start building it.</p><div style="margin-top:6px;">${addPlaylistBtn}</div></div>`;
+      $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
+      return;
+    }
     content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>No matches</h3><p>Try a different search term, or browse your full library.</p></div>`;
     return;
   }
+  const toolbar = addPlaylistBtn ? `<div class="queue-toolbar">${addPlaylistBtn}</div>` : "";
   if(state.listMode === "grid"){
-    content.innerHTML = `<div class="grid">${list.map(t=>cardMarkup(t)).join("")}</div>`;
+    content.innerHTML = `${toolbar}<div class="grid">${list.map(t=>cardMarkup(t)).join("")}</div>`;
   } else {
     content.innerHTML = `
+      ${toolbar}
       <div class="list">
         <div class="list-head"><div></div><div>Title</div><div>Album</div><div>Time</div><div></div></div>
         ${list.map((t,i)=>trackRowMarkup(t,i)).join("")}
       </div>`;
   }
+  $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
   wireTrackInteractions(list);
 }
 
@@ -2101,9 +2133,7 @@ function openPlaylistSubmenu(e, t, parentMenu){
           state.playlists.push(pl); saveLibraryMeta(); toast(`Created “${pl.name}” and added the track.`);
         }
       } else {
-        const pl = state.playlists.find(p=>p.id===item.dataset.pl);
-        if(pl && !pl.trackIds.includes(t.id)){ pl.trackIds.push(t.id); saveLibraryMeta(); toast(`Added to “${pl.name}”.`); }
-        else if(pl) toast(`Already in “${pl.name}”.`);
+        addTrackToPlaylist(item.dataset.pl, t);
       }
       closeMenus(); render();
     });
@@ -2187,6 +2217,21 @@ function addToQueue(t){
   if(state.view === "queue") renderQueueView();
 }
 
+function addTrackToPlaylist(playlistId, t, {quiet=false}={}){
+  const pl = state.playlists.find(p=>p.id===playlistId);
+  if(!pl) return false;
+  if(pl.trackIds.includes(t.id)){
+    if(!quiet) toast(`Already in “${pl.name}”.`);
+    return false;
+  }
+  pl.trackIds.push(t.id);
+  saveLibraryMeta();
+  if(!quiet) toast(`Added to “${pl.name}”.`);
+  if(state.view === "playlist:"+playlistId) renderTrackListView();
+  renderTopbar();
+  return true;
+}
+
 /* ---------- playlists view ---------- */
 /* ---------- account view ---------- */
 let accountInfo = null;
@@ -2265,16 +2310,16 @@ async function renderAccountView(){
 
       <section class="acct-settings">
         <div class="acct-settings-title">Session</div>
-        <form method="post" action="/logout">
-          <input type="hidden" name="csrf_token" value="${csrfToken || ""}">
-          <button type="submit" class="btn">Log out</button>
-        </form>
+        <button type="button" class="btn" id="btnAcctLogout">Log out</button>
       </section>
     </div>`;
 
   $$(".acct-panel[data-nav]").forEach(panel=>{
     panel.addEventListener("click", ()=>{ state.view = panel.dataset.nav; render(); });
   });
+
+  const acctLogout = $("#btnAcctLogout");
+  if (acctLogout) acctLogout.addEventListener("click", () => logoutAndRedirect());
 
   const pwForm = $("#pwForm");
   pwForm.addEventListener("submit", async (e)=>{
@@ -2321,8 +2366,11 @@ function renderPlaylistsView(){
   $("#plNewCard").addEventListener("click", ()=>{
     const name = prompt("Name your playlist");
     if(name && name.trim()){
-      state.playlists.push({id:uid(), name:name.trim(), trackIds:[]});
-      saveLibraryMeta(); render();
+      const pl = {id:uid(), name:name.trim(), trackIds:[]};
+      state.playlists.push(pl);
+      saveLibraryMeta();
+      state.view = "playlist:"+pl.id;
+      render();
     }
   });
 }
@@ -2534,12 +2582,32 @@ function renderQueuePanel(){
 }
 
 /* ---------- add-from-library picker ---------- */
+// Shared modal for queue and playlist "Add from library".
+let libraryPickerTarget = { mode: "queue" };
+
 function openQueueLibraryPicker(){
+  openLibraryPicker({ mode: "queue" });
+}
+function openPlaylistLibraryPicker(playlistId){
+  openLibraryPicker({ mode: "playlist", playlistId });
+}
+function openLibraryPicker(target){
   const overlay = $("#queuePicker");
   if(!overlay) return;
+  libraryPickerTarget = target || { mode: "queue" };
   const search = $("#queuePickerSearch");
   if(search) search.value = "";
-  renderQueueLibraryPicker();
+  const title = overlay.querySelector(".queue-picker-head h3");
+  if(title){
+    if(libraryPickerTarget.mode === "playlist"){
+      const pl = state.playlists.find(p=>p.id===libraryPickerTarget.playlistId);
+      title.textContent = pl ? `Add to “${pl.name}”` : "Add to playlist";
+    } else {
+      title.textContent = "Add from library";
+    }
+  }
+  overlay.setAttribute("aria-label", title?.textContent || "Add from library");
+  renderLibraryPicker();
   overlay.classList.add("open");
   setTimeout(()=> search?.focus(), 30);
 }
@@ -2547,10 +2615,17 @@ function closeQueueLibraryPicker(){
   $("#queuePicker")?.classList.remove("open");
 }
 function renderQueueLibraryPicker(){
+  renderLibraryPicker();
+}
+function renderLibraryPicker(){
   const listEl = $("#queuePickerList");
   if(!listEl) return;
+  const forPlaylist = libraryPickerTarget.mode === "playlist";
+  const pl = forPlaylist
+    ? state.playlists.find(p=>p.id===libraryPickerTarget.playlistId)
+    : null;
   if(state.tracks.length === 0){
-    listEl.innerHTML = `<div class="queue-picker-empty">Your library is empty. Add music first, then come back to build a queue.</div>`;
+    listEl.innerHTML = `<div class="queue-picker-empty">Your library is empty. Add music first, then come back to build a ${forPlaylist ? "playlist" : "queue"}.</div>`;
     return;
   }
   const q = ($("#queuePickerSearch")?.value || "").trim().toLowerCase();
@@ -2561,20 +2636,35 @@ function renderQueueLibraryPicker(){
     listEl.innerHTML = `<div class="queue-picker-empty">No matches for that search.</div>`;
     return;
   }
-  listEl.innerHTML = tracks.map(t => `
-    <button type="button" class="qp-row" data-id="${t.id}">
+  listEl.innerHTML = tracks.map(t => {
+    const inPlaylist = !!(pl && pl.trackIds.includes(t.id));
+    return `
+    <button type="button" class="qp-row${inPlaylist ? " in-playlist" : ""}" data-id="${t.id}" ${inPlaylist ? "aria-disabled=\"true\"" : ""}>
       <img src="${t.art}" alt="">
       <div class="qp-meta">
         <div class="qp-title">${escapeHtml(t.title)}</div>
         <div class="qp-artist">${escapeHtml(t.artist)}</div>
       </div>
-      <span class="qp-add" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
-    </button>
-  `).join("");
+      <span class="qp-add" aria-hidden="true">${inPlaylist
+        ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12l5 5L20 7"/></svg>`
+        : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`}</span>
+    </button>`;
+  }).join("");
   listEl.querySelectorAll(".qp-row").forEach(row=>{
     row.addEventListener("click", ()=>{
       const t = state.tracks.find(x=>x.id===row.dataset.id);
-      if(t) addToQueue(t);
+      if(!t) return;
+      if(libraryPickerTarget.mode === "playlist"){
+        if(row.classList.contains("in-playlist")){
+          toast(`Already in this playlist.`);
+          return;
+        }
+        if(addTrackToPlaylist(libraryPickerTarget.playlistId, t)){
+          renderLibraryPicker();
+        }
+      } else {
+        addToQueue(t);
+      }
     });
   });
 }
@@ -2689,16 +2779,7 @@ on("#btnCloseQueuePicker", "click", closeQueueLibraryPicker);
 on("#queuePicker", "click", (e)=>{ if(e.target.id==="queuePicker") closeQueueLibraryPicker(); });
 on("#queuePickerSearch", "input", ()=> renderQueueLibraryPicker());
 
-on("#btnLogout", "click", async () => {
-  try {
-    const response = await fetch(apiUrl("/logout"), {
-      method: "POST",
-      headers: { "X-CSRF-Token": await ensureCsrfToken() },
-    });
-    if (!response.ok) return;
-  } catch (_) {}
-  window.location.assign("/login");
-});
+on("#btnLogout", "click", () => logoutAndRedirect());
   
 on("#btnMini", "click", ()=> enterMiniMode());
 on("#btnMiniExit", "click", ()=> exitMiniMode());
@@ -2808,8 +2889,6 @@ async function init(){
   if(initializationStarted) return;
   initializationStarted = true;
   try{
-    const content = $("#content");
-    if(content) content.innerHTML = '<div class="empty"><div class="empty-orb"></div><h3>Connecting to your library…</h3><p>The free hosting service may need a moment to wake up.</p></div>';
     const label = $("#btnImportTopLabel"); if(label) label.textContent = "Add music";
     $("#btnImportRail")?.setAttribute("data-tip", "Add music");
     await loadPersisted();
@@ -2818,13 +2897,12 @@ async function init(){
     state.shuffle && $("#btnShuffle")?.classList.add("on");
     if(state.repeat!=="off") $("#btnRepeat")?.classList.add("on");
     updateVolUI();
-    const count = await loadServerLibrary();
     ensureCsrfToken();
     render();
-    if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);
-    else if(state.tracks.length === 0){
-      if(serverLibraryLoading) toast("Still connecting to the music server…");
-    }
+    loadServerLibrary().then(count => {
+      render();
+      if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);
+    });
   }catch(e){
     console.error("Auralis init failed", e);
     toast("Something went wrong loading the library.");

@@ -73,16 +73,13 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
+    # CORS only — never use this value as an auth redirect Location (open
+    # redirect / broken static hosts caused post-login 404s).
     allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:8000")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "/")
-
-def frontend_redirect() -> RedirectResponse:
-    return RedirectResponse(FRONTEND_URL, status_code=303)
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
@@ -585,7 +582,7 @@ def index(request: Request, user=Depends(require_page_user)) -> HTMLResponse:
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request) -> HTMLResponse:
     if current_user_row(request) is not None:
-        return frontend_redirect()
+        return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
         request, "login.html", {"csrf_token": auth.get_or_create_csrf_token(request)}
     )
@@ -624,13 +621,13 @@ def login_submit(
     login_throttle.clear(ip, username)
     request.session.clear()
     request.session["user_id"] = row["id"]
-    return frontend_redirect()
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/register", response_class=HTMLResponse)
 def register_form(request: Request) -> HTMLResponse:
     if current_user_row(request) is not None:
-        return frontend_redirect()
+        return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
         request, "register.html", {"csrf_token": auth.get_or_create_csrf_token(request)}
     )
@@ -675,7 +672,7 @@ def register_submit(
 
     request.session.clear()
     request.session["user_id"] = new_user["id"]
-    return frontend_redirect()
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/logout")
@@ -683,7 +680,7 @@ def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
     auth.verify_csrf(request, submitted_token)
     request.session.clear()
-    return frontend_redirect()
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.get("/logout")
@@ -691,7 +688,7 @@ def logout_get(request: Request) -> Response:
     # A GET must not change authentication state. Keep this route as a
     # compatibility redirect for old bookmarks and links.
     del request
-    return frontend_redirect()
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.get("/api/me")

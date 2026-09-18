@@ -728,6 +728,8 @@ body.mini-mode .mini-player{ display:block; }
   background:var(--glass); border:1px solid var(--border);
 }
 .qp-row:hover .qp-add{ color:var(--text); border-color:var(--border-hi); }
+.qp-row.in-playlist{ opacity:0.72; cursor:default; }
+.qp-row.in-playlist .qp-add{ color:var(--cyan); border-color:rgba(94, 214, 214, 0.35); }
 .qp-add svg{ width:14px; height:14px; }
 .q-row{ display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:14px; }
 .q-row:hover{ background:var(--glass); }
