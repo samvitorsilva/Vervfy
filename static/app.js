@@ -1,8 +1,12 @@
 (() => {
 "use strict";
 
-// Backend API hosted on Render
-const API_BASE = "https://verfy-5znt.onrender.com";
+// Backend-served pages use their own origin; static deployments keep the
+// configured production fallback unless they provide an injected API base.
+const configuredApiBase = document.querySelector('meta[name="api-base"]')?.content;
+const API_BASE = (configuredApiBase && !configuredApiBase.startsWith("__")
+  ? configuredApiBase
+  : "https://verfy-5znt.onrender.com").replace(/\/+$/, "");
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -36,7 +40,11 @@ window.fetch = async (...args) => {
     }
   }
 
-  return _fetch(...args);
+  const response = await _fetch(...args);
+  if (isOurApi && response.status === 401) {
+    window.location.assign("/login");
+  }
+  return response;
 };
 })();
 
@@ -825,14 +833,40 @@ function trackFromServer(payload){
 
 let serverLibraryRequest = null;
 let serverLibraryLoaded = false;
+let serverLibraryLoading = false;
+let serverLibraryLoadFailed = false;
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url, options = {}, attempts = 5){
+  let lastError;
+  for(let attempt = 0; attempt < attempts; attempt++){
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try{
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      if(response.ok || response.status === 401 || response.status === 403 || response.status === 404){
+        return response;
+      }
+      lastError = new Error(`Server returned ${response.status}`);
+    }catch(error){
+      lastError = error;
+    }finally{
+      clearTimeout(timeout);
+    }
+    if(attempt < attempts - 1) await wait(Math.min(2000 * 2 ** attempt, 10000));
+  }
+  throw lastError || new Error("Server unavailable");
+}
 
 async function loadServerLibrary(force = false){
   if(!force && serverLibraryLoaded){ return state.tracks.length; }
   if(!force && serverLibraryRequest){ return serverLibraryRequest; }
 
   serverLibraryRequest = (async () => {
+    serverLibraryLoading = true;
     try{
-      const res = await fetch("/api/tracks");
+      const res = await fetchWithRetry("/api/tracks");
       if(!res.ok) throw new Error("bad status "+res.status);
       const data = await res.json();
       state.tracks = (data.tracks || []).map(trackFromServer);
@@ -850,11 +884,14 @@ async function loadServerLibrary(force = false){
         }
       } else relinkPersistedLibrary();
       serverLibraryLoaded = true;
+      serverLibraryLoadFailed = false;
       return state.tracks.length;
     }catch(e){
       console.warn("Could not load server library", e);
+      serverLibraryLoadFailed = true;
       return 0;
     } finally {
+      serverLibraryLoading = false;
       serverLibraryRequest = null;
     }
   })();
@@ -1052,6 +1089,7 @@ function playTrackFromList(list, trackId){
 }
 
 let currentBlobUrl = null;
+let audioRetryPending = false;
 function playCurrent(){
   const t = currentTrack();
   if(!t) return;
@@ -1069,7 +1107,21 @@ function playCurrent(){
   }
   audioEl.volume = state.muted ? 0 : state.volume;
   updateMediaSessionMetadata();
-  audioEl.play().catch(()=>{});
+  audioRetryPending = false;
+  audioEl.play().catch(()=>{
+    if(audioRetryPending) return;
+    audioRetryPending = true;
+    toast("Waking the music server…");
+    wait(2000).then(() => {
+      if(currentTrack()?.id !== t.id || !audioEl.paused) return;
+      audioRetryPending = false;
+      audioEl.load();
+      audioEl.play().catch(() => {
+        audioRetryPending = false;
+        toast("The track could not start. Please try again.");
+      });
+    });
+  });
   updateNowPlayingUI();
   renderQueuePanel();
   renderLibraryHighlight();
@@ -1088,7 +1140,9 @@ function togglePlay(){
     // "Add to queue" on an empty queue sets queueIndex without ever assigning
     // audioEl.src — resume would call play() on an empty element and fail.
     if(!audioEl.getAttribute("src")){ playCurrent(); return; }
-    audioEl.play().catch(()=>{});
+    audioEl.play().catch(()=>{
+      playCurrent();
+    });
   }
   else audioEl.pause();
 }
@@ -1914,6 +1968,17 @@ function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":
 function renderTrackListView(){
   const content = $("#content");
   const list = getVisibleTracks();
+  if(serverLibraryLoadFailed){
+    content.innerHTML = '<div class="empty"><div class="empty-orb"></div><h3>Music server unavailable</h3><p>The server may still be waking up. Try connecting again.</p><button class="btn btn-primary" id="retryLibrary">Retry connection</button></div>';
+    $("#retryLibrary")?.addEventListener("click", async () => {
+      const button = $("#retryLibrary");
+      button.disabled = true;
+      button.textContent = "Connecting…";
+      await loadServerLibrary(true);
+      render();
+    });
+    return;
+  }
   if(state.tracks.length === 0){
     content.innerHTML = emptyStateMarkup();
     $("#emptyAddFiles")?.addEventListener("click", ()=> $("#fileInput").click());
@@ -2076,7 +2141,10 @@ function removeQueueSlot(i){
 async function removeTrack(t){
   const playingId = currentTrack()?.id || null;
   const wasPlaying = playingId === t.id;
-  await deleteTrackOnServer(t.id);
+  if(!await deleteTrackOnServer(t.id)){
+    toast("Could not remove the track. Please try again.");
+    return;
+  }
   state.tracks = state.tracks.filter(x=>x.id!==t.id);
   state.playlists.forEach(p=> p.trackIds = p.trackIds.filter(id=>id!==t.id));
   // Strip every occurrence; keep queueIndex pointed at the same playing
@@ -2623,12 +2691,13 @@ on("#queuePickerSearch", "input", ()=> renderQueueLibraryPicker());
 
 on("#btnLogout", "click", async () => {
   try {
-    await fetch(apiUrl("/logout"), {
+    const response = await fetch(apiUrl("/logout"), {
       method: "POST",
       headers: { "X-CSRF-Token": await ensureCsrfToken() },
     });
+    if (!response.ok) return;
   } catch (_) {}
-  window.location.reload();
+  window.location.assign("/login");
 });
   
 on("#btnMini", "click", ()=> enterMiniMode());
@@ -2739,6 +2808,8 @@ async function init(){
   if(initializationStarted) return;
   initializationStarted = true;
   try{
+    const content = $("#content");
+    if(content) content.innerHTML = '<div class="empty"><div class="empty-orb"></div><h3>Connecting to your library…</h3><p>The free hosting service may need a moment to wake up.</p></div>';
     const label = $("#btnImportTopLabel"); if(label) label.textContent = "Add music";
     $("#btnImportRail")?.setAttribute("data-tip", "Add music");
     await loadPersisted();
@@ -2752,10 +2823,7 @@ async function init(){
     render();
     if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);
     else if(state.tracks.length === 0){
-      // Distinguish "empty library" from "API unreachable"
-      fetch("/api/health").then(r=>{
-        if(!r.ok) toast("Can't reach the Auralis server.");
-      }).catch(()=> toast("Can't reach the Auralis server. Is it running?"));
+      if(serverLibraryLoading) toast("Still connecting to the music server…");
     }
   }catch(e){
     console.error("Auralis init failed", e);

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from html import escape as html_escape
 import json
 import mimetypes
 import os
@@ -572,6 +573,7 @@ def index(request: Request, user=Depends(require_page_user)) -> HTMLResponse:
     del user
     page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     page = page.replace("__CSRF_TOKEN__", auth.get_or_create_csrf_token(request))
+    page = page.replace("__API_BASE__", html_escape(str(request.base_url).rstrip("/"), quote=True))
     return HTMLResponse(
         page,
         headers={"Cache-Control": "no-store"},
@@ -677,8 +679,9 @@ def register_submit(
 
 
 @app.post("/logout")
-def logout(request: Request, csrf_token: str = Form(...)) -> Response:
-    auth.verify_csrf(request, csrf_token)
+def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
+    submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
+    auth.verify_csrf(request, submitted_token)
     request.session.clear()
     return frontend_redirect()
 
@@ -747,7 +750,10 @@ def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
     if not spec or "," in spec:
         return None
     if spec.startswith("-"):
-        suffix = int(spec[1:])
+        try:
+            suffix = int(spec[1:])
+        except ValueError:
+            return None
         if suffix <= 0 or suffix > size:
             return None
         return max(0, size - suffix), size - 1
@@ -763,6 +769,11 @@ def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
     if end < start:
         return None
     return start, end
+
+
+def _content_disposition_filename(filename: str) -> str:
+    """Keep uploaded names safe when placed in a response header."""
+    return re.sub(r'[\r\n"\\]', "_", os.path.basename(filename)) or "audio"
 
 
 @app.post("/api/account/password")
@@ -941,13 +952,14 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
         raise HTTPException(status_code=404, detail="Track not found")
 
     media_type = mimetypes.guess_type(filename)[0] or "audio/mpeg"
+    safe_filename = _content_disposition_filename(filename)
     size = len(data)
     range_header = request.headers.get("range")
     if not range_header:
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(size),
-            "Content-Disposition": f'inline; filename="{filename}"',
+            "Content-Disposition": f'inline; filename="{safe_filename}"',
             "Cache-Control": "private, max-age=3600",
         }
         return Response(content=data, media_type=media_type, headers=headers)
@@ -962,7 +974,7 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{size}",
         "Content-Length": str(len(chunk)),
-        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Disposition": f'inline; filename="{safe_filename}"',
         "Cache-Control": "private, max-age=3600",
     }
     return Response(content=chunk, status_code=206, media_type=media_type, headers=headers)
