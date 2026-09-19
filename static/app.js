@@ -2928,6 +2928,7 @@ async function init(){
   if(initializationStarted) return;
   initializationStarted = true;
   try{
+    render();
     const label = $("#btnImportTopLabel"); if(label) label.textContent = "Add music";
     $("#btnImportRail")?.setAttribute("data-tip", "Add music");
     await loadPersisted();
