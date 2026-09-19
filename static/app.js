@@ -2286,7 +2286,25 @@ function openPlaylistSubmenu(e, t, parentMenu){
   parentMenu.appendChild(sub);
   requestAnimationFrame(()=>{
     const parentRect = parentMenu.getBoundingClientRect();
-    let subRect = sub.getBoundingClientRect();
+    let subRect;
+    if(window.innerWidth <= 640){
+      sub.style.position = "fixed";
+      sub.style.maxHeight = "calc(100vh - 16px)";
+      sub.style.overflowY = "auto";
+      subRect = sub.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - subRect.width - 8, parentRect.left));
+      const belowTop = parentRect.bottom + 6;
+      const aboveTop = parentRect.top - subRect.height - 6;
+      const top = belowTop + subRect.height <= window.innerHeight - 8
+        ? belowTop
+        : aboveTop >= 8
+          ? aboveTop
+          : Math.max(8, window.innerHeight - subRect.height - 8);
+      sub.style.left = `${left}px`;
+      sub.style.top = `${top}px`;
+      return;
+    }
+    subRect = sub.getBoundingClientRect();
     if(subRect.right > window.innerWidth - 8 && parentRect.left >= subRect.width + 14){
       sub.classList.add("menu-sub-left");
       subRect = sub.getBoundingClientRect();
@@ -2369,6 +2387,7 @@ function wireTouchQueueDrag(row, getIndex, refresh){
   const finish = e=>{
     if(startIndex < 0) return;
     const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
+    if(handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
     row.classList.remove("dragging");
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
     if(dragging && target){
