@@ -857,24 +857,52 @@ let serverLibraryLoadFailed = false;
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function fetchWithRetry(url, options = {}, attempts = 5){
+async function fetchWithRetry(url, options = {}, attempts = 5) {
   let lastError;
-  for(let attempt = 0; attempt < attempts; attempt++){
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
-    try{
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      if(response.ok || response.status === 401 || response.status === 403 || response.status === 404){
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let controller = null;
+    let timeout = null;
+
+    try {
+      // AbortController is not supported by some older Samsung TV browsers.
+      if (typeof AbortController !== "undefined") {
+        controller = new AbortController();
+        timeout = setTimeout(() => controller.abort(), 30000);
+      }
+
+      const fetchOptions = { ...options };
+
+      // Only use signal when AbortController exists.
+      if (controller) {
+        fetchOptions.signal = controller.signal;
+      }
+
+      const response = await fetch(url, fetchOptions);
+
+      if (
+        response.ok ||
+        response.status === 401 ||
+        response.status === 403 ||
+        response.status === 404
+      ) {
         return response;
       }
+
       lastError = new Error(`Server returned ${response.status}`);
-    }catch(error){
+    } catch (error) {
       lastError = error;
-    }finally{
-      clearTimeout(timeout);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
-    if(attempt < attempts - 1) await wait(Math.min(2000 * 2 ** attempt, 10000));
+
+    if (attempt < attempts - 1) {
+      await wait(Math.min(2000 * 2 ** attempt, 10000));
+    }
   }
+
   throw lastError || new Error("Server unavailable");
 }
 
