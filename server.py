@@ -2,7 +2,7 @@
 """Vervfy — local music player server."""
 
 from __future__ import annotations
-from auth import Base, engine
+from database import Base, engine
 
 import argparse
 from html import escape as html_escape
