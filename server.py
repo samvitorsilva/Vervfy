@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Auralis — local music player server."""
+"""Vervfy — local music player server."""
 
 from __future__ import annotations
+from auth import Base, engine
 
 import argparse
 from html import escape as html_escape
@@ -562,6 +563,7 @@ def _track_payload(track) -> dict:
 
 @app.on_event("startup")
 def startup() -> None:
+    Base.metadata.create_all(engine)
     app.state.is_first_account = user_store.count() == 0
 
 
