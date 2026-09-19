@@ -657,6 +657,7 @@ const ArtistProfileEngine = (() => {
         ["Label", profile?.label],
         ["Followers", profile?.followers && formatProfileNumber(profile.followers)],
         ["Popularity", profile?.popularity],
+        ["Highlight", profile?.highlights],
       ].filter(([, value]) => value);
       tags.replaceChildren(...facts.map(([label, value]) => {
         const tag = document.createElement("span");
@@ -665,6 +666,7 @@ const ArtistProfileEngine = (() => {
         return tag;
       }));
       tags.hidden = facts.length === 0;
+
       const sourceUrl = safeExternalUrl(profile?.source_url || profile?.website);
       source.replaceChildren();
       if(profile?.source){
@@ -2738,6 +2740,17 @@ async function renderAccountView(){
         <div class="acct-settings-title">Session</div>
         <button type="button" class="btn" id="btnAcctLogout">Log out</button>
       </section>
+
+      <section class="acct-settings acct-danger-zone">
+        <div class="acct-settings-title">Delete account</div>
+        <p class="acct-danger-copy">Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.</p>
+        <form id="deleteAccountForm" class="acct-form">
+          <input type="password" id="deleteAccountPassword" placeholder="Current password" autocomplete="current-password" required>
+          <input type="text" id="deleteAccountConfirmation" placeholder="Type DELETE to confirm" autocomplete="off" required>
+          <button type="submit" class="btn btn-danger">Delete account</button>
+          <div class="acct-form-msg" id="deleteAccountMsg"></div>
+        </form>
+      </section>
     </div>`;
 
   $$(".acct-panel[data-nav]").forEach(panel=>{
@@ -2809,6 +2822,33 @@ async function renderAccountView(){
       pwForm.reset();
     }catch(err){
       msg.textContent = err.message; msg.className = "acct-form-msg error";
+    }
+  });
+
+  const deleteForm = $("#deleteAccountForm");
+  deleteForm.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const msg = $("#deleteAccountMsg");
+    const current_password = $("#deleteAccountPassword").value;
+    const confirmation = $("#deleteAccountConfirmation").value;
+    if(!window.confirm("Delete your account and all of its music data permanently?")) return;
+    const button = deleteForm.querySelector("button[type='submit']");
+    button.disabled = true;
+    msg.textContent = "Deleting account…"; msg.className = "acct-form-msg";
+    try{
+      const res = await fetch("/api/account", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": await ensureCsrfToken() },
+        body: JSON.stringify({ current_password, confirmation }),
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(data.detail || "Could not delete account");
+      accountInfo = null;
+      csrfToken = null;
+      window.location.assign("/login?account_deleted=1");
+    }catch(err){
+      msg.textContent = err.message; msg.className = "acct-form-msg error";
+      button.disabled = false;
     }
   });
 }

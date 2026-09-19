@@ -120,7 +120,9 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, str | None]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
-MAX_ARTIST_BIO_CHARS = 280
+# A detail page should provide context without pushing a user's music library
+# off screen. Keep catalog descriptions to a compact, scan-friendly blurb.
+MAX_ARTIST_BIO_CHARS = 180
 
 
 def _artist_search_key(name: str) -> str:
@@ -203,6 +205,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         ),
         "genre": "Contemporary Christian music",
         "formed_year": "2009",
+        "highlights": "Formed in Fernandópolis, São Paulo, in 2009.",
         "website": "https://www.youtube.com/watch?v=ePdRgBWhvog",
         "website_label": "Official music video",
         "source": "MORADA artist biography",
@@ -213,6 +216,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "Marcos Nui is the artist behind the 2024 single Mi Tiempo and "
             "other Spanish-language releases."
         ),
+        "highlights": "Released the single Mi Tiempo in 2024.",
         "website": "https://music.apple.com/us/artist/marcos-nui/1686270730",
         "website_label": "Artist profile",
         "source": "Marcos Nui artist profile",
@@ -223,6 +227,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "Tommy Bueno is a Buenos Aires–based artist whose catalog includes "
             "the releases Visionario and Atmósfera."
         ),
+        "highlights": "Catalog includes the releases Visionario and Atmósfera.",
         "website": "https://linktr.ee/tommybueno",
         "website_label": "Official artist page",
         "source": "Tommy Bueno official artist page",
@@ -235,6 +240,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         ),
         "genre": "Pop",
         "label": "Vision of Leo Records",
+        "highlights": "Released the album Legacy of Faith in 2023 through Vision of Leo Records.",
         "website": "https://music.apple.com/us/artist/vision-of-leo/1461686609",
         "website_label": "Artist profile",
         "source": "Vision of Leo release page",
@@ -246,6 +252,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "music brings hip-hop together with Christian faith."
         ),
         "genre": "Christian hip-hop",
+        "highlights": "Munich duo known for bringing hip-hop together with Christian faith.",
         "website": "https://obros.eu/presse/",
         "website_label": "Official artist site",
         "source": "O'Bros official artist site",
@@ -256,6 +263,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "KALLY'S Mashup Cast is the credited ensemble for music from "
             "Nickelodeon's KALLY'S Mashup television series."
         ),
+        "highlights": "Credited ensemble for music from Nickelodeon's KALLY'S Mashup television series.",
         "website": "https://www.youtube.com/watch?v=SRQdCfYQJAU",
         "website_label": "Official music video",
         "source": "KALLY'S Mashup official artist channel",
@@ -268,6 +276,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "its core."
         ),
         "genre": "Afrobeat",
+        "highlights": "Music blends Nigerian, South African, and U.S. influences.",
         "website": "https://www.viclucas.com/",
         "website_label": "Official artist site",
         "source": "Vic Lucas official artist site and artist profile",
@@ -279,6 +288,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "project created, produced, and directed by Tim Vishnevskiy."
         ),
         "genre": "Cinematic gospel, soul, alternative R&B",
+        "highlights": "A project created, produced, and directed by Tim Vishnevskiy.",
         "website": "https://kaimalachi.com/",
         "website_label": "Official artist site",
         "source": "Kai Malachi official artist site and artist profile",
@@ -290,6 +300,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "nine-track debut EP Plastic Heart."
         ),
         "genre": "Pop",
+        "highlights": "Released the nine-track debut EP Plastic Heart.",
         "website": "https://ajvitanza.com/",
         "website_label": "Official artist site",
         "source": "AJ Vitanza official artist site",
@@ -302,6 +313,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         ),
         "genre": "Contemporary Christian music",
         "formed_year": "2000",
+        "highlights": "Founded in 2000 by brothers Josh, Luis, and Samy Morales.",
         "website": "https://www.mielsanmarcos.org/artist",
         "website_label": "Official artist site",
         "source": "Miel San Marcos official artist site",
@@ -313,6 +325,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "work includes Christian music."
         ),
         "genre": "Pop, Christian music",
+        "highlights": "Performs as both a singer and drummer from Missouri.",
         "website": "https://open.spotify.com/artist/0wbQ4YBld5MzVAh9lTZlYy",
         "website_label": "Artist profile",
         "source": "Brayden Tabakian artist profile",
@@ -326,6 +339,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         ),
         "genre": "Christian music",
         "label": "Gotee Records",
+        "highlights": "Nashville-based singer-songwriter and a Gotee Records artist.",
         "website": "https://www.josephobrienmusic.com/",
         "website_label": "Official artist site",
         "source": "Joseph O'Brien official artist site",
@@ -337,6 +351,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "Angelo, Michael, and Eric Espinosa."
         ),
         "genre": "Indie Christian",
+        "highlights": "Three-brother band: Angelo, Michael, and Eric Espinosa.",
         "website": "https://www.stringsandheart.com/",
         "website_label": "Official artist site",
         "source": "Strings & Heart official artist site",
@@ -349,6 +364,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "and he aims to bring a modern, creative approach to Christian music."
         ),
         "genre": "Christian pop, hip-hop",
+        "highlights": "Brings gospel and poetry influences to a modern Christian pop and hip-hop sound.",
         "website": "https://www.wassupgio.com/about/",
         "website_label": "Official artist site",
         "source": "gio. official artist site",
@@ -359,6 +375,7 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
             "Kodoku is the recording artist behind releases including “Rose Bath,” "
             '“DEVOTED” with Sam Rivera, and “WATERWALKIN” featuring Hulvey.'
         ),
+        "highlights": "Notable releases include Rose Bath, DEVOTED with Sam Rivera, and WATERWALKIN featuring Hulvey.",
         "website": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
         "website_label": "Spotify artist profile",
         "source": "Kodoku Spotify artist profile",
@@ -763,6 +780,11 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class AccountDeletionRequest(BaseModel):
+    current_password: str
+    confirmation: str
+
+
 class TrackLyricsRequest(BaseModel):
     lyrics: str = Field(..., min_length=1, max_length=200_000)
 
@@ -835,6 +857,25 @@ def change_password(
     if error:
         raise HTTPException(status_code=400, detail=error)
     user_store.update_password(user["id"], auth.hash_password(payload.new_password))
+    return {"ok": True}
+
+
+@app.delete("/api/account")
+def delete_account(
+    payload: AccountDeletionRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    """Permanently delete the signed-in account after explicit confirmation."""
+    if payload.confirmation != "DELETE":
+        raise HTTPException(status_code=400, detail='Type DELETE to confirm account deletion')
+    if not auth.verify_password(payload.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    user_store.delete_user(user["id"])
+    _libraries.pop(user["id"], None)
+    request.session.clear()
+    request.app.state.is_first_account = user_store.count() == 0
     return {"ok": True}
 
 

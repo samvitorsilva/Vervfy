@@ -12,7 +12,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from db import SessionLocal, User
+from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, User
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 
@@ -61,6 +61,23 @@ class UserStore:
                 row.photo_data = photo_data
                 row.photo_mime = photo_mime
                 session.commit()
+
+    def delete_user(self, user_id: str) -> None:
+        """Permanently remove an account and every piece of account-owned data.
+
+        The explicit child deletes keep this reliable for local SQLite databases
+        too, where foreign-key cascade support may not be enabled by the host.
+        """
+        with SessionLocal() as session:
+            playlist_ids = select(Playlist.id).where(Playlist.user_id == user_id)
+            session.query(PlaylistTrack).filter(PlaylistTrack.playlist_id.in_(playlist_ids)).delete(
+                synchronize_session=False
+            )
+            session.query(Favorite).filter(Favorite.user_id == user_id).delete(synchronize_session=False)
+            session.query(TrackRecord).filter(TrackRecord.user_id == user_id).delete(synchronize_session=False)
+            session.query(Playlist).filter(Playlist.user_id == user_id).delete(synchronize_session=False)
+            session.query(User).filter(User.id == user_id).delete(synchronize_session=False)
+            session.commit()
 
     def count(self) -> int:
         with SessionLocal() as session:
