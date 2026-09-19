@@ -63,12 +63,16 @@ app = FastAPI(title="Auralis", version="1.0")
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
+https_only = os.environ.get("AURALIS_HTTPS_ONLY", "0") == "1"
 app.add_middleware(
     SessionMiddleware,
     secret_key=_load_or_create_secret_key(),
     session_cookie="auralis_session",
-    same_site="none",
-    https_only=os.environ.get("AURALIS_HTTPS_ONLY", "0") == "1",
+    # SameSite=None is only valid with Secure cookies in modern browsers. Keep
+    # local HTTP development usable while production can opt into cross-origin
+    # static hosting with AURALIS_HTTPS_ONLY=1.
+    same_site="none" if https_only else "lax",
+    https_only=https_only,
     max_age=60 * 60 * 24 * 30,  # 30 days
 )
 
@@ -78,9 +82,21 @@ app.add_middleware(
     # redirect / broken static hosts caused post-login 404s).
     allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:8000")],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    return response
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
@@ -879,6 +895,13 @@ async def upload_track(
 ) -> dict:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
+    content_length = file.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds the 500 MB limit")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid upload size") from None
     buffer = bytearray()
     total_bytes = 0
     while chunk := await file.read(1024 * 1024):
@@ -933,7 +956,9 @@ def track_cover(
         content=payload,
         media_type="image/jpeg",
         headers={
-            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+            # Covers are user-uploaded private media, so shared caches must not
+            # store or replay them across accounts.
+            "Cache-Control": "private, no-store",
             "Content-Length": str(len(payload)),
         },
     )
