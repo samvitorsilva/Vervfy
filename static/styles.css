@@ -502,6 +502,10 @@ input{ background:none; border:none; }
   display:flex; align-items:center; justify-content:center;
   background:var(--grad-aura); color:#0c0e14; font-weight:700; font-size:1.3rem;
   font-family:var(--font-display);
+  overflow:hidden;
+}
+.acct-avatar img{
+  width:100%; height:100%; object-fit:cover; display:block;
 }
 .acct-name{ font-size:1.1rem; font-weight:700; }
 .acct-sub{ color:var(--text-mid); font-size:0.85rem; margin-top:2px; }

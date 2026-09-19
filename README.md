@@ -88,8 +88,12 @@ For local use, run `./start.sh`; it creates the virtual environment, installs de
 
 ## Persistent data and deployment
 
-Vervfy stores accounts, bcrypt password hashes, tracks/audio, cover art,
-custom lyrics, favorites, and playlists in PostgreSQL. Session cookies are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1` enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE` controls the cookie SameSite policy (`lax` by default).
+Vervfy stores accounts, bcrypt password hashes, profile photos, tracks/audio,
+cover art, custom lyrics, favorites, and playlists in PostgreSQL. Profile
+photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. Session cookies
+are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1`
+enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE`
+controls the cookie SameSite policy (`lax` by default).
 
 ---
 

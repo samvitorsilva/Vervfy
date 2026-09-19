@@ -12,7 +12,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from db import Base, SessionLocal, User
+from db import SessionLocal, User
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 
@@ -52,6 +52,14 @@ class UserStore:
             row = session.get(User, user_id)
             if row:
                 row.password_hash = new_password_hash
+                session.commit()
+
+    def update_profile_photo(self, user_id: str, photo_data: bytes | None, photo_mime: str | None) -> None:
+        with SessionLocal() as session:
+            row = session.get(User, user_id)
+            if row:
+                row.photo_data = photo_data
+                row.photo_mime = photo_mime
                 session.commit()
 
     def count(self) -> int:

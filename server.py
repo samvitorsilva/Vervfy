@@ -5,6 +5,7 @@ from __future__ import annotations
 from database import Base, engine
 
 import argparse
+from io import BytesIO
 from html import escape as html_escape
 import json
 import mimetypes
@@ -23,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
@@ -104,6 +106,7 @@ templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 login_throttle = auth.LoginThrottle()
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, str | None]] = {}
@@ -581,7 +584,18 @@ def _track_payload(track) -> dict:
 
 @app.on_event("startup")
 def startup() -> None:
+    # create_all does not add columns to an existing deployment. Keep older
+    # databases usable while Alembic catches up on the next deployment.
+    from sqlalchemy import inspect, text
+
     Base.metadata.create_all(engine)
+    existing_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    with engine.begin() as connection:
+        if "photo_data" not in existing_columns:
+            photo_type = "BYTEA" if engine.dialect.name == "postgresql" else "BLOB"
+            connection.execute(text(f"ALTER TABLE users ADD COLUMN photo_data {photo_type}"))
+        if "photo_mime" not in existing_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(64)"))
     app.state.is_first_account = user_store.count() == 0
 
 
@@ -718,8 +732,53 @@ def api_me(user=Depends(require_api_user)) -> dict:
         "username": user["username"],
         "email": user["email"],
         "created_at": user["created_at"],
+        "photo_url": f"/api/account/photo?v={int(user['created_at'])}" if user["photo_data"] else None,
         "track_count": get_library(user["id"]).count_tracks(),
     }
+
+
+@app.get("/api/account/photo")
+def account_photo(user=Depends(require_api_user)) -> Response:
+    if not user["photo_data"] or not user["photo_mime"]:
+        raise HTTPException(status_code=404, detail="No profile photo")
+    return Response(
+        content=user["photo_data"],
+        media_type=user["photo_mime"],
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/account/photo")
+async def upload_account_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    user=Depends(require_api_user),
+) -> dict:
+    auth.verify_api_csrf(request)
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Choose an image file")
+    photo_data = await file.read(MAX_PROFILE_PHOTO_BYTES + 1)
+    if len(photo_data) > MAX_PROFILE_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Profile photo must be 5 MB or smaller")
+    try:
+        with Image.open(BytesIO(photo_data)) as image:
+            image.verify()
+            image_format = (image.format or "").upper()
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(status_code=400, detail="That file is not a valid image")
+    allowed_formats = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif"}
+    photo_mime = allowed_formats.get(image_format)
+    if not photo_mime:
+        raise HTTPException(status_code=400, detail="Use a JPEG, PNG, WebP, or GIF image")
+    user_store.update_profile_photo(user["id"], photo_data, photo_mime)
+    return {"photo_url": "/api/account/photo"}
+
+
+@app.delete("/api/account/photo")
+def delete_account_photo(request: Request, user=Depends(require_api_user)) -> dict:
+    auth.verify_api_csrf(request)
+    user_store.update_profile_photo(user["id"], None, None)
+    return {"photo_url": None}
 
 
 @app.get("/api/csrf")

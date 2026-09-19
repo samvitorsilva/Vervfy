@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine
-from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -41,6 +40,8 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    photo_mime: Mapped[str | None] = mapped_column(String(64))
 
     # Preserve the existing route code's sqlite.Row-style access.
     def __getitem__(self, key: str):

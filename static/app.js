@@ -80,6 +80,7 @@ const state = {
   search: "",
   queue: [],             // array of track ids, the play order
   queueIndex: -1,
+  playingContext: null,  // page/list that started the current queue
   shuffle: false,
   repeat: "off",         // off | all | one
   volume: 0.7,
@@ -1139,6 +1140,7 @@ function reorderQueue(fromIndex, toIndex){
 }
 
 function playTrackFromList(list, trackId){
+  capturePlaybackContext();
   buildQueueFrom(list, trackId);
   playCurrent();
 }
@@ -1310,7 +1312,7 @@ function updateSeekUI(){
   $("#mobileSeekThumb").style.left = pct+"%";
 }
 
-function mobilePlayerContext(){
+function viewPlaybackContext(){
   if(state.view === "favorites") return "Liked Songs";
   if(state.view.startsWith("playlist:")){
     const playlist = state.playlists.find(p => p.id === state.view.slice(9));
@@ -1319,6 +1321,10 @@ function mobilePlayerContext(){
   if(state.view === "queue") return "Queue";
   if(state.view === "artists" || state.view.startsWith("artist:")) return "Artist radio";
   return "Library";
+}
+
+function capturePlaybackContext(){
+  state.playingContext = viewPlaybackContext();
 }
 
 function updateMobileLyricsPreview(track){
@@ -1422,7 +1428,7 @@ function updateNowPlayingUI(){
   $("#mobilePlayerArt").src = t.art;
   $("#mobilePlayerTitle").textContent = t.title;
   $("#mobilePlayerArtist").textContent = credits;
-  $("#mobilePlayerContext").textContent = mobilePlayerContext();
+  $("#mobilePlayerContext").textContent = state.playingContext || viewPlaybackContext();
   $("#mobilePlayerFav").classList.toggle("on", !!t.favorite);
   updateMobileLyricsPreview(t);
   updateVolUI();
@@ -1901,6 +1907,11 @@ function getVisibleTracks(){
   } else if(state.view.startsWith("artist:")){
     const name = artistNameFromView(state.view);
     list = state.tracks.filter(t => trackHasArtist(t, name));
+  } else if(state.view.startsWith("album:")){
+    const info = albumInfoFromView(state.view);
+    list = info ? state.tracks.filter(t =>
+      (t.album || "Unknown album") === info.album && artistNameOf(t) === info.artist
+    ) : [];
   } else list = state.tracks;
 
   if(state.search.trim()){
@@ -1934,6 +1945,8 @@ function renderTopbar(){
     title = pl ? pl.name : "Playlist";
   } else if(!title && state.view.startsWith("artist:")){
     title = artistNameFromView(state.view);
+  } else if(!title && state.view.startsWith("album:")){
+    title = albumInfoFromView(state.view)?.album || "Album";
   }
   $("#viewTitle").textContent = title || "Library";
   let count;
@@ -2190,6 +2203,62 @@ function openTrackMenu(e, t){
   menu.querySelector('[data-act="remove"]').addEventListener("click", ()=>{ removeTrack(t); closeMenus(); });
   setTimeout(()=> document.addEventListener("click", closeMenus, {once:true}), 0);
 }
+function openNowPlayingMenu(anchor, t){
+  closeMenus();
+  const menu = document.createElement("div");
+  menu.className = "menu";
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = Math.min(window.innerHeight - 260, rect.bottom + 6) + "px";
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - 212, rect.right - 196)) + "px";
+  const artist = artistsOf(t)[0] || artistNameOf(t);
+  menu.innerHTML = `
+    <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
+    <div class="menu-item" data-act="favorite"><svg viewBox="0 0 24 24" fill="${t.favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg>${t.favorite ? "Remove from liked songs" : "Save to liked songs"}</div>
+    <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
+    <div class="menu-sep"></div>
+    <div class="menu-item" data-act="artist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/></svg>About ${escapeHtml(artist)}</div>
+    <div class="menu-item" data-act="album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M7.5 7.5h.01M16.5 16.5h.01"/></svg>Go to album</div>
+    <div class="menu-item" data-act="share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4"/></svg>Share</div>
+  `;
+  document.body.appendChild(menu);
+  menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
+  menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
+  menu.querySelector('[data-act="playlist"]').addEventListener("click", ev=> openPlaylistSubmenu(ev, t, menu));
+  menu.querySelector('[data-act="artist"]').addEventListener("click", ()=>{ closeMenus(); openArtist(artist); });
+  menu.querySelector('[data-act="album"]').addEventListener("click", ()=>{ closeMenus(); openAlbum(t); });
+  menu.querySelector('[data-act="share"]').addEventListener("click", ()=>{ closeMenus(); shareTrack(t); });
+  setTimeout(()=> document.addEventListener("click", closeMenus, {once:true}), 0);
+}
+function albumViewKey(t){
+  return "album:" + encodeURIComponent(JSON.stringify([t.album || "Unknown album", artistNameOf(t)]));
+}
+function albumInfoFromView(view){
+  try{
+    const [album, artist] = JSON.parse(decodeURIComponent(view.slice(6)));
+    return { album, artist };
+  }catch(_){ return null; }
+}
+function openAlbum(t){
+  if(!t) return;
+  state.view = albumViewKey(t);
+  state.search = "";
+  const input = $("#searchInput");
+  if(input) input.value = "";
+  render();
+}
+async function shareTrack(t){
+  const shareData = { title: t.title, text: `${t.title} — ${artistCreditsLabel(t)}` };
+  if(navigator.share){
+    try{ await navigator.share(shareData); }catch(error){
+      if(error?.name !== "AbortError") toast("Could not share this song.");
+    }
+    return;
+  }
+  try{
+    await navigator.clipboard.writeText(`${shareData.text}\n${window.location.href}`);
+    toast("Song details copied to clipboard.");
+  }catch(_){ toast("Sharing is not available in this browser."); }
+}
 function openPlaylistSubmenu(e, t, parentMenu){
   e.stopPropagation();
   const old = parentMenu.querySelector(".menu-sub"); if(old) old.remove();
@@ -2338,7 +2407,9 @@ async function renderAccountView(){
   content.innerHTML = `
     <div class="account-view">
       <section class="acct-card">
-        <div class="acct-avatar">${escapeHtml((info?.username||"?").slice(0,1).toUpperCase())}</div>
+        <div class="acct-avatar">${info?.photo_url
+          ? `<img src="${escapeHtml(info.photo_url)}" alt="Profile photo">`
+          : escapeHtml((info?.username||"?").slice(0,1).toUpperCase())}</div>
         <div>
           <div class="acct-name">${escapeHtml(info?.username || "Unknown")}</div>
           <div class="acct-sub">${escapeHtml(info?.email || "No email on file")} · Member since ${fmtDate(info?.created_at)}</div>
@@ -2373,6 +2444,16 @@ async function renderAccountView(){
       </div>
 
       <section class="acct-settings">
+        <div class="acct-settings-title">Profile photo</div>
+        <form id="photoForm" class="acct-form acct-photo-form">
+          <input type="file" id="profilePhoto" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+          <label for="profilePhoto" class="btn">Choose photo</label>
+          ${info?.photo_url ? '<button type="button" class="btn" id="btnRemovePhoto">Remove photo</button>' : ""}
+          <div class="acct-form-msg" id="photoMsg">JPEG, PNG, WebP, or GIF up to 5 MB.</div>
+        </form>
+      </section>
+
+      <section class="acct-settings">
         <div class="acct-settings-title">Change password</div>
         <form id="pwForm" class="acct-form">
           <input type="password" id="pwCurrent" placeholder="Current password" autocomplete="current-password" required>
@@ -2394,6 +2475,45 @@ async function renderAccountView(){
 
   const acctLogout = $("#btnAcctLogout");
   if (acctLogout) acctLogout.addEventListener("click", () => logoutAndRedirect());
+
+  const photoInput = $("#profilePhoto");
+  const photoMsg = $("#photoMsg");
+  photoInput.addEventListener("change", async ()=>{
+    const file = photoInput.files?.[0];
+    if(!file) return;
+    photoMsg.textContent = "Uploading…"; photoMsg.className = "acct-form-msg";
+    try{
+      const body = new FormData();
+      body.append("file", file, file.name);
+      const res = await fetch("/api/account/photo", {
+        method: "POST",
+        headers: { "X-CSRF-Token": await ensureCsrfToken() },
+        body,
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(data.detail || "Could not upload photo");
+      accountInfo = {...accountInfo, photo_url: `${data.photo_url}?v=${Date.now()}`};
+      renderAccountView();
+    }catch(err){
+      photoMsg.textContent = err.message; photoMsg.className = "acct-form-msg error";
+      photoInput.value = "";
+    }
+  });
+  const removePhoto = $("#btnRemovePhoto");
+  if(removePhoto) removePhoto.addEventListener("click", async ()=>{
+    photoMsg.textContent = "Removing…"; photoMsg.className = "acct-form-msg";
+    try{
+      const res = await fetch("/api/account/photo", {
+        method: "DELETE",
+        headers: { "X-CSRF-Token": await ensureCsrfToken() },
+      });
+      if(!res.ok) throw new Error("Could not remove photo");
+      accountInfo = {...accountInfo, photo_url: null};
+      renderAccountView();
+    }catch(err){
+      photoMsg.textContent = err.message; photoMsg.className = "acct-form-msg error";
+    }
+  });
 
   const pwForm = $("#pwForm");
   pwForm.addEventListener("submit", async (e)=>{
@@ -2567,6 +2687,7 @@ function renderQueueView(){
   $$(".row[data-qi]").forEach(row=>{
     row.addEventListener("click",(e)=>{
       if(e.target.closest("button")) return;
+      capturePlaybackContext();
       state.queueIndex = +row.dataset.qi; playCurrent();
     });
     row.querySelector('[data-act="remove"]').addEventListener("click",(e)=>{
@@ -2623,7 +2744,11 @@ function renderQueuePanel(){
   }).join("");
   let dragSrcIndex = null;
   el.querySelectorAll(".q-row").forEach(row=>{
-    row.addEventListener("click",(e)=>{ if(e.target.closest("button")) return; state.queueIndex = +row.dataset.i; playCurrent(); });
+    row.addEventListener("click",(e)=>{
+      if(e.target.closest("button")) return;
+      capturePlaybackContext();
+      state.queueIndex = +row.dataset.i; playCurrent();
+    });
     row.querySelector('[data-act="rm"]').addEventListener("click",(e)=>{
       e.stopPropagation();
       removeQueueSlot(+row.dataset.i);
@@ -2807,6 +2932,10 @@ on("#nowbar", "click", (e)=>{
   }
 });
 on("#btnMobilePlayerClose", "click", ()=> $("#mobilePlayer").classList.remove("open"));
+on("#btnMobilePlayerMenu", "click", (e)=>{
+  const t = currentTrack();
+  if(t) openNowPlayingMenu(e.currentTarget, t);
+});
 on("#mobilePlay", "click", togglePlay);
 on("#mobileNext", "click", ()=>playNext(false));
 on("#mobilePrev", "click", playPrev);
