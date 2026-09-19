@@ -9,40 +9,13 @@ const API_BASE = (configuredApiBase && !configuredApiBase.startsWith("__")
   : "https://vervfy-app.onrender.com").replace(/\/+$/, "");
 
 function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
   return `${API_BASE}${path}`;
 }
 
 function loginPageUrl() {
   // Always hit the FastAPI login page (not a static-host rewrite).
   return apiUrl("/login");
-}
-
-// Older smart-TV browsers often have XMLHttpRequest but no fetch API.
-if (!window.fetch && window.XMLHttpRequest && window.Promise) {
-  window.fetch = function (input, options = {}) {
-    return new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      const method = options.method || "GET";
-      request.open(method, input, true);
-      request.withCredentials = options.credentials === "include";
-      if (options.headers) {
-        Object.keys(options.headers).forEach((name) => request.setRequestHeader(name, options.headers[name]));
-      }
-      request.onload = () => {
-        const body = request.responseText || "";
-        resolve({
-          status: request.status,
-          ok: request.status >= 200 && request.status < 300,
-          text: () => Promise.resolve(body),
-          json: () => Promise.resolve(JSON.parse(body))
-        });
-      };
-      request.onerror = () => reject(new Error("Network request failed"));
-      request.ontimeout = () => reject(new Error("Network request timed out"));
-      request.timeout = 30000;
-      request.send(options.body || null);
-    });
-  };
 }
 
 async function logoutAndRedirect() {
@@ -76,7 +49,10 @@ window.fetch = async (...args) => {
     typeof args[0] === "string"
       ? args[0]
       : (args[0] && args[0].url) || "";
-  const isOurApi = typeof url === "string" && url.startsWith(API_BASE);
+  let isOurApi = false;
+  try {
+    isOurApi = new URL(url, window.location.href).origin === new URL(API_BASE, window.location.href).origin;
+  } catch (_) {}
   if (isOurApi) {
     if (typeof args[1] === "object" && args[1] !== null) {
       args[1] = { ...args[1], credentials: "include" };
@@ -572,9 +548,7 @@ const LyricsEngine = (() => {
       return parsed;
     }catch(e){ LyricsDebug.warn("online: search request failed —", e.message); return null; }
   }
-  // Resolution order a caller should use: embedded synced/plain first (instant,
-  // free, already on disk), then local .lrc, then online, cheapest and most
-  // reliable sources first.
+  // Embedded synced/plain lyrics are checked before the online fallback.
   async function resolve(track, idMeta){
     let result = fromID3(idMeta);
     if(!result) result = await fromOnline(track);
@@ -867,9 +841,9 @@ function trackFromServer(payload){
     album: payload.album || "Unknown album",
     year: "",
     duration: payload.duration || 0,
-    art: payload.has_cover ? payload.cover_url : fallbackArt,
+    art: payload.has_cover ? apiUrl(payload.cover_url) : fallbackArt,
     fallbackArt,
-    streamUrl: payload.stream_url,
+    streamUrl: apiUrl(payload.stream_url),
     favorite: false,
     dateAdded: Date.now(),
     lyrics: customLyrics ? (LyricsEngine.fromLRC(customLyrics) || { source:"custom", text:customLyrics }) : null,
@@ -895,7 +869,6 @@ async function fetchWithRetry(url, options = {}, attempts = 5) {
     let timeout = null;
 
     try {
-      // AbortController is not supported by some older Samsung TV browsers.
       if (typeof AbortController !== "undefined") {
         controller = new AbortController();
         timeout = setTimeout(() => controller.abort(), 30000);
@@ -1118,7 +1091,7 @@ async function importFiles(fileList){
   relinkPersistedLibrary();
   saveLibraryMeta();
   if(added) toast(`Saved ${added} track${added!==1?"s":""} to your library.`);
-  else if(failed) toast("Couldn't save those files. Is Auralis running?");
+  else if(failed) toast("Couldn't save those files. Is Vervfy running?");
   else toast("Those tracks were already in your library.");
   render();
 }
@@ -1127,14 +1100,17 @@ async function importFiles(fileList){
    PLAYBACK ENGINE
    ============================================================ */
 function ensureAudioGraph(){
-  if(audioCtx) return;
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if(audioCtx) return true;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if(!AudioContextClass) return false;
+  audioCtx = new AudioContextClass();
   sourceNode = audioCtx.createMediaElementSource(audioEl);
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 128;
   freqData = new Uint8Array(analyser.frequencyBinCount);
   sourceNode.connect(analyser);
   analyser.connect(audioCtx.destination);
+  return true;
 }
 
 function currentTrack(){
@@ -1172,8 +1148,7 @@ let audioRetryPending = false;
 function playCurrent(){
   const t = currentTrack();
   if(!t) return;
-  ensureAudioGraph();
-  if(audioCtx.state === "suspended") audioCtx.resume();
+  if(ensureAudioGraph() && audioCtx.state === "suspended") audioCtx.resume();
   if(currentBlobUrl){ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
   if(t.streamUrl){
     audioEl.src = t.streamUrl;
@@ -1214,8 +1189,8 @@ function togglePlay(){
     return;
   }
   if(audioEl.paused){
-    ensureAudioGraph();
-    if(audioCtx.state==="suspended") audioCtx.resume();
+    if(ensureAudioGraph() && audioCtx.state==="suspended") audioCtx.resume();
+    if(csrfToken?.startsWith("__")) csrfToken = null;
     // "Add to queue" on an empty queue sets queueIndex without ever assigning
     // audioEl.src — resume would call play() on an empty element and fail.
     if(!audioEl.getAttribute("src")){ playCurrent(); return; }
@@ -2136,7 +2111,7 @@ function emptyStateMarkup(){
   <div class="empty">
     <div class="empty-orb"></div>
     <h3>Your library is empty</h3>
-    <p>Add songs or a folder. Auralis saves them on this computer so they come back next time.</p>
+    <p>Add songs or a folder. Vervfy saves them to your account so they are available on your other devices.</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px;">
       <button class="btn btn-primary" id="emptyAddFiles">Add music</button>
       <button class="btn" id="emptyAddFolder">Add folder</button>
@@ -2773,7 +2748,7 @@ function renderLibraryPicker(){
    ============================================================ */
 function on(sel, event, handler){
   const el = typeof sel === "string" ? $(sel) : sel;
-  if(!el){ console.warn("Auralis: missing element", sel); return; }
+  if(!el){ console.warn("Vervfy: missing element", sel); return; }
   el.addEventListener(event, handler);
 }
 on("#btnImportTop", "click", ()=> $("#fileInput")?.click());
@@ -3004,7 +2979,7 @@ async function init(){
       if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);
     });
   }catch(e){
-    console.error("Auralis init failed", e);
+    console.error("Vervfy init failed", e);
     toast("Something went wrong loading the library.");
     try{ render(); }catch(_){}
   }

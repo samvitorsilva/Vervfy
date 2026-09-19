@@ -8,21 +8,21 @@ Upload your own files, organize them into playlists, look up lyrics and artist b
 
 ## What it does
 
-Vervfy is a small FastAPI backend paired with a vanilla JS frontend — no framework, no build step, just HTML, CSS, and JavaScript doing the work. The idea is simple: you own the files, you own the library, and the whole thing runs on your own machine (or server) if you want it to.
+Vervfy is a small FastAPI backend paired with a vanilla JS frontend — no framework, no build step, just HTML, CSS, and JavaScript doing the work. 
 
-Here's roughly what's in there right now:
+Here's roughly what's in there:
 
 **Library**
-Drag-and-drop uploads (whole folders, where the browser allows it), automatic metadata reading, album art extraction — and if a track has no cover, one gets generated so your library doesn't look empty. You can search, remove tracks, and stream everything straight from the backend.
+Drag-and-drop uploads (whole folders, where the browser allows it), automatic metadata reading, album art extraction — and if a track has no cover, one gets generated so your library doesn't look empty. You can search, remove tracks, and stream everything straight from the backend. Supported formats include MP3, M4A/MP4, AAC, FLAC, OGG/OGA, Opus, WAV, and WebM audio.
 
 **Player**
-The basics you'd expect — play/pause, next/previous, seeking, volume, mute — plus a queue system with an "up next" view, shuffle and repeat, a mini player for when you want it out of the way, and keyboard shortcuts for everything (see below).
+The basics you'd expect — play/pause, next/previous, seeking, volume, mute — plus a queue system with an "up next" view, shuffle and repeat, a mini player for when you want it out of the way, system media controls where supported, and keyboard shortcuts for everything (see below). Playback supports authenticated byte-range seeking.
 
 **Organization**
 Favorite tracks, build playlists, and keep it all sorted per user. Libraries are kept fully separate between accounts.
 
 **Lyrics**
-This ended up being one of the more involved parts. Vervfy checks embedded ID3 lyrics first (plain and synced), then LRC files, then falls back to an online lookup through LRCLIB if nothing's found locally. Lyrics scroll in sync with playback and highlight the current line. If none of that turns anything up, you can just paste or type lyrics in yourself.
+This ended up being one of the more involved parts. Vervfy checks embedded ID3 lyrics first (plain and synced), then falls back to an online lookup through LRCLIB. Lyrics scroll in sync with playback and highlight the current line. Custom lyrics can be pasted or typed in and are saved to the account.
 
 **Visualizer**
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
@@ -31,10 +31,10 @@ A Web Audio API–based visualizer that reacts to whatever's currently playing.
 Its own auth system — registration, login/logout, bcrypt-hashed passwords, session-based auth, CSRF protection, and basic login throttling so it's not trivial to brute-force. Every user gets their own isolated library.
 
 **Artist info**
-When available, Vervfy pulls in extra context about the artist you're listening to — bio, genre, mood, formation year, followers, label, that sort of thing — from public catalogs, and caches it so it's not hitting external APIs on every page load.
+When available, Vervfy pulls in extra context about the artist you're listening to — bio, genre, mood, formation year, followers, label, that sort of thing — from public catalogs, and caches it so it's not hitting external APIs on every page load. Artists have a dedicated detail view with photos and profile links when verified data is available.
 
 **As a web app**
-It's built to feel like an app, not a website: responsive on both desktop and mobile, a mini player, offline-friendly bits via a service worker and IndexedDB, and full keyboard navigation.
+It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
 
 ---
 
@@ -44,7 +44,7 @@ It's built to feel like an app, not a website: responsive on both desktop and mo
 
 **Audio/media** — Mutagen for metadata and ID3 handling, Pillow for artwork
 
-**Frontend** — HTML5, CSS3, vanilla JS, Web Audio API, IndexedDB, Service Worker — no framework required
+**Frontend** — HTML5, CSS3, vanilla JS, Web Audio API, IndexedDB — no framework required
 
 ---
 
@@ -63,7 +63,7 @@ vervfy/
 │   ├── styles.css
 │   ├── auth.css
 │   ├── sw.js
-│   └── logo.jpeg
+│   └── gemini-svg.svg
 │
 ├── templates/
 │   ├── login.html
@@ -82,21 +82,20 @@ vervfy/
 
 ## Getting it open
 
-The website is https://vervfy-app.onrender.com.
-Using the free Render service, so you might come across a 'starting application' page. 
-
-```
+For local use, run `./start.sh`; it creates the virtual environment, installs dependencies, starts the server, and opens `http://127.0.0.1:8765`. Set `DATABASE_URL` before starting, using a PostgreSQL connection string for deployment. The hosted app is https://vervfy-app.onrender.com; the free Render service may show a starting page while it wakes.
 
 ---
 
 ## Persistent data and deployment
 
 Vervfy stores accounts, bcrypt password hashes, tracks/audio, cover art,
-custom lyrics, favorites, and playlists in PostgreSQL. `
+custom lyrics, favorites, and playlists in PostgreSQL. Session cookies are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1` enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE` controls the cookie SameSite policy (`lax` by default).
 
 ---
 
 ## Keyboard shortcuts
+
+The shortcuts button is available on desktop and hidden on tablet and mobile layouts. A physical keyboard can still use these shortcuts on supported devices.
 
 | Key | Does what |
 |---|---|
@@ -122,11 +121,12 @@ Things I'd like to get to eventually:
 - [x] Cloud deployment support (Supabase PostgreSQL + Render)
 - [x] Multi-device sync
 - [x] More metadata providers
+- [x] Artist detail view and verified profile links
+- [x] Responsive desktop, tablet, and mobile layouts
 - [ ] Smarter playlists
-- [ ] Album/artist detail pages
 - [ ] Better offline support
 - [ ] Installable PWA
-- [ ] Wider format support
+- [x] Wider format support
 - [ ] Better library sorting/filtering
 - [ ] Some way to share a library publicly
 

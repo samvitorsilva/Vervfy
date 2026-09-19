@@ -10,13 +10,13 @@ VENV="$DIR/.venv"
 URL="http://127.0.0.1:${PORT}"
 
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-  echo "Auralis is already running — opening it."
+  echo "Vervfy is already running — opening it."
   "$DIR/open_app.sh" "$URL" &
   exit 0
 fi
 
 if [ ! -d "$VENV" ]; then
-  echo "Setting up Auralis…"
+  echo "Setting up Vervfy…"
   python3 -m venv "$VENV"
   "$VENV/bin/pip" install --quiet --upgrade pip
   "$VENV/bin/pip" install --quiet -r "$DIR/requirements.txt"
@@ -33,4 +33,4 @@ for _ in $(seq 1 40); do
 done
 
 "$DIR/open_app.sh" "$URL" &
-echo "Auralis is running at $URL"
+echo "Vervfy is running at $URL"

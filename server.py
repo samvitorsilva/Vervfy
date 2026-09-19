@@ -40,11 +40,11 @@ SECRET_KEY_PATH = DATA_DIR / ".secret_key"
 def _load_or_create_secret_key() -> str:
     """Persist a random session-signing key across restarts.
 
-    Prefers the AURALIS_SECRET_KEY env var (set this in production so the
+    Prefers the VERVFY_SECRET_KEY env var (set this in production so the
     key isn't just a file sitting next to the app). Falls back to a
     generated key stored under data/ for local/dev use.
     """
-    env_key = os.environ.get("AURALIS_SECRET_KEY")
+    env_key = os.environ.get("VERVFY_SECRET_KEY")
     if env_key:
         return env_key
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,15 +59,14 @@ def _load_or_create_secret_key() -> str:
     return key
 
 
-app = FastAPI(title="Auralis", version="1.0")
+app = FastAPI(title="Vervfy", version="1.0")
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
-https_only = os.environ.get("AURALIS_HTTPS_ONLY", "0") == "1"
-# Samsung and other older TV browsers are inconsistent about SameSite=None
-# cookies. For same-origin app hosting, lax is both more compatible and
-# sufficient; only use the stricter None setting when explicitly needed.
-configured_same_site = os.environ.get("AURALIS_COOKIE_SAME_SITE", "lax").lower()
+https_only = os.environ.get("VERVFY_HTTPS_ONLY", "0") == "1"
+# For same-origin app hosting, lax is sufficient; only use the stricter None
+# setting when explicitly needed.
+configured_same_site = os.environ.get("VERVFY_COOKIE_SAME_SITE", "lax").lower()
 if configured_same_site not in {"lax", "strict", "none"}:
     configured_same_site = "lax"
 app.add_middleware(
@@ -377,7 +376,7 @@ def _lookup_artist_photo(name: str) -> str | None:
             query = urlencode({"q": candidate_name, "limit": 5})
             request = UrlRequest(
                 f"https://api.deezer.com/search/artist?{query}",
-                headers={"User-Agent": "Auralis/1.0"},
+                headers={"User-Agent": "Vervfy/1.0"},
             )
             with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
                 results = json.load(response).get("data", [])
@@ -424,7 +423,7 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             query = urlencode({"s": candidate_name})
             request = UrlRequest(
                 f"https://www.theaudiodb.com/api/v1/json/2/search.php?{query}",
-                headers={"User-Agent": "Auralis/1.0"},
+                headers={"User-Agent": "Vervfy/1.0"},
             )
             with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
                 artists = json.load(response).get("artists") or []
@@ -473,7 +472,7 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             })
             request = UrlRequest(
                 f"https://en.wikipedia.org/w/api.php?{search_query}",
-                headers={"User-Agent": "Auralis/1.0 (artist profile)"},
+                headers={"User-Agent": "Vervfy/1.0 (artist profile)"},
             )
             with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
                 search = json.load(response)
@@ -492,7 +491,7 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             title = quote(str(match["title"]).replace(" ", "_"), safe="()_")
             summary_request = UrlRequest(
                 f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
-                headers={"User-Agent": "Auralis/1.0 (artist profile)"},
+                headers={"User-Agent": "Vervfy/1.0 (artist profile)"},
             )
             with urlopen(summary_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
                 summary = json.load(response)
@@ -907,11 +906,11 @@ async def upload_track(
             raise HTTPException(status_code=400, detail="Invalid upload size") from None
     buffer = bytearray()
     total_bytes = 0
-    while chunk := await file.read(1024 * 1024):
-        total_bytes += len(chunk)
+    while part := await file.read(1024 * 1024):
+        total_bytes += len(part)
         if total_bytes > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Upload exceeds the 500 MB limit")
-        buffer.extend(chunk)
+        buffer.extend(part)
     if not buffer:
         raise HTTPException(status_code=400, detail="Empty upload")
     library = get_library(user["id"])
@@ -998,15 +997,15 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
         return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
 
     start, end = range_match
-    chunk = data[start : end + 1]
+    payload = data[start : end + 1]
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Range": f"bytes {start}-{end}/{size}",
-        "Content-Length": str(len(chunk)),
+        "Content-Length": str(len(payload)),
         "Content-Disposition": f'inline; filename="{safe_filename}"',
         "Cache-Control": "private, max-age=3600",
     }
-    return Response(content=chunk, status_code=206, media_type=media_type, headers=headers)
+    return Response(content=payload, status_code=206, media_type=media_type, headers=headers)
 
 
 @app.get("/api/tracks/{track_id}/tag-head")
@@ -1060,12 +1059,12 @@ def local_ip() -> str:
 def main() -> None:
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="Run Auralis")
+    parser = argparse.ArgumentParser(description="Run Vervfy")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    print("\n  ♪ Auralis")
+    print("\n  Vervfy")
     print(f"  http://127.0.0.1:{args.port}")
     print(f"  http://{local_ip()}:{args.port}\n")
     uvicorn.run("server:app", host=args.host, port=args.port)

@@ -369,6 +369,7 @@ input{ background:none; border:none; }
 }
 
 @media (max-width:900px){
+  #btnShortcuts{ display:none; }
   .list-head, .row{ grid-template-columns:36px minmax(0, 1fr) 52px 96px; }
   .list-head > :nth-child(3), .row > .row-album-cell{ display:none; }
   .row-meta-sep{ display:inline; margin:0 0.35em; color:var(--text-dim); flex:0 0 auto; }

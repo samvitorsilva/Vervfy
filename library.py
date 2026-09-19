@@ -19,8 +19,8 @@ class Track:
     id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
 
 def track_id_for_bytes(data: bytes) -> str:
-    size, chunk = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:chunk])
-    if size > chunk: digest.update(data[-chunk:])
+    size, sample_size = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:sample_size])
+    if size > sample_size: digest.update(data[-sample_size:])
     return digest.hexdigest()[:16]
 
 def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:

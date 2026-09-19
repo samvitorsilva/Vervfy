@@ -5,13 +5,13 @@ chmod +x "$DIR/start.sh" "$DIR/stop.sh" "$DIR/open_app.sh"
 
 APPS_DIR="$HOME/.local/share/applications"
 mkdir -p "$APPS_DIR"
-DESKTOP_FILE="$APPS_DIR/auralis.desktop"
+DESKTOP_FILE="$APPS_DIR/vervfy.desktop"
 
 cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Auralis
+Name=Vervfy
 Comment=Local music player that saves your library
 Exec=$DIR/start.sh
 Path=$DIR
