@@ -44,7 +44,7 @@ var __forAwait = (obj, it, method) => (it = obj[__knownSymbol("asyncIterator")])
   "use strict";
   var _a, _b;
   const configuredApiBase = (_a = document.querySelector('meta[name="api-base"]')) == null ? void 0 : _a.content;
-  const API_BASE = (configuredApiBase && !configuredApiBase.startsWith("__") ? configuredApiBase : "https://verfy-5znt.onrender.com").replace(/\/+$/, "");
+  const API_BASE = (configuredApiBase && !configuredApiBase.startsWith("__") ? configuredApiBase : "https://vervfy-app.onrender.com").replace(/\/+$/, "");
   function apiUrl(path) {
     return `${API_BASE}${path}`;
   }

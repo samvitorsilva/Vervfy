@@ -6,7 +6,7 @@
 const configuredApiBase = document.querySelector('meta[name="api-base"]')?.content;
 const API_BASE = (configuredApiBase && !configuredApiBase.startsWith("__")
   ? configuredApiBase
-  : "https://verfy-5znt.onrender.com").replace(/\/+$/, "");
+  : "https://vervfy-app.onrender.com").replace(/\/+$/, "");
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;

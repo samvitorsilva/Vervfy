@@ -325,7 +325,7 @@
   }catch(_){ modern = false; }
   if(!window.fetch || !window.Promise) modern = false;
   var script = document.createElement("script");
-  script.src = "/static/" + (modern ? "app.js" : "app.legacy.js") + "?v=11";
+  script.src = "/static/" + (modern ? "app.js" : "app.legacy.js") + "?v=12";
   document.body.appendChild(script);
 })();
 </script>
