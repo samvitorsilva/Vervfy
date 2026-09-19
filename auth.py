@@ -12,7 +12,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from db import Base, engine
+from db import Base, SessionLocal, User
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 
