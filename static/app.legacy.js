@@ -862,27 +862,54 @@ var __forAwait = (obj, it, method) => (it = obj[__knownSymbol("asyncIterator")])
   let serverLibraryLoadFailed = false;
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   function fetchWithRetry(_0) {
-    return __async(this, arguments, function* (url, options = {}, attempts = 5) {
-      let lastError;
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3e4);
-        try {
-          const response = yield fetch(url, __spreadProps(__spreadValues({}, options), { signal: controller.signal }));
-          if (response.ok || response.status === 401 || response.status === 403 || response.status === 404) {
-            return response;
-          }
-          lastError = new Error(`Server returned ${response.status}`);
-        } catch (error) {
-          lastError = error;
-        } finally {
+  return __async(this, arguments, function* (url, options = {}, attempts = 5) {
+    let lastError;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let controller = null;
+      let timeout = null;
+
+      try {
+        // Older Samsung TV browsers may not support AbortController.
+        if (typeof AbortController !== "undefined") {
+          controller = new AbortController();
+          timeout = setTimeout(() => controller.abort(), 3e4);
+        }
+
+        const fetchOptions = __spreadValues({}, options);
+
+        if (controller) {
+          fetchOptions.signal = controller.signal;
+        }
+
+        const response = yield fetch(url, fetchOptions);
+
+        if (
+          response.ok ||
+          response.status === 401 ||
+          response.status === 403 ||
+          response.status === 404
+        ) {
+          return response;
+        }
+
+        lastError = new Error(`Server returned ${response.status}`);
+      } catch (error) {
+        lastError = error;
+      } finally {
+        if (timeout) {
           clearTimeout(timeout);
         }
-        if (attempt < attempts - 1) yield wait(Math.min(2e3 * __pow(2, attempt), 1e4));
       }
-      throw lastError || new Error("Server unavailable");
-    });
-  }
+
+      if (attempt < attempts - 1) {
+        yield wait(Math.min(2e3 * __pow(2, attempt), 1e4));
+      }
+    }
+
+    throw lastError || new Error("Server unavailable");
+  });
+}
   function loadServerLibrary(force = false) {
     return __async(this, null, function* () {
       if (!force && serverLibraryLoaded) {
