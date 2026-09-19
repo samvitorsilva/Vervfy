@@ -10,7 +10,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=11">
+<link rel="stylesheet" href="/static/styles.css?v=12">
 <script>
 /* Clear stale service workers / caches that can leave the UI dead after updates.
    Do NOT register a new worker here — /sw.js is only served so an already-installed
@@ -303,6 +303,29 @@
     </div>
   </div>
 
+  <!-- PROFILE PHOTO EDITOR -->
+  <div class="photo-editor-overlay" id="photoEditorOverlay" role="dialog" aria-modal="true" aria-labelledby="photoEditorTitle">
+    <div class="photo-editor-card">
+      <div class="photo-editor-head">
+        <div><h3 id="photoEditorTitle">Adjust profile photo</h3><p>Drag to reposition, then use the slider to zoom.</p></div>
+        <button type="button" class="icon-btn" id="btnClosePhotoEditor" title="Close" aria-label="Close photo editor">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>
+        </button>
+      </div>
+      <div class="photo-editor-stage" id="photoEditorStage">
+        <img id="photoEditorImage" alt="Profile photo crop preview">
+      </div>
+      <label class="photo-editor-zoom" for="photoEditorZoom"><span>Zoom</span><input id="photoEditorZoom" type="range" min="1" max="3" step="0.01" value="1"></label>
+      <div class="photo-editor-actions">
+        <input type="file" id="photoEditorInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+        <label for="photoEditorInput" class="btn">Choose another</label>
+        <button type="button" class="btn" id="btnResetPhotoEditor">Reset</button>
+        <button type="button" class="btn btn-primary" id="btnSavePhotoEditor">Save photo</button>
+      </div>
+      <div class="acct-form-msg" id="photoEditorMsg" aria-live="polite"></div>
+    </div>
+  </div>
+
   <!-- DROP OVERLAY -->
   <div class="drop-overlay" id="dropOverlay">
     <div class="empty-orb"></div>
@@ -315,6 +338,6 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
-<script src="/static/app.js?v=13"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

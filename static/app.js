@@ -624,6 +624,11 @@ const ArtistProfileEngine = (() => {
   const resolved = new Map();
   const pending = new Set();
 
+  function formatProfileNumber(value){
+    const number = Number(value);
+    return Number.isFinite(number) ? new Intl.NumberFormat().format(number) : value;
+  }
+
   function safeExternalUrl(value){
     if(typeof value !== "string") return null;
     try{
@@ -645,7 +650,13 @@ const ArtistProfileEngine = (() => {
       bio.textContent = profile?.bio || "No artist biography is available from the public catalog.";
 
       const facts = [
-        ["Genre", profile?.genre], ["Formed", profile?.formed_year], ["Label", profile?.label],
+        ["Genre", profile?.genre],
+        ["Style", profile?.style],
+        ["Mood", profile?.mood],
+        ["Formed", profile?.formed_year],
+        ["Label", profile?.label],
+        ["Followers", profile?.followers && formatProfileNumber(profile.followers)],
+        ["Popularity", profile?.popularity],
       ].filter(([, value]) => value);
       tags.replaceChildren(...facts.map(([label, value]) => {
         const tag = document.createElement("span");
@@ -2470,6 +2481,158 @@ function addTrackToPlaylist(playlistId, t, {quiet=false}={}){
 
 /* ---------- playlists view ---------- */
 /* ---------- account view ---------- */
+const ProfilePhotoEditor = (() => {
+  const OUTPUT_SIZE = 512;
+  let image = null;
+  let objectUrl = null;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let drag = null;
+
+  const overlay = () => $("#photoEditorOverlay");
+  const stage = () => $("#photoEditorStage");
+  const preview = () => $("#photoEditorImage");
+  const zoom = () => $("#photoEditorZoom");
+  const message = () => $("#photoEditorMsg");
+
+  function baseScale(){
+    const rect = stage().getBoundingClientRect();
+    return Math.max(rect.width / image.naturalWidth, rect.height / image.naturalHeight);
+  }
+
+  function clampOffset(){
+    const rect = stage().getBoundingClientRect();
+    const width = image.naturalWidth * baseScale() * scale;
+    const height = image.naturalHeight * baseScale() * scale;
+    offsetX = Math.max(-(width - rect.width) / 2, Math.min((width - rect.width) / 2, offsetX));
+    offsetY = Math.max(-(height - rect.height) / 2, Math.min((height - rect.height) / 2, offsetY));
+  }
+
+  function draw(){
+    if(!image) return;
+    clampOffset();
+    const rect = stage().getBoundingClientRect();
+    const width = image.naturalWidth * baseScale() * scale;
+    const height = image.naturalHeight * baseScale() * scale;
+    const img = preview();
+    img.style.width = `${width}px`;
+    img.style.height = `${height}px`;
+    img.style.left = `${(rect.width - width) / 2 + offsetX}px`;
+    img.style.top = `${(rect.height - height) / 2 + offsetY}px`;
+  }
+
+  function reset(){
+    scale = 1;
+    offsetX = 0;
+    offsetY = 0;
+    zoom().value = String(scale);
+    draw();
+  }
+
+  function close(){
+    overlay()?.classList.remove("open");
+    drag = null;
+    if(objectUrl){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+  }
+
+  function openSource(src, revokeOnClose=false){
+    const img = preview();
+    message().textContent = "";
+    image = null;
+    if(objectUrl){ URL.revokeObjectURL(objectUrl); objectUrl = null; }
+    if(revokeOnClose) objectUrl = src;
+    img.onload = () => { image = img; reset(); };
+    img.onerror = () => { message().textContent = "This image could not be opened."; };
+    overlay().classList.add("open");
+    img.src = src;
+  }
+
+  function openFile(file){
+    if(!file) return;
+    if(!file.type.startsWith("image/")){
+      message().textContent = "Choose a JPEG, PNG, WebP, or GIF image.";
+      return;
+    }
+    if(file.size > 5 * 1024 * 1024){
+      message().textContent = "Profile photo must be 5 MB or smaller.";
+      return;
+    }
+    openSource(URL.createObjectURL(file), true);
+  }
+
+  async function save(){
+    if(!image) return;
+    const saveButton = $("#btnSavePhotoEditor");
+    saveButton.disabled = true;
+    message().textContent = "Saving…";
+    try{
+      const rect = stage().getBoundingClientRect();
+      const displayScale = baseScale() * scale;
+      const width = image.naturalWidth * displayScale;
+      const height = image.naturalHeight * displayScale;
+      const left = (rect.width - width) / 2 + offsetX;
+      const top = (rect.height - height) / 2 + offsetY;
+      const canvas = document.createElement("canvas");
+      canvas.width = OUTPUT_SIZE;
+      canvas.height = OUTPUT_SIZE;
+      const context = canvas.getContext("2d");
+      context.drawImage(image, left * OUTPUT_SIZE / rect.width, top * OUTPUT_SIZE / rect.height,
+        width * OUTPUT_SIZE / rect.width, height * OUTPUT_SIZE / rect.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      if(!blob) throw new Error("Could not create the cropped photo");
+      await uploadProfilePhoto(blob, "profile-photo.jpg");
+      close();
+      renderAccountView();
+    }catch(err){
+      message().textContent = err.message || "Could not save photo";
+    }finally{
+      saveButton.disabled = false;
+    }
+  }
+
+  function bind(){
+    stage()?.addEventListener("pointerdown", e => {
+      if(!image) return;
+      drag = { x:e.clientX, y:e.clientY, offsetX, offsetY };
+      stage().setPointerCapture?.(e.pointerId);
+    });
+    stage()?.addEventListener("pointermove", e => {
+      if(!drag) return;
+      offsetX = drag.offsetX + e.clientX - drag.x;
+      offsetY = drag.offsetY + e.clientY - drag.y;
+      draw();
+    });
+    const endDrag = () => { drag = null; };
+    stage()?.addEventListener("pointerup", endDrag);
+    stage()?.addEventListener("pointercancel", endDrag);
+    zoom()?.addEventListener("input", () => { scale = Number(zoom().value); draw(); });
+    $("#btnResetPhotoEditor")?.addEventListener("click", reset);
+    $("#btnClosePhotoEditor")?.addEventListener("click", close);
+    $("#btnSavePhotoEditor")?.addEventListener("click", save);
+    overlay()?.addEventListener("click", e => { if(e.target === overlay()) close(); });
+    $("#photoEditorInput")?.addEventListener("change", e => {
+      openFile(e.target.files?.[0]);
+      e.target.value = "";
+    });
+  }
+  bind();
+  return { openFile, openSource, close };
+})();
+
+async function uploadProfilePhoto(file, filename){
+  const body = new FormData();
+  body.append("file", file, filename || "profile-photo.jpg");
+  const res = await fetch("/api/account/photo", {
+    method: "POST",
+    headers: { "X-CSRF-Token": await ensureCsrfToken() },
+    body,
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.detail || "Could not upload photo");
+  accountInfo = {...accountInfo, photo_url: `${data.photo_url}?v=${Date.now()}`};
+}
+
 let accountInfo = null;
 async function fetchAccountInfo(){
   try{
@@ -2501,7 +2664,7 @@ async function renderAccountView(){
   content.innerHTML = `
     <div class="account-view">
       <section class="acct-card">
-        <button type="button" class="acct-avatar" id="acctAvatarButton" title="Choose custom profile photo" aria-label="Choose custom profile photo">
+        <button type="button" class="acct-avatar" id="acctAvatarButton" title="${info?.photo_url ? "Edit profile photo" : "Choose custom profile photo"}" aria-label="${info?.photo_url ? "Edit profile photo" : "Choose custom profile photo"}">
           ${info?.photo_url
             ? `<img src="${escapeHtml(info.photo_url)}" alt="Profile photo" style="object-fit:${avatarFit};">`
             : escapeHtml((info?.username||"?").slice(0,1).toUpperCase())}
@@ -2587,7 +2750,10 @@ async function renderAccountView(){
   const avatarButton = $("#acctAvatarButton");
   const photoInput = $("#profilePhoto");
   if (avatarButton && photoInput) {
-    avatarButton.addEventListener("click", () => photoInput.click());
+    avatarButton.addEventListener("click", () => {
+      if(accountInfo?.photo_url) ProfilePhotoEditor.openSource(accountInfo.photo_url);
+      else photoInput.click();
+    });
   }
 
   const photoFitSelect = $("#profilePhotoFit");
@@ -2605,23 +2771,8 @@ async function renderAccountView(){
   photoInput.addEventListener("change", async ()=>{
     const file = photoInput.files?.[0];
     if(!file) return;
-    photoMsg.textContent = "Uploading…"; photoMsg.className = "acct-form-msg";
-    try{
-      const body = new FormData();
-      body.append("file", file, file.name);
-      const res = await fetch("/api/account/photo", {
-        method: "POST",
-        headers: { "X-CSRF-Token": await ensureCsrfToken() },
-        body,
-      });
-      const data = await res.json().catch(()=>({}));
-      if(!res.ok) throw new Error(data.detail || "Could not upload photo");
-      accountInfo = {...accountInfo, photo_url: `${data.photo_url}?v=${Date.now()}`};
-      renderAccountView();
-    }catch(err){
-      photoMsg.textContent = err.message; photoMsg.className = "acct-form-msg error";
-      photoInput.value = "";
-    }
+    ProfilePhotoEditor.openFile(file);
+    photoInput.value = "";
   });
   const removePhoto = $("#btnRemovePhoto");
   if(removePhoto) removePhoto.addEventListener("click", async ()=>{
@@ -3154,6 +3305,10 @@ on("#shortcutsOverlay", "click",(e)=>{ if(e.target.id==="shortcutsOverlay") $("#
 
 /* keyboard shortcuts */
 document.addEventListener("keydown",(e)=>{
+  if(e.key === "Escape" && $("#photoEditorOverlay")?.classList.contains("open")){
+    ProfilePhotoEditor.close();
+    return;
+  }
   const tag = (e.target.tagName||"").toLowerCase();
   if(tag==="input" || tag==="textarea"){
     if(e.key==="Escape"){
