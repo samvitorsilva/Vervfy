@@ -17,6 +17,34 @@ function loginPageUrl() {
   return apiUrl("/login");
 }
 
+// Older smart-TV browsers often have XMLHttpRequest but no fetch API.
+if (!window.fetch && window.XMLHttpRequest && window.Promise) {
+  window.fetch = function (input, options = {}) {
+    return new Promise((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      const method = options.method || "GET";
+      request.open(method, input, true);
+      request.withCredentials = options.credentials === "include";
+      if (options.headers) {
+        Object.keys(options.headers).forEach((name) => request.setRequestHeader(name, options.headers[name]));
+      }
+      request.onload = () => {
+        const body = request.responseText || "";
+        resolve({
+          status: request.status,
+          ok: request.status >= 200 && request.status < 300,
+          text: () => Promise.resolve(body),
+          json: () => Promise.resolve(JSON.parse(body))
+        });
+      };
+      request.onerror = () => reject(new Error("Network request failed"));
+      request.ontimeout = () => reject(new Error("Network request timed out"));
+      request.timeout = 30000;
+      request.send(options.body || null);
+    });
+  };
+}
+
 async function logoutAndRedirect() {
   try {
     // Do not follow the 303 — a broken Location must not block navigation.

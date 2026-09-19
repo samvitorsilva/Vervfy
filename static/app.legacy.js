@@ -51,6 +51,36 @@ var __forAwait = (obj, it, method) => (it = obj[__knownSymbol("asyncIterator")])
   function loginPageUrl() {
     return apiUrl("/login");
   }
+  // Older smart-TV browsers often have XMLHttpRequest but no fetch API.
+  if (!window.fetch && window.XMLHttpRequest && window.Promise) {
+    window.fetch = function (input, options) {
+      if (options === void 0) options = {};
+      return new Promise(function (resolve, reject) {
+        var request = new XMLHttpRequest();
+        var method = options.method || "GET";
+        request.open(method, input, true);
+        request.withCredentials = options.credentials === "include";
+        if (options.headers) {
+          Object.keys(options.headers).forEach(function (name) {
+            request.setRequestHeader(name, options.headers[name]);
+          });
+        }
+        request.onload = function () {
+          var body = request.responseText || "";
+          resolve({
+            status: request.status,
+            ok: request.status >= 200 && request.status < 300,
+            text: function () { return Promise.resolve(body); },
+            json: function () { return Promise.resolve(JSON.parse(body)); }
+          });
+        };
+        request.onerror = function () { reject(new Error("Network request failed")); };
+        request.ontimeout = function () { reject(new Error("Network request timed out")); };
+        request.timeout = 3e4;
+        request.send(options.body || null);
+      });
+    };
+  }
   function logoutAndRedirect() {
     return __async(this, null, function* () {
       try {
