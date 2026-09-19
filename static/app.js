@@ -85,6 +85,7 @@ const state = {
   repeat: "off",         // off | all | one
   volume: 0.7,
   muted: false,
+  profilePhotoFit: "cover",
 };
 
 let audioEl = new Audio();
@@ -623,11 +624,6 @@ const ArtistProfileEngine = (() => {
   const resolved = new Map();
   const pending = new Set();
 
-  function displayCount(value){
-    const number = Number(value);
-    return Number.isFinite(number) ? new Intl.NumberFormat().format(number) : value;
-  }
-
   function safeExternalUrl(value){
     if(typeof value !== "string") return null;
     try{
@@ -649,9 +645,7 @@ const ArtistProfileEngine = (() => {
       bio.textContent = profile?.bio || "No artist biography is available from the public catalog.";
 
       const facts = [
-        ["Genre", profile?.genre], ["Style", profile?.style], ["Mood", profile?.mood],
-        ["Formed", profile?.formed_year], ["Followers", profile?.followers && displayCount(profile.followers)],
-        ["Popularity", profile?.popularity && `${profile.popularity}/100`], ["Label", profile?.label],
+        ["Genre", profile?.genre], ["Formed", profile?.formed_year], ["Label", profile?.label],
       ].filter(([, value]) => value);
       tags.replaceChildren(...facts.map(([label, value]) => {
         const tag = document.createElement("span");
@@ -773,7 +767,8 @@ const AuralisDB = (() => {
 async function saveSettings(){
   await AuralisDB.set("auralis:settings", JSON.stringify({
     volume: state.volume, muted: state.muted, shuffle: state.shuffle,
-    repeat: state.repeat, listMode: state.listMode
+    repeat: state.repeat, listMode: state.listMode,
+    profilePhotoFit: state.profilePhotoFit
   }));
 }
 async function saveLibraryMeta(){
@@ -802,6 +797,9 @@ async function loadPersisted(){
       state.volume = v.volume ?? 0.7; state.muted = !!v.muted;
       state.shuffle = !!v.shuffle; state.repeat = v.repeat || "off";
       state.listMode = v.listMode || "grid";
+      state.profilePhotoFit = ["cover","contain","fill","none"].includes(v.profilePhotoFit)
+        ? v.profilePhotoFit
+        : "cover";
     }
   }catch(e){}
   window._persistedLibrary = null;
@@ -2304,9 +2302,12 @@ function openPlaylistSubmenu(e, t, parentMenu){
       sub.style.top = `${top}px`;
       return;
     }
+    sub.classList.remove("menu-sub-right");
+    sub.classList.add("menu-sub-left");
     subRect = sub.getBoundingClientRect();
-    if(subRect.right > window.innerWidth - 8 && parentRect.left >= subRect.width + 14){
-      sub.classList.add("menu-sub-left");
+    if(parentRect.left < subRect.width + 18){
+      sub.classList.remove("menu-sub-left");
+      sub.classList.add("menu-sub-right");
       subRect = sub.getBoundingClientRect();
     }
     const minTop = 8 - parentRect.top;
@@ -2496,12 +2497,15 @@ async function renderAccountView(){
   const playlists = state.playlists;
   const artists = getArtists();
 
+  const avatarFit = state.profilePhotoFit || "cover";
   content.innerHTML = `
     <div class="account-view">
       <section class="acct-card">
-        <div class="acct-avatar">${info?.photo_url
-          ? `<img src="${escapeHtml(info.photo_url)}" alt="Profile photo">`
-          : escapeHtml((info?.username||"?").slice(0,1).toUpperCase())}</div>
+        <button type="button" class="acct-avatar" id="acctAvatarButton" title="Choose custom profile photo" aria-label="Choose custom profile photo">
+          ${info?.photo_url
+            ? `<img src="${escapeHtml(info.photo_url)}" alt="Profile photo" style="object-fit:${avatarFit};">`
+            : escapeHtml((info?.username||"?").slice(0,1).toUpperCase())}
+        </button>
         <div>
           <div class="acct-name">${escapeHtml(info?.username || "Unknown")}</div>
           <div class="acct-sub">${escapeHtml(info?.email || "No email on file")} · Member since ${fmtDate(info?.created_at)}</div>
@@ -2546,6 +2550,18 @@ async function renderAccountView(){
       </section>
 
       <section class="acct-settings">
+        <div class="acct-settings-title">Profile photo fit</div>
+        <div class="acct-form">
+          <select id="profilePhotoFit" class="acct-select" aria-label="Profile photo fit">
+            <option value="cover" ${avatarFit === "cover" ? "selected" : ""}>Cover</option>
+            <option value="contain" ${avatarFit === "contain" ? "selected" : ""}>Contain</option>
+            <option value="fill" ${avatarFit === "fill" ? "selected" : ""}>Fill</option>
+            <option value="none" ${avatarFit === "none" ? "selected" : ""}>None</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="acct-settings">
         <div class="acct-settings-title">Change password</div>
         <form id="pwForm" class="acct-form">
           <input type="password" id="pwCurrent" placeholder="Current password" autocomplete="current-password" required>
@@ -2568,7 +2584,23 @@ async function renderAccountView(){
   const acctLogout = $("#btnAcctLogout");
   if (acctLogout) acctLogout.addEventListener("click", () => logoutAndRedirect());
 
+  const avatarButton = $("#acctAvatarButton");
   const photoInput = $("#profilePhoto");
+  if (avatarButton && photoInput) {
+    avatarButton.addEventListener("click", () => photoInput.click());
+  }
+
+  const photoFitSelect = $("#profilePhotoFit");
+  if (photoFitSelect) {
+    photoFitSelect.addEventListener("change", async () => {
+      state.profilePhotoFit = ["cover","contain","fill","none"].includes(photoFitSelect.value)
+        ? photoFitSelect.value
+        : "cover";
+      await saveSettings();
+      renderAccountView();
+    });
+  }
+
   const photoMsg = $("#photoMsg");
   photoInput.addEventListener("change", async ()=>{
     const file = photoInput.files?.[0];

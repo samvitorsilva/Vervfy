@@ -502,11 +502,18 @@ input{ background:none; border:none; }
   display:flex; align-items:center; justify-content:center;
   background:var(--grad-aura); color:#0c0e14; font-weight:700; font-size:1.3rem;
   font-family:var(--font-display);
-  overflow:hidden;
+  overflow:hidden; border:0; padding:0; cursor:pointer;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.35);
 }
 .acct-avatar img{
-  width:100%; height:100%; object-fit:cover; display:block;
+  width:100%; height:100%; display:block;
 }
+.acct-select{
+  flex:1 1 220px; max-width:240px; padding:10px 12px; border-radius:var(--radius-s);
+  border:1px solid var(--border); background:var(--bg-2); color:var(--text);
+  font-family:var(--font-body); outline:none;
+}
+.acct-select:focus{ border-color:var(--violet); }
 .acct-name{ font-size:1.1rem; font-weight:700; }
 .acct-sub{ color:var(--text-mid); font-size:0.85rem; margin-top:2px; }
 .acct-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
@@ -573,8 +580,8 @@ input{ background:none; border:none; }
 .menu-item:hover{ background:var(--glass-hi); color:var(--text); }
 .menu-item svg{ width:14px; height:14px; }
 .menu-sep{ height:1px; background:var(--border); margin:5px 6px; }
-.menu-sub{ position:absolute; left:100%; top:-6px; margin-left:6px; }
-.menu-sub.menu-sub-left{ left:auto; right:100%; margin-left:0; margin-right:6px; }
+.menu-sub{ position:absolute; left:auto; right:100%; top:-6px; margin-left:0; margin-right:6px; }
+.menu-sub.menu-sub-right{ left:100%; right:auto; margin-left:6px; margin-right:0; }
 
 /* now playing — persistent bottom player */
 .nowbar{

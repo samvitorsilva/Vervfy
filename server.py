@@ -15,7 +15,7 @@ import secrets
 import socket
 import time
 import unicodedata
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from pathlib import Path
 
@@ -120,6 +120,7 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, str | None]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+MAX_ARTIST_BIO_CHARS = 280
 
 
 def _artist_search_key(name: str) -> str:
@@ -127,6 +128,18 @@ def _artist_search_key(name: str) -> str:
     normalized = unicodedata.normalize("NFKD", name)
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
     return "".join(c.lower() for c in normalized if c.isalnum())
+
+
+def _concise_artist_bio(value: object) -> str:
+    """Keep catalog biographies useful without turning an About card into an essay."""
+    bio = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not bio:
+        return ""
+    first_sentence = re.split(r"(?<=[.!?])\s+", bio, maxsplit=1)[0]
+    if len(first_sentence) <= MAX_ARTIST_BIO_CHARS:
+        return first_sentence
+    shortened = first_sentence[: MAX_ARTIST_BIO_CHARS - 1].rsplit(" ", 1)[0]
+    return f"{shortened or first_sentence[: MAX_ARTIST_BIO_CHARS - 1]}…"
 
 
 def _artist_name_candidates(name: str) -> list[str]:
@@ -179,8 +192,8 @@ def _artist_name_candidates(name: str) -> list[str]:
 # These entries are deliberately small.  General music catalogs are useful for
 # discovery, but an exact name match is not enough to establish an artist's
 # identity (especially for short, stylised, or shared names).  Each profile
-# below was checked against the artist's own site or artist-managed profile and
-# is used before a catalog lookup.  Do not add an entry without a source that
+# below was checked against an authoritative, artist-specific source and is
+# used before a catalog lookup. Do not add an entry without a source that
 # unambiguously identifies the performer.
 _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
     "morada": {
@@ -341,6 +354,16 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "source": "gio. official artist site",
         "source_url": "https://www.wassupgio.com/about/",
     },
+    "kodoku": {
+        "bio": (
+            "Kodoku is the recording artist behind releases including “Rose Bath,” "
+            '“DEVOTED” with Sam Rivera, and “WATERWALKIN” featuring Hulvey.'
+        ),
+        "website": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
+        "website_label": "Spotify artist profile",
+        "source": "Kodoku Spotify artist profile",
+        "source_url": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
+    },
 }
 
 
@@ -409,25 +432,23 @@ def _lookup_artist_photo(name: str) -> str | None:
 def _lookup_artist_profile(name: str) -> dict[str, str] | None:
     """Get an inline artist profile from public catalogs.
 
-    AudioDB is preferred because it provides structured artist facts. Wikipedia
-    fills the biography when AudioDB has no record or an incomplete one, so the
-    artist page remains useful without sending the listener to another site.
+    AudioDB provides structured artist facts for profiles that have not been
+    identity-checked against an artist or artist-specific profile.
     """
     key = _artist_search_key(name)
     if not key:
         return None
     now = time.monotonic()
-    cached = _artist_profile_cache.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
-
     verified_profile = _verified_artist_profile(name)
     if verified_profile:
-        # A profile sourced from the artist or their managed profile has
-        # already established identity; do not replace it with a same-name
+        # An identity-checked profile must not be replaced with a same-name
         # result from an unauthenticated catalog search.
         _artist_profile_cache[key] = (now + 60 * 60 * 24, verified_profile)
         return verified_profile
+
+    cached = _artist_profile_cache.get(key)
+    if cached and cached[0] > now:
+        return cached[1]
 
     profile: dict[str, str] | None = None
     try:
@@ -443,7 +464,9 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             if not artist:
                 continue
             fields = {
-                "bio": artist.get("strBiographyEN") or artist.get("strBiography") or "",
+                "bio": _concise_artist_bio(
+                    artist.get("strBiographyEN") or artist.get("strBiography")
+                ),
                 "genre": artist.get("strGenre") or "",
                 "style": artist.get("strStyle") or "",
                 "mood": artist.get("strMood") or "",
@@ -465,68 +488,6 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             break
     except (OSError, ValueError, json.JSONDecodeError):
         pass
-
-    # Wikipedia is a useful fallback for artists missing from AudioDB, and can
-    # also supply the biography when the structured record is incomplete.
-    if not profile or not profile.get("bio"):
-        try:
-            # Use the same conservative primary-credit fallback as the catalog
-            # lookup.  Trying a collaboration title here would otherwise cache
-            # a false miss for a perfectly documented lead performer.
-            lookup_name = _artist_name_candidates(name)[-1]
-            search_query = urlencode({
-                "action": "query",
-                "list": "search",
-                "srsearch": lookup_name,
-                "srnamespace": 0,
-                "srlimit": 5,
-                "format": "json",
-            })
-            request = UrlRequest(
-                f"https://en.wikipedia.org/w/api.php?{search_query}",
-                headers={"User-Agent": "Vervfy/1.0 (artist profile)"},
-            )
-            with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                search = json.load(response)
-            matches = (search.get("query") or {}).get("search") or []
-            match = next(
-                (
-                    result for result in matches
-                    if _artist_search_key(str(result.get("title", "")))
-                    == _artist_search_key(lookup_name)
-                ),
-                None,
-            )
-            if not match:
-                raise LookupError("Wikipedia did not return an exact artist match")
-
-            title = quote(str(match["title"]).replace(" ", "_"), safe="()_")
-            summary_request = UrlRequest(
-                f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
-                headers={"User-Agent": "Vervfy/1.0 (artist profile)"},
-            )
-            with urlopen(summary_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                summary = json.load(response)
-            extract = summary.get("extract")
-            page_title = str(summary.get("title", "")).strip()
-            if isinstance(extract, str) and extract.strip() and page_title:
-                profile = profile or {}
-                profile.setdefault("bio", extract.strip())
-                # A structured AudioDB record may have supplied the tags while
-                # Wikipedia supplied the missing biography.  Name both sources
-                # instead of attributing the whole card to just one of them.
-                if profile.get("source") == "TheAudioDB":
-                    profile["source"] = "TheAudioDB and Wikipedia"
-                else:
-                    profile.setdefault("source", "Wikipedia")
-                if lookup_name != name.strip():
-                    profile.setdefault("lookup_name", lookup_name)
-                page_url = (summary.get("content_urls") or {}).get("desktop", {}).get("page")
-                if isinstance(page_url, str) and page_url.startswith("https://"):
-                    profile.setdefault("website", page_url)
-                    profile["source_url"] = page_url
-        except (LookupError, OSError, ValueError, json.JSONDecodeError):
-            pass
 
     # Keep successful profiles for a day, but retry a catalog miss soon. Public
     # catalog records are occasionally incomplete or temporarily unavailable.
