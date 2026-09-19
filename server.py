@@ -46,7 +46,10 @@ def _load_or_create_secret_key() -> str:
     key isn't just a file sitting next to the app). Falls back to a
     generated key stored under data/ for local/dev use.
     """
-    env_key = os.environ.get("VERVFY_SECRET_KEY")
+    # Keep the old Auralis name as a migration path for existing deployments.
+    # Render instances have ephemeral disks, so a stable environment key is
+    # required or every redeploy invalidates all signed session cookies.
+    env_key = os.environ.get("VERVFY_SECRET_KEY") or os.environ.get("AURALIS_SECRET_KEY")
     if env_key:
         return env_key
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,10 +68,16 @@ app = FastAPI(title="Vervfy", version="1.0")
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
-https_only = os.environ.get("VERVFY_HTTPS_ONLY", "0") == "1"
+https_only = (
+    os.environ.get("VERVFY_HTTPS_ONLY")
+    or os.environ.get("AURALIS_HTTPS_ONLY", "0")
+) == "1"
 # For same-origin app hosting, lax is sufficient; only use the stricter None
 # setting when explicitly needed.
-configured_same_site = os.environ.get("VERVFY_COOKIE_SAME_SITE", "lax").lower()
+configured_same_site = (
+    os.environ.get("VERVFY_COOKIE_SAME_SITE")
+    or os.environ.get("AURALIS_COOKIE_SAME_SITE", "lax")
+).lower()
 if configured_same_site not in {"lax", "strict", "none"}:
     configured_same_site = "lax"
 app.add_middleware(

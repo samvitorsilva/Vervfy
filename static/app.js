@@ -2175,6 +2175,15 @@ function toggleFavorite(t){
   if(currentTrack()?.id === t.id) $("#nowFav").classList.toggle("on", t.favorite);
 }
 
+let menuOutsideHandler = null;
+function armMenuOutsideClick(){
+  if(menuOutsideHandler) document.removeEventListener("click", menuOutsideHandler);
+  menuOutsideHandler = (e)=>{
+    if(e.target.closest(".menu,[data-action='menu'],#btnMobilePlayerMenu")) return;
+    closeMenus();
+  };
+  document.addEventListener("click", menuOutsideHandler);
+}
 function openTrackMenu(e, t){
   closeMenus();
   const menu = document.createElement("div");
@@ -2183,10 +2192,10 @@ function openTrackMenu(e, t){
   if(anchor){
     const rect = anchor.getBoundingClientRect();
     menu.style.top = rect.bottom+6+"px";
-    menu.style.left = Math.min(window.innerWidth-210, rect.left-150)+"px";
+    menu.style.left = Math.max(8, Math.min(window.innerWidth-204, rect.left-150))+"px";
   } else {
     menu.style.top = Math.min(window.innerHeight-160, e.clientY+4)+"px";
-    menu.style.left = Math.min(window.innerWidth-210, e.clientX)+"px";
+    menu.style.left = Math.max(8, Math.min(window.innerWidth-204, e.clientX))+"px";
   }
   const inPlaylist = state.view.startsWith("playlist:") ? state.view.slice(9) : null;
   menu.innerHTML = `
@@ -2201,7 +2210,7 @@ function openTrackMenu(e, t){
   menu.querySelector('[data-act="playlist"]').addEventListener("click", (ev)=>{ openPlaylistSubmenu(ev, t, menu); });
   if(inPlaylist) menu.querySelector('[data-act="remove-from-playlist"]').addEventListener("click", ()=>{ removeFromPlaylist(inPlaylist, t); closeMenus(); });
   menu.querySelector('[data-act="remove"]').addEventListener("click", ()=>{ removeTrack(t); closeMenus(); });
-  setTimeout(()=> document.addEventListener("click", closeMenus, {once:true}), 0);
+  setTimeout(armMenuOutsideClick, 0);
 }
 function openNowPlayingMenu(anchor, t){
   closeMenus();
@@ -2224,10 +2233,18 @@ function openNowPlayingMenu(anchor, t){
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", ev=> openPlaylistSubmenu(ev, t, menu));
-  menu.querySelector('[data-act="artist"]').addEventListener("click", ()=>{ closeMenus(); openArtist(artist); });
-  menu.querySelector('[data-act="album"]').addEventListener("click", ()=>{ closeMenus(); openAlbum(t); });
+  menu.querySelector('[data-act="artist"]').addEventListener("click", ()=>{
+    closeMenus();
+    $("#mobilePlayer")?.classList.remove("open");
+    openArtist(artist);
+  });
+  menu.querySelector('[data-act="album"]').addEventListener("click", ()=>{
+    closeMenus();
+    $("#mobilePlayer")?.classList.remove("open");
+    openAlbum(t);
+  });
   menu.querySelector('[data-act="share"]').addEventListener("click", ()=>{ closeMenus(); shareTrack(t); });
-  setTimeout(()=> document.addEventListener("click", closeMenus, {once:true}), 0);
+  setTimeout(armMenuOutsideClick, 0);
 }
 function albumViewKey(t){
   return "album:" + encodeURIComponent(JSON.stringify([t.album || "Unknown album", artistNameOf(t)]));
@@ -2267,6 +2284,18 @@ function openPlaylistSubmenu(e, t, parentMenu){
   const items = state.playlists.map(p=>`<div class="menu-item" data-pl="${p.id}">${escapeHtml(p.name)}</div>`).join("");
   sub.innerHTML = items + `<div class="menu-sep"></div><div class="menu-item" data-pl="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>New playlist…</div>`;
   parentMenu.appendChild(sub);
+  requestAnimationFrame(()=>{
+    const parentRect = parentMenu.getBoundingClientRect();
+    let subRect = sub.getBoundingClientRect();
+    if(subRect.right > window.innerWidth - 8 && parentRect.left >= subRect.width + 14){
+      sub.classList.add("menu-sub-left");
+      subRect = sub.getBoundingClientRect();
+    }
+    const minTop = 8 - parentRect.top;
+    const maxTop = window.innerHeight - 8 - parentRect.top - subRect.height;
+    const top = Math.min(Math.max(-6, minTop), maxTop);
+    sub.style.top = `${Math.min(top, maxTop)}px`;
+  });
   sub.querySelectorAll("[data-pl]").forEach(item=>{
     item.addEventListener("click", ()=>{
       if(item.dataset.pl === "new"){
@@ -2282,7 +2311,13 @@ function openPlaylistSubmenu(e, t, parentMenu){
     });
   });
 }
-function closeMenus(){ $$(".menu").forEach(m=>m.remove()); }
+function closeMenus(){
+  $$(".menu").forEach(m=>m.remove());
+  if(menuOutsideHandler){
+    document.removeEventListener("click", menuOutsideHandler);
+    menuOutsideHandler = null;
+  }
+}
 
 function stopPlayback(){
   audioEl.pause();
@@ -2304,11 +2339,49 @@ function removeQueueSlot(i){
     stopPlayback();
     return;
   }
+
   if(i < state.queueIndex) state.queueIndex--;
   else if(removingCurrent){
     if(state.queueIndex >= state.queue.length) state.queueIndex = state.queue.length - 1;
     playCurrent();
   }
+}
+
+function wireTouchQueueDrag(row, getIndex, refresh){
+  let startX = 0, startY = 0, dragging = false, startIndex = -1;
+  const handle = row.querySelector(".q-drag") || row;
+  handle.addEventListener("pointerdown", e=>{
+    if(e.pointerType === "mouse") return;
+    startX = e.clientX; startY = e.clientY; startIndex = getIndex();
+    dragging = false;
+    handle.setPointerCapture?.(e.pointerId);
+  });
+  handle.addEventListener("pointermove", e=>{
+    if(startIndex < 0) return;
+    if(!dragging && Math.hypot(e.clientX-startX, e.clientY-startY) < 8) return;
+    dragging = true;
+    e.preventDefault();
+    row.classList.add("dragging");
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
+    document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
+    if(target && target !== row) target.classList.add("drag-over");
+  });
+  const finish = e=>{
+    if(startIndex < 0) return;
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
+    row.classList.remove("dragging");
+    document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
+    if(dragging && target){
+      const targetIndex = Number(target.dataset.qi ?? target.dataset.i);
+      if(startIndex !== targetIndex) reorderQueue(startIndex, targetIndex);
+      row.dataset.dragged = "true";
+      refresh();
+    }
+    startIndex = -1;
+    dragging = false;
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
 }
 
 async function removeTrack(t){
@@ -2687,6 +2760,10 @@ function renderQueueView(){
   $$(".row[data-qi]").forEach(row=>{
     row.addEventListener("click",(e)=>{
       if(e.target.closest("button")) return;
+      if(row.dataset.dragged){
+        delete row.dataset.dragged;
+        return;
+      }
       capturePlaybackContext();
       state.queueIndex = +row.dataset.qi; playCurrent();
     });
@@ -2720,6 +2797,7 @@ function renderQueueView(){
       dragSrcIndex = null;
       renderQueueView(); renderQueuePanel();
     });
+    wireTouchQueueDrag(row, ()=>+row.dataset.qi, ()=>{ renderQueueView(); renderQueuePanel(); });
   });
   wireArtistLinks(content);
 }
@@ -2746,6 +2824,10 @@ function renderQueuePanel(){
   el.querySelectorAll(".q-row").forEach(row=>{
     row.addEventListener("click",(e)=>{
       if(e.target.closest("button")) return;
+      if(row.dataset.dragged){
+        delete row.dataset.dragged;
+        return;
+      }
       capturePlaybackContext();
       state.queueIndex = +row.dataset.i; playCurrent();
     });
@@ -2774,6 +2856,10 @@ function renderQueuePanel(){
       const toIndex = +row.dataset.i;
       if(dragSrcIndex !== toIndex) reorderQueue(dragSrcIndex, toIndex);
       dragSrcIndex = null;
+      renderQueuePanel();
+      if(state.view==="queue") renderQueueView();
+    });
+    wireTouchQueueDrag(row, ()=>+row.dataset.i, ()=>{
       renderQueuePanel();
       if(state.view==="queue") renderQueueView();
     });
