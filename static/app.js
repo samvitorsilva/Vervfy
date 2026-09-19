@@ -831,6 +831,7 @@ function relinkPersistedLibrary(){
    ============================================================ */
 function trackFromServer(payload){
   const customLyrics = payload.custom_lyrics || null;
+  const fallbackArt = generateAura((payload.artist||"")+"|"+(payload.album||"")+"|"+(payload.title||""));
   return {
     id: payload.id,
     title: payload.title || "Unknown title",
@@ -838,7 +839,8 @@ function trackFromServer(payload){
     album: payload.album || "Unknown album",
     year: "",
     duration: payload.duration || 0,
-    art: payload.cover_url || generateAura((payload.artist||"")+"|"+(payload.album||"")+"|"+(payload.title||"")),
+    art: payload.has_cover ? payload.cover_url : fallbackArt,
+    fallbackArt,
     streamUrl: payload.stream_url,
     favorite: false,
     dateAdded: Date.now(),
@@ -913,7 +915,7 @@ async function loadServerLibrary(force = false){
   serverLibraryRequest = (async () => {
     try{
       const [tracksRes, stateRes] = await Promise.all([
-        fetchWithRetry("/api/tracks"),
+        fetchWithRetry("/api/tracks", {}, 3),
         fetch("/api/library/state"),
       ]);
       if(!tracksRes.ok) throw new Error("bad status "+tracksRes.status);
@@ -1849,7 +1851,7 @@ function getArtists(){
       const key = artistKey(name);
       let entry = map.get(key);
       if(!entry){
-        entry = { name, art: t.art, tracks: [], albums: new Set(), duration: 0 };
+        entry = { name, art: t.art, fallbackArt: t.fallbackArt, tracks: [], albums: new Set(), duration: 0 };
         map.set(key, entry);
       } else if(name.length > entry.name.length){
         // Prefer the fuller casing/spelling when the same person appears twice.
@@ -1918,6 +1920,7 @@ function render(){
   else renderTrackListView();
   renderQueuePanel();
   renderLibraryHighlight();
+  wireMediaImages($("#content"));
 }
 
 function renderTopbar(){
@@ -1980,7 +1983,7 @@ function trackRowMarkup(t, idx, showAlbum=true){
       <span class="bars"><span></span><span></span><span></span></span>
     </div>
     <div class="row-title-wrap">
-      <img class="row-art" src="${t.art}" alt="">
+      <img class="row-art media-image" ${artAttrs(t, 160)} alt="">
       <div class="row-title-stack">
         <div class="row-title" title="${title}">${title}</div>
         <div class="row-meta" title="${metaTitle}">
@@ -2003,7 +2006,7 @@ function cardMarkup(t){
   return `
   <div class="card ${playing?'playing':''}" data-id="${t.id}">
     <div class="card-art">
-      <img src="${t.art}" alt="">
+      <img class="media-image" ${artAttrs(t, 320)} alt="">
       <div class="card-play"><button data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button></div>
     </div>
     <button class="card-queue" data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
@@ -2013,6 +2016,34 @@ function cardMarkup(t){
   </div>`;
 }
 function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m])); }
+
+function trackArtUrl(track, size=512){
+  if(!track?.art) return track?.fallbackArt || "";
+  if(!track.art.includes("/cover")) return track.art;
+  try{
+    const url = new URL(track.art, window.location.href);
+    url.searchParams.set("size", String(size));
+    return url.href;
+  }catch(_){ return track.art; }
+}
+
+function artAttrs(track, size=512, priority="low"){
+  const src = escapeHtml(trackArtUrl(track, size));
+  const fallback = escapeHtml(track.fallbackArt || "");
+  return `src="${src}" data-fallback="${fallback}" loading="lazy" decoding="async" fetchpriority="${priority}"`;
+}
+
+function wireMediaImages(root=document){
+  root.querySelectorAll("img[data-fallback]").forEach(img => {
+    if(img.complete && img.naturalWidth) img.classList.add("media-image-ready");
+    img.addEventListener("load", () => img.classList.add("media-image-ready"), {once:true});
+    img.addEventListener("error", () => {
+      const fallback = img.dataset.fallback;
+      if(fallback && img.src !== fallback){ img.src = fallback; return; }
+      img.classList.add("media-image-broken");
+    }, {once:false});
+  });
+}
 
 function renderTrackListView(){
   const content = $("#content");
@@ -2118,6 +2149,7 @@ function wireTrackInteractions(list){
     row.addEventListener("dragstart", e=>{ e.dataTransfer.setData("text/plain", t.id); });
   });
   wireArtistLinks($("#content"));
+  wireMediaImages($("#content"));
 }
 
 function toggleFavorite(t){
@@ -2435,7 +2467,7 @@ function renderArtistsView(){
     <div class="artist-grid">
       ${artists.map(a => `
         <button type="button" class="artist-card" data-artist="${encodeURIComponent(a.name)}">
-          <img class="artist-card-photo" data-artist-photo="${escapeHtml(a.name)}" src="${a.art}" alt="${escapeHtml(a.name)}">
+          <img class="artist-card-photo media-image" data-artist-photo="${escapeHtml(a.name)}" ${artAttrs(a, 256)} alt="${escapeHtml(a.name)}">
           <div class="artist-card-name">${escapeHtml(a.name)}</div>
           <div class="artist-card-count">${a.tracks.length} song${a.tracks.length!==1?"s":""}</div>
         </button>`).join("")}
@@ -2471,7 +2503,7 @@ function renderArtistDetailView(){
   content.innerHTML = `
     <div class="artist-page">
       <header class="artist-hero">
-        <img class="artist-photo" data-artist-photo="${escapeHtml(artist.name)}" src="${artist.art}" alt="${escapeHtml(artist.name)}">
+        <img class="artist-photo media-image" data-artist-photo="${escapeHtml(artist.name)}" ${artAttrs(artist, 384, "high")} alt="${escapeHtml(artist.name)}">
         <div class="artist-hero-meta">
           <div class="artist-kicker">Artist</div>
           <h1 class="artist-name">${escapeHtml(artist.name)}</h1>
@@ -2581,7 +2613,7 @@ function renderQueuePanel(){
     return `
     <div class="q-row ${i===state.queueIndex?'playing':''}" data-i="${i}" draggable="true">
       <span class="q-drag"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.4"/><circle cx="8" cy="12" r="1.4"/><circle cx="8" cy="18" r="1.4"/><circle cx="16" cy="6" r="1.4"/><circle cx="16" cy="12" r="1.4"/><circle cx="16" cy="18" r="1.4"/></svg></span>
-      <img src="${t.art}">
+      <img class="media-image" ${artAttrs(t, 96)} alt="">
       <div class="q-meta"><div class="q-title">${escapeHtml(t.title)}</div><div class="q-artist">${escapeHtml(t.artist)}</div></div>
       <button class="q-remove" data-act="rm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>`;
@@ -2679,7 +2711,7 @@ function renderLibraryPicker(){
     const inPlaylist = !!(pl && pl.trackIds.includes(t.id));
     return `
     <button type="button" class="qp-row${inPlaylist ? " in-playlist" : ""}" data-id="${t.id}" ${inPlaylist ? "aria-disabled=\"true\"" : ""}>
-      <img src="${t.art}" alt="">
+      <img class="media-image" ${artAttrs(t, 160)} alt="">
       <div class="qp-meta">
         <div class="qp-title">${escapeHtml(t.title)}</div>
         <div class="qp-artist">${escapeHtml(t.artist)}</div>

@@ -957,8 +957,10 @@ def track_cover(
         media_type="image/jpeg",
         headers={
             # Covers are user-uploaded private media, so shared caches must not
-            # store or replay them across accounts.
-            "Cache-Control": "private, no-store",
+            # store or replay them across accounts. The browser may keep the
+            # account-scoped URL warm because track covers are immutable until
+            # the track is replaced.
+            "Cache-Control": "private, max-age=86400, immutable",
             "Content-Length": str(len(payload)),
         },
     )
