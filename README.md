@@ -1,8 +1,8 @@
 # Vervfy
 
-A self-hosted music player for the web, built because I wanted a personal music library that actually felt like mine — not something buried inside a streaming app's algorithm.
+A self-hosted music player for the web, built with a modern design that feels unique and user-friendly. 
 
-Upload your own files, organize them into playlists, look up lyrics and artist info, and listen through a player that doesn't feel like an afterthought.
+Upload your own files, organize them into playlists, look up lyrics and artist bio, and listen through a player that doesn't feel like an afterthought.
 
 ---
 
@@ -78,113 +78,21 @@ vervfy/
 └── README.md
 ```
 
-`server.py` is the entry point and handles most of the request routing — auth, uploads, streaming, lyrics, artwork, artist lookups. `auth.py` and `library.py` split off the account logic and library logic respectively, mostly so `server.py` doesn't turn into a 2,000-line file.
-
 ---
 
-## Getting it running
+## Getting it open
 
-You'll need Python 3.10+ and a browser. That's really it.
+The website is https://vervfy-app.onrender.com.
+Using the free Render service, so you might come across a 'starting application' page. 
 
-```bash
-git clone https://github.com/samvitorsilva/vervfy.git
-cd vervfy
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Then just:
-
-```bash
-./start.sh
-```
-
-That script will set up the virtual environment and install dependencies if it needs to, then start the server and pop the app open in your browser. By default it's running at `http://127.0.0.1:8765`.
-
-To shut it down: `./stop.sh`
-
-If you'd rather run it manually:
-
-```bash
-python server.py --port 8765
-# or
-uvicorn server:app --host 0.0.0.0 --port 8765
 ```
 
 ---
 
 ## Persistent data and deployment
 
-Vervfy now stores accounts, bcrypt password hashes, tracks/audio, cover art,
-custom lyrics, favorites, and playlists in PostgreSQL. `data/` is only used
-for the local-development session-key fallback and is not required on Render.
-No database URL or credentials are committed to the repository.
-
-1. Create a Supabase project and copy its PostgreSQL connection string.
-2. In Render, set `DATABASE_URL` to that value (use the Supabase pooler URL if
-   Render cannot reach the direct host), `AURALIS_SECRET_KEY` to a stable random
-   64+ character secret, and `AURALIS_HTTPS_ONLY=1`.
-3. Set the Render build command to `pip install -r requirements.txt` and start
-   command to `alembic upgrade head && uvicorn server:app --host 0.0.0.0 --port $PORT`.
-
-The migration is idempotent and must run before the app starts. Browser-only
-favorites/playlists are imported to PostgreSQL automatically on the user's
-first login after deployment. For an existing local server, make a backup and
-run `DATABASE_URL='...' python scripts/migrate_local_data.py data`; it copies
-legacy users/tracks without deleting or modifying the old SQLite/files.
-
-```text
-Supabase PostgreSQL
-├── users
-├── tracks (audio and cover bytes, metadata, lyrics)
-├── favorites
-├── playlists
-└── playlist_tracks
-```
-
-Each account gets its own folder — uploads and covers included. None of it gets shipped off to a third party; the only outside calls Vervfy makes are optional ones, for lyrics lookup and artist info, and playback works fine without them.
-
-**Don't commit these:**
-
-```text
-data/users.db
-data/.secret_key
-data/users/
-.env
-.venv/
-__pycache__/
-```
-
-If you're deploying this somewhere public, use real secret management instead of hardcoding anything — environment variables at minimum.
-
----
-
-## API
-
-A few of the main endpoints, for anyone poking around:
-
-```text
-GET    /api/me
-GET    /api/csrf
-GET    /api/health
-
-GET    /api/tracks
-POST   /api/library/upload
-DELETE /api/tracks/{track_id}
-
-GET    /api/tracks/{track_id}/stream
-GET    /api/tracks/{track_id}/cover
-
-PUT    /api/tracks/{track_id}/lyrics
-
-GET    /api/artists/photo
-GET    /api/artists/profile
-
-POST   /api/account/password
-```
-
-Anything touching your library or account needs an authenticated session.
+Vervfy stores accounts, bcrypt password hashes, tracks/audio, cover art,
+custom lyrics, favorites, and playlists in PostgreSQL. `
 
 ---
 
@@ -207,35 +115,13 @@ Anything touching your library or account needs an authenticated session.
 
 ---
 
-## How lyrics get resolved
-
-Vervfy checks sources in this order before giving up and asking you to paste something in manually:
-
-```text
-ID3 USLT (plain embedded lyrics)
-ID3 SYLT (synced embedded lyrics)
-LRC files
-Plain text files
-LRCLIB (online lookup)
-```
-
-Timestamps from LRC/SYLT sources get parsed client-side and matched up against playback as it happens.
-
----
-
-## Artist info
-
-When Vervfy looks up an artist, it tries to actually match the right one rather than grabbing whatever the first search result is — and caches what it finds so it's not re-fetching on every visit. If nothing solid turns up, it just quietly skips that section instead of blocking playback over it.
-
----
-
 ## What's next
 
 Things I'd like to get to eventually:
 
 - [x] Cloud deployment support (Supabase PostgreSQL + Render)
-- [ ] Multi-device sync
-- [ ] More metadata providers
+- [x] Multi-device sync
+- [x] More metadata providers
 - [ ] Smarter playlists
 - [ ] Album/artist detail pages
 - [ ] Better offline support
@@ -246,4 +132,4 @@ Things I'd like to get to eventually:
 
 ---
 
-Vervfy's an ongoing side project, not a polished product. If something's broken or missing, that's probably just because I haven't gotten to it yet.
+Vervfy's an ongoing side project, not a polished product. 

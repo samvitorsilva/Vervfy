@@ -64,14 +64,17 @@ app = FastAPI(title="Auralis", version="1.0")
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
 https_only = os.environ.get("AURALIS_HTTPS_ONLY", "0") == "1"
+# Samsung and other older TV browsers are inconsistent about SameSite=None
+# cookies. For same-origin app hosting, lax is both more compatible and
+# sufficient; only use the stricter None setting when explicitly needed.
+configured_same_site = os.environ.get("AURALIS_COOKIE_SAME_SITE", "lax").lower()
+if configured_same_site not in {"lax", "strict", "none"}:
+    configured_same_site = "lax"
 app.add_middleware(
     SessionMiddleware,
     secret_key=_load_or_create_secret_key(),
     session_cookie="auralis_session",
-    # SameSite=None is only valid with Secure cookies in modern browsers. Keep
-    # local HTTP development usable while production can opt into cross-origin
-    # static hosting with AURALIS_HTTPS_ONLY=1.
-    same_site="none" if https_only else "lax",
+    same_site=configured_same_site,
     https_only=https_only,
     max_age=60 * 60 * 24 * 30,  # 30 days
 )
