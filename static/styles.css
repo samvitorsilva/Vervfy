@@ -157,6 +157,15 @@ input{ background:none; border:none; }
   border-bottom:1px solid transparent;
 }
 .topbar-id{ display:flex; align-items:baseline; gap:8px; min-width:0; }
+.home-profile-avatar{
+  width:34px; height:34px; flex:0 0 auto; border-radius:50%; overflow:hidden;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--grad-aura); color:#0c0e14; font-family:var(--font-display);
+  font-size:13px; font-weight:700; border:1px solid rgba(255,255,255,.22);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35); transition:transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.home-profile-avatar:hover{ transform:scale(1.06); border-color:rgba(255,255,255,.55); }
+.home-profile-avatar img{ width:100%; height:100%; display:block; }
 .view-title{
   font-family:var(--font-display); font-size:22px; font-weight:700; letter-spacing:-0.02em;
 }
@@ -168,10 +177,6 @@ input{ background:none; border:none; }
   background:var(--glass); border:1px solid var(--border);
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.06);
   transition:all var(--dur-fast) var(--ease);
-}
-.search-wrap:focus-within{
-  background:var(--glass-hi); border-color:rgba(139,127,255,0.45);
-  box-shadow:0 0 0 3px rgba(139,127,255,0.12), inset 0 1px 0 rgba(255,255,255,0.08);
 }
 .search-wrap svg{ width:15px; height:15px; color:var(--text-dim); flex:0 0 auto; }
 .search-wrap input{ flex:1; font-size:13.5px; color:var(--text); font-weight:500; }
@@ -281,24 +286,24 @@ input{ background:none; border:none; }
 .card-sub{ font-size:12px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 .card-sub .artist-link{ display:inline; }
 .card-sub .artist-sep{ color:var(--text-dim); }
-.card-fav{
+.card-fav, .card-menu{
   position:absolute; top:16px; right:16px; width:28px; height:28px; border-radius:50%;
   background:rgba(12,14,20,0.55); backdrop-filter:blur(8px);
   display:flex; align-items:center; justify-content:center;
-  opacity:0; transition:opacity var(--dur-fast); color:#fff;
+  color:#fff;
   border:1px solid rgba(255,255,255,0.12);
+  z-index:2;
 }
 .card-queue{
   position:absolute; top:16px; left:16px; width:28px; height:28px; border-radius:50%;
   background:rgba(12,14,20,0.55); backdrop-filter:blur(8px);
   display:flex; align-items:center; justify-content:center;
-  opacity:0; transition:opacity var(--dur-fast); color:#fff;
+  color:#fff;
   border:1px solid rgba(255,255,255,0.12);
   z-index:2;
 }
-.card:hover .card-fav, .card-fav.on,
-.card:hover .card-queue{ opacity:1; }
-.card-fav svg, .card-queue svg{ width:13px; height:13px; }
+.card-menu{ right:50px; }
+.card-fav svg, .card-queue svg, .card-menu svg{ width:13px; height:13px; }
 .card-fav.on{ color:var(--amber); }
 
 /* list — bottom padding clears the fixed nowbar / mini-player */
@@ -639,7 +644,7 @@ input{ background:none; border:none; }
   background:rgba(255,255,255,0.94); color:#0c0e14;
   box-shadow:0 6px 20px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,0.9);
 }
-.tbtn-play:hover{ background:#fff; transform:scale(1.05); }
+.tbtn-play:hover, .tbtn-play:active{ background:#fff; color:#0c0e14; transform:scale(1.05); }
 .tbtn-play svg{ width:14px; height:14px; margin-left:1px; }
 .seek-row{ display:flex; align-items:center; gap:10px; width:100%; }
 .time{ font-family:var(--font-mono); font-size:11px; color:var(--text-dim); width:38px; flex:0 0 auto; }
@@ -1083,8 +1088,9 @@ body.mini-mode .mini-player{ display:block; }
   body:has(#nowbar:not(.hidden)) .account-view{ padding-bottom:var(--mobile-player-clear); }
   .grid{ grid-template-columns:repeat(auto-fill, minmax(132px, 1fr)); gap:10px; }
   .card{ padding:7px; }
-  .card-fav{ top:12px; right:12px; opacity:1; }
-  .card-queue{ top:12px; left:12px; opacity:1; }
+  .card-fav{ top:12px; right:12px; }
+  .card-menu{ top:12px; right:46px; }
+  .card-queue{ top:12px; left:12px; }
   .pl-grid, .artist-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
   .artist-card{ padding:14px 10px; }
   /* Keep --player-height padding from base .list; content expands further

@@ -1477,7 +1477,7 @@ function renderLyricsStage(){
   const sourceLabel = { sylt:"Synced lyrics", lrc:"Synced · LRC", uslt:"Lyrics", custom:"Pasted lyrics", "custom-synced":"Synced · pasted", "online-synced":"Synced · LRCLIB", "online-plain":"Lyrics · LRCLIB" };
   const sideMarkup = `
     <div class="lyrics-side">
-      <div class="lyrics-art"><img src="${t.art}" alt=""></div>
+      <div class="lyrics-art"><img src="${escapeHtml(t.art)}" alt=""></div>
       <div class="lyrics-meta"><div class="t">${escapeHtml(t.title)}</div><div class="a">${escapeHtml(t.artist)}</div></div>
       ${t.lyrics ? `<div class="lyrics-source">${sourceLabel[t.lyrics.source] || "Lyrics"}</div>` : ""}
     </div>`;
@@ -1985,7 +1985,7 @@ function renderTopbar(){
 
 function artistLinkMarkup(name){
   const label = escapeHtml(name);
-  return `<button type="button" class="artist-link" data-action="artist" data-artist="${encodeURIComponent(name)}" title="View ${label}">${label}</button>`;
+  return `<button type="button" class="artist-link" data-action="artist" data-artist="${escapeHtml(encodeURIComponent(name))}" title="View ${label}">${label}</button>`;
 }
 function artistLinksMarkup(t){
   const names = artistsOf(t);
@@ -2003,7 +2003,7 @@ function trackRowMarkup(t, idx, showAlbum=true){
   const albumText = showAlbum ? escapeHtml(t.album) : "";
   const metaTitle = showAlbum && albumText ? `${artistText} — ${albumText}` : artistText;
   return `
-  <div class="row" data-id="${t.id}" draggable="true">
+  <div class="row" data-id="${escapeHtml(t.id)}" draggable="true">
     <div class="row-idx">
       <span class="num">${idx+1}</span>
       <span class="play-mini" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
@@ -2012,15 +2012,15 @@ function trackRowMarkup(t, idx, showAlbum=true){
     <div class="row-title-wrap">
       <img class="row-art media-image" ${artAttrs(t, 160)} alt="">
       <div class="row-title-stack">
-        <div class="row-title" title="${title}">${title}</div>
-        <div class="row-meta" title="${metaTitle}">
+        <div class="row-title" title="${escapeHtml(title)}">${title}</div>
+        <div class="row-meta" title="${escapeHtml(metaTitle)}">
           <div class="row-artist">${artistLinksMarkup(t)}</div>
-          ${showAlbum ? `<span class="row-meta-sep" aria-hidden="true">·</span><div class="row-album" title="${albumText}">${albumText}</div>` : ""}
+          ${showAlbum ? `<span class="row-meta-sep" aria-hidden="true">·</span><div class="row-album" title="${escapeHtml(albumText)}">${albumText}</div>` : ""}
         </div>
       </div>
     </div>
-    <div class="row-album-cell" title="${albumText}">${showAlbum ? albumText : ""}</div>
-    <div class="row-time" data-track-time="${t.id}">${t.duration?fmtTime(t.duration):"--:--"}</div>
+    <div class="row-album-cell" title="${escapeHtml(albumText)}">${showAlbum ? albumText : ""}</div>
+    <div class="row-time" data-track-time="${escapeHtml(t.id)}">${t.duration?fmtTime(t.duration):"--:--"}</div>
     <div class="row-actions">
       <button data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
       <button data-action="fav" class="${t.favorite?'fav-on':''}" title="Favorite"><svg viewBox="0 0 24 24" fill="${t.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg></button>
@@ -2031,12 +2031,13 @@ function trackRowMarkup(t, idx, showAlbum=true){
 function cardMarkup(t){
   const playing = currentTrack()?.id === t.id;
   return `
-  <div class="card ${playing?'playing':''}" data-id="${t.id}">
+  <div class="card ${playing?'playing':''}" data-id="${escapeHtml(t.id)}">
     <div class="card-art">
       <img class="media-image" ${artAttrs(t, 320)} alt="">
       <div class="card-play"><button data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button></div>
     </div>
     <button class="card-queue" data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
+    <button class="card-menu" data-action="menu" title="More options" aria-label="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
     <button class="card-fav ${t.favorite?'on':''}" data-action="fav" title="Favorite"><svg viewBox="0 0 24 24" fill="${t.favorite?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg></button>
     <div class="card-title">${escapeHtml(t.title)}</div>
     <div class="card-sub">${artistLinksMarkup(t)}</div>
@@ -2155,11 +2156,12 @@ function wireTrackInteractions(list){
   $$(".card").forEach(card => {
     const t = state.tracks.find(x=>x.id===card.dataset.id);
     card.addEventListener("click",(e)=>{
-      if(e.target.closest('[data-action="fav"],[data-action="queue"],[data-action="artist"]')) return;
+      if(e.target.closest('[data-action="fav"],[data-action="queue"],[data-action="menu"],[data-action="artist"]')) return;
       playTrackFromList(list, t.id);
     });
     card.querySelector('[data-action="fav"]').addEventListener("click",(e)=>{ e.stopPropagation(); toggleFavorite(t); });
     card.querySelector('[data-action="queue"]')?.addEventListener("click",(e)=>{ e.stopPropagation(); addToQueue(t); });
+    card.querySelector('[data-action="menu"]')?.addEventListener("click",(e)=>{ e.stopPropagation(); openTrackMenu(e, t); });
     card.addEventListener("contextmenu",(e)=>{ e.preventDefault(); openTrackMenu(e, t); });
   });
   $$(".row").forEach(row => {
@@ -2183,7 +2185,10 @@ function toggleFavorite(t){
   t.favorite = !t.favorite;
   saveLibraryMeta();
   render();
-  if(currentTrack()?.id === t.id) $("#nowFav").classList.toggle("on", t.favorite);
+  if(currentTrack()?.id === t.id){
+    $("#nowFav")?.classList.toggle("on", t.favorite);
+    $("#mobilePlayerFav")?.classList.toggle("on", t.favorite);
+  }
 }
 
 let menuOutsideHandler = null;
@@ -2210,6 +2215,7 @@ function openTrackMenu(e, t){
   }
   const inPlaylist = state.view.startsWith("playlist:") ? state.view.slice(9) : null;
   menu.innerHTML = `
+    <div class="menu-item" data-act="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="m16 15 4 3-4 3"/></svg>Play next</div>
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
     <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
     <div class="menu-sep"></div>
@@ -2217,6 +2223,7 @@ function openTrackMenu(e, t){
     <div class="menu-item" data-act="remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Remove from library</div>
   `;
   document.body.appendChild(menu);
+  menu.querySelector('[data-act="play-next"]').addEventListener("click", ()=>{ playNextTrack(t); closeMenus(); });
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", (ev)=>{ openPlaylistSubmenu(ev, t, menu); });
   if(inPlaylist) menu.querySelector('[data-act="remove-from-playlist"]').addEventListener("click", ()=>{ removeFromPlaylist(inPlaylist, t); closeMenus(); });
@@ -2232,6 +2239,7 @@ function openNowPlayingMenu(anchor, t){
   menu.style.left = Math.max(8, Math.min(window.innerWidth - 212, rect.right - 196)) + "px";
   const artist = artistsOf(t)[0] || artistNameOf(t);
   menu.innerHTML = `
+    <div class="menu-item" data-act="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="m16 15 4 3-4 3"/></svg>Play next</div>
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
     <div class="menu-item" data-act="favorite"><svg viewBox="0 0 24 24" fill="${t.favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg>${t.favorite ? "Remove from liked songs" : "Save to liked songs"}</div>
     <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
@@ -2241,6 +2249,7 @@ function openNowPlayingMenu(anchor, t){
     <div class="menu-item" data-act="share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4"/></svg>Share</div>
   `;
   document.body.appendChild(menu);
+  menu.querySelector('[data-act="play-next"]').addEventListener("click", ()=>{ playNextTrack(t); closeMenus(); });
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", ev=> openPlaylistSubmenu(ev, t, menu));
@@ -2292,7 +2301,7 @@ function openPlaylistSubmenu(e, t, parentMenu){
   const old = parentMenu.querySelector(".menu-sub"); if(old) old.remove();
   const sub = document.createElement("div");
   sub.className = "menu menu-sub";
-  const items = state.playlists.map(p=>`<div class="menu-item" data-pl="${p.id}">${escapeHtml(p.name)}</div>`).join("");
+  const items = state.playlists.map(p=>`<div class="menu-item" data-pl="${escapeHtml(p.id)}">${escapeHtml(p.name)}</div>`).join("");
   sub.innerHTML = items + `<div class="menu-sep"></div><div class="menu-item" data-pl="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>New playlist…</div>`;
   parentMenu.appendChild(sub);
   requestAnimationFrame(()=>{
@@ -2466,6 +2475,17 @@ function addToQueue(t){
   if(state.view === "queue") renderQueueView();
 }
 
+// Insert directly after the current song, without disturbing the active slot.
+// If nothing is playing yet, this is equivalent to adding the first queue item.
+function playNextTrack(t){
+  const insertAt = state.queueIndex < 0 ? state.queue.length : state.queueIndex + 1;
+  state.queue.splice(insertAt, 0, t.id);
+  if(state.queueIndex < 0) state.queueIndex = 0;
+  toast(`“${t.title}” will play next.`);
+  renderQueuePanel();
+  if(state.view === "queue") renderQueueView();
+}
+
 function addTrackToPlaylist(playlistId, t, {quiet=false}={}){
   const pl = state.playlists.find(p=>p.id===playlistId);
   if(!pl) return false;
@@ -2633,14 +2653,27 @@ async function uploadProfilePhoto(file, filename){
   const data = await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.detail || "Could not upload photo");
   accountInfo = {...accountInfo, photo_url: `${data.photo_url}?v=${Date.now()}`};
+  renderHomeProfileAvatar();
 }
 
 let accountInfo = null;
+function renderHomeProfileAvatar(){
+  const avatar = $("#homeProfileAvatar");
+  if(!avatar) return;
+  const info = accountInfo;
+  const username = info?.username || "?";
+  avatar.title = info?.username ? `Account: ${info.username}` : "Account";
+  avatar.setAttribute("aria-label", `Open account${info?.username ? ` for ${info.username}` : ""}`);
+  avatar.innerHTML = info?.photo_url
+    ? `<img src="${escapeHtml(info.photo_url)}" alt="Profile photo" style="object-fit:${state.profilePhotoFit || "cover"};">`
+    : escapeHtml(username.slice(0, 1).toUpperCase());
+}
 async function fetchAccountInfo(){
   try{
     const res = await fetch("/api/me");
     if(res.ok) accountInfo = await res.json();
   }catch(_){}
+  renderHomeProfileAvatar();
   return accountInfo;
 }
 
@@ -2739,6 +2772,7 @@ async function renderAccountView(){
       <section class="acct-settings">
         <div class="acct-settings-title">Session</div>
         <button type="button" class="btn" id="btnAcctLogout">Log out</button>
+        <button type="button" class="btn" id="btnAcctLogoutAll">Sign out of all devices</button>
       </section>
 
       <section class="acct-settings acct-danger-zone">
@@ -2759,6 +2793,23 @@ async function renderAccountView(){
 
   const acctLogout = $("#btnAcctLogout");
   if (acctLogout) acctLogout.addEventListener("click", () => logoutAndRedirect());
+  const acctLogoutAll = $("#btnAcctLogoutAll");
+  if (acctLogoutAll) acctLogoutAll.addEventListener("click", async () => {
+    acctLogoutAll.disabled = true;
+    try{
+      const res = await fetch("/api/account/logout-all", {
+        method: "POST",
+        headers: { "X-CSRF-Token": await ensureCsrfToken() },
+      });
+      if(!res.ok) throw new Error("Could not sign out of all devices");
+      accountInfo = null;
+      csrfToken = null;
+      window.location.assign("/login");
+    }catch(err){
+      acctLogoutAll.disabled = false;
+      toast(err.message);
+    }
+  });
 
   const avatarButton = $("#acctAvatarButton");
   const photoInput = $("#profilePhoto");
@@ -2776,6 +2827,7 @@ async function renderAccountView(){
         ? photoFitSelect.value
         : "cover";
       await saveSettings();
+      renderHomeProfileAvatar();
       renderAccountView();
     });
   }
@@ -2797,6 +2849,7 @@ async function renderAccountView(){
       });
       if(!res.ok) throw new Error("Could not remove photo");
       accountInfo = {...accountInfo, photo_url: null};
+      renderHomeProfileAvatar();
       renderAccountView();
     }catch(err){
       photoMsg.textContent = err.message; photoMsg.className = "acct-form-msg error";
@@ -2856,7 +2909,7 @@ async function renderAccountView(){
 function renderPlaylistsView(){
   const content = $("#content");
   const cards = state.playlists.map(p => `
-    <div class="pl-card" data-id="${p.id}">
+    <div class="pl-card" data-id="${escapeHtml(p.id)}">
       <div class="pl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h13M4 12h13M4 18h9"/><circle cx="20" cy="16" r="2.4"/><path d="M20 6v10"/></svg></div>
       <div class="pl-name">${escapeHtml(p.name)}</div>
       <div class="pl-count">${p.trackIds.length} track${p.trackIds.length!==1?"s":""}</div>
@@ -2904,7 +2957,7 @@ function renderArtistsView(){
   content.innerHTML = `
     <div class="artist-grid">
       ${artists.map(a => `
-        <button type="button" class="artist-card" data-artist="${encodeURIComponent(a.name)}">
+        <button type="button" class="artist-card" data-artist="${escapeHtml(encodeURIComponent(a.name))}">
           <img class="artist-card-photo media-image" data-artist-photo="${escapeHtml(a.name)}" ${artAttrs(a, 256)} alt="${escapeHtml(a.name)}">
           <div class="artist-card-name">${escapeHtml(a.name)}</div>
           <div class="artist-card-count">${a.tracks.length} song${a.tracks.length!==1?"s":""}</div>
@@ -2983,12 +3036,12 @@ function renderQueueView(){
     const playing = i === state.queueIndex;
     const title = escapeHtml(t.title);
     return `
-    <div class="row" data-id="${t.id}" data-qi="${i}" draggable="true">
+    <div class="row" data-id="${escapeHtml(t.id)}" data-qi="${i}" draggable="true">
       <div class="row-idx"><span class="num">${i+1}</span></div>
       <div class="row-title-wrap">
-        <img class="row-art" src="${t.art}" alt="">
+        <img class="row-art" src="${escapeHtml(t.art)}" alt="">
         <div class="row-title-stack">
-          <div class="row-title" title="${title}">${title}</div>
+          <div class="row-title" title="${escapeHtml(title)}">${title}</div>
           <div class="row-meta"><div class="row-artist">${artistLinksMarkup(t)}</div></div>
         </div>
       </div>
@@ -3166,7 +3219,7 @@ function renderLibraryPicker(){
   listEl.innerHTML = tracks.map(t => {
     const inPlaylist = !!(pl && pl.trackIds.includes(t.id));
     return `
-    <button type="button" class="qp-row${inPlaylist ? " in-playlist" : ""}" data-id="${t.id}" ${inPlaylist ? "aria-disabled=\"true\"" : ""}>
+    <button type="button" class="qp-row${inPlaylist ? " in-playlist" : ""}" data-id="${escapeHtml(t.id)}" ${inPlaylist ? "aria-disabled=\"true\"" : ""}>
       <img class="media-image" ${artAttrs(t, 160)} alt="">
       <div class="qp-meta">
         <div class="qp-title">${escapeHtml(t.title)}</div>
@@ -3206,6 +3259,7 @@ function on(sel, event, handler){
 }
 on("#btnImportTop", "click", ()=> $("#fileInput")?.click());
 on("#btnImportRail", "click", ()=> $("#fileInput")?.click());
+on("#homeProfileAvatar", "click", ()=>{ state.view = "account"; state.search=""; $("#searchInput").value=""; render(); });
 on("#fileInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = ""; });
 on("#folderInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = ""; });
 
@@ -3435,6 +3489,7 @@ async function init(){
     updateVolUI();
     ensureCsrfToken();
     render();
+    fetchAccountInfo();
     loadServerLibrary().then(count => {
       render();
       if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);

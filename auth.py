@@ -10,7 +10,7 @@ import uuid
 
 import bcrypt
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, User
@@ -55,6 +55,16 @@ class UserStore:
                 row.password_hash = new_password_hash
                 session.commit()
 
+    def bump_session_version(self, user_id: str) -> int:
+        with SessionLocal() as session:
+            session.execute(
+                text("UPDATE users SET session_version = session_version + 1 WHERE id = :id"),
+                {"id": user_id},
+            )
+            value = session.scalar(select(User.session_version).where(User.id == user_id))
+            session.commit()
+            return value if value is not None else 0
+
     def update_profile_photo(self, user_id: str, photo_data: bytes | None, photo_mime: str | None) -> None:
         with SessionLocal() as session:
             row = session.get(User, user_id)
@@ -93,6 +103,9 @@ def hash_password(password: str) -> str:
     if len(password.encode("utf-8")) > 72:
         raise ValueError("Password is too long (max 72 bytes)")
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+_DUMMY_HASH = hash_password("vervfy-dummy-password")
 
 
 def verify_password(password: str, password_hash: str) -> bool:

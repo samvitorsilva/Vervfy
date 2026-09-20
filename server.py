@@ -15,6 +15,7 @@ import secrets
 import socket
 import time
 import unicodedata
+from typing import Annotated
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from pathlib import Path
@@ -25,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -64,7 +65,14 @@ def _load_or_create_secret_key() -> str:
     return key
 
 
-app = FastAPI(title="Vervfy", version="1.0")
+_enable_docs = os.environ.get("VERVFY_ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="Vervfy",
+    version="1.0",
+    docs_url="/docs" if _enable_docs else None,
+    redoc_url="/redoc" if _enable_docs else None,
+    openapi_url="/openapi.json" if _enable_docs else None,
+)
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
@@ -109,6 +117,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault(
         "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
     )
+    if https_only:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
     return response
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -530,7 +540,13 @@ def current_user_row(request: Request):
     user_id = request.session.get("user_id")
     if not user_id:
         return None
-    return user_store.get_by_id(user_id)
+    row = user_store.get_by_id(user_id)
+    if row is None:
+        return None
+    if request.session.get("sv", 0) != row["session_version"]:
+        request.session.clear()
+        return None
+    return row
 
 
 class LoginRequired(Exception):
@@ -587,6 +603,8 @@ def startup() -> None:
             connection.execute(text(f"ALTER TABLE users ADD COLUMN photo_data {photo_type}"))
         if "photo_mime" not in existing_columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(64)"))
+        if "session_version" not in existing_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"))
         existing_track_columns = {column["name"] for column in inspect(engine).get_columns("tracks")}
         if "size_bytes" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
@@ -643,13 +661,19 @@ def login_submit(
         return fail("Too many attempts. Please wait a few minutes and try again.")
 
     row = user_store.get_by_username(username)
-    if row is None or not auth.verify_password(password, row["password_hash"]):
+    password_matches = (
+        auth.verify_password(password, row["password_hash"])
+        if row is not None
+        else auth.verify_password(password, auth._DUMMY_HASH)
+    )
+    if row is None or not password_matches:
         login_throttle.record_failure(ip, username)
         return fail("Incorrect username or password")
 
     login_throttle.clear(ip, username)
     request.session.clear()
     request.session["user_id"] = row["id"]
+    request.session["sv"] = row["session_version"]
     return RedirectResponse("/", status_code=303)
 
 
@@ -705,6 +729,7 @@ def register_submit(
 
     request.session.clear()
     request.session["user_id"] = new_user["id"]
+    request.session["sv"] = 0
     return RedirectResponse("/", status_code=303)
 
 
@@ -712,6 +737,8 @@ def register_submit(
 def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
     auth.verify_csrf(request, submitted_token)
+    # A copied cookie stays valid after a plain logout until the password
+    # changes or logout-all is used.
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -801,14 +828,17 @@ class TrackLyricsRequest(BaseModel):
     lyrics: str = Field(..., min_length=1, max_length=200_000)
 
 
+SafeId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+
+
 class PlaylistState(BaseModel):
-    id: str = Field(min_length=1, max_length=64)
+    id: SafeId
     name: str = Field(min_length=1, max_length=200)
-    trackIds: list[str] = Field(default_factory=list, max_length=10_000)
+    trackIds: list[SafeId] = Field(default_factory=list, max_length=10_000)
 
 
 class LibraryStateRequest(BaseModel):
-    favorites: list[str] = Field(default_factory=list, max_length=10_000)
+    favorites: list[SafeId] = Field(default_factory=list, max_length=10_000)
     playlists: list[PlaylistState] = Field(default_factory=list, max_length=1_000)
 
 
@@ -869,6 +899,18 @@ def change_password(
     if error:
         raise HTTPException(status_code=400, detail=error)
     user_store.update_password(user["id"], auth.hash_password(payload.new_password))
+    request.session["sv"] = user_store.bump_session_version(user["id"])
+    return {"ok": True}
+
+
+@app.post("/api/account/logout-all")
+def logout_all(
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    user_store.bump_session_version(user["id"])
+    request.session.clear()
     return {"ok": True}
 
 

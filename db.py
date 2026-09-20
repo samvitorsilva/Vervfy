@@ -42,6 +42,7 @@ class User(Base):
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     photo_mime: Mapped[str | None] = mapped_column(String(64))
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     # Preserve the existing route code's sqlite.Row-style access.
     def __getitem__(self, key: str):
