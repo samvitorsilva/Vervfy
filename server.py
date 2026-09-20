@@ -114,7 +114,8 @@ async def add_security_headers(request: Request, call_next):
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 login_throttle = auth.LoginThrottle()
-MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
+MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
 _libraries: dict[str, Library] = {}
@@ -963,28 +964,28 @@ def list_tracks(user=Depends(require_api_user)) -> dict:
 
 @app.post("/api/library/upload")
 async def upload_track(
-    file: UploadFile = File(...), user=Depends(require_api_user), _csrf=Depends(auth.verify_api_csrf)
+    request: Request, file: UploadFile = File(...), user=Depends(require_api_user), _csrf=Depends(auth.verify_api_csrf)
 ) -> dict:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Missing filename")
-    content_length = file.headers.get("content-length")
+    content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_UPLOAD_BYTES:
-                raise HTTPException(status_code=413, detail="Upload exceeds the 500 MB limit")
+            if int(content_length) > MAX_UPLOAD_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid upload size") from None
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
     buffer = bytearray()
     total_bytes = 0
     while part := await file.read(1024 * 1024):
         total_bytes += len(part)
         if total_bytes > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Upload exceeds the 500 MB limit")
+            raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
         buffer.extend(part)
     if not buffer:
         raise HTTPException(status_code=400, detail="Empty upload")
     library = get_library(user["id"])
-    track = library.add_upload(file.filename, bytes(buffer))
+    track = library.add_upload(file.filename, buffer)
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
     return _track_payload(track)

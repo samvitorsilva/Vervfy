@@ -14,11 +14,12 @@ try:
 except ImportError: MUTAGEN_AVAILABLE = False
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wav", ".weba"}
+BytesLike = bytes | bytearray | memoryview
 @dataclass
 class Track:
     id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
 
-def track_id_for_bytes(data: bytes) -> str:
+def track_id_for_bytes(data: BytesLike) -> str:
     size, sample_size = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:sample_size])
     if size > sample_size: digest.update(data[-sample_size:])
     return digest.hexdigest()[:16]
@@ -102,7 +103,7 @@ class Library:
             s.commit()
             return self._track(row)
 
-    def add_upload(self, filename: str, data: bytes):
+    def add_upload(self, filename: str, data: BytesLike):
         safe=os.path.basename(filename.replace("\\","/")).replace("\x00","") or "upload.mp3"
         if os.path.splitext(safe)[1].lower() not in AUDIO_EXTENSIONS:return None
         track_id=track_id_for_bytes(data)
@@ -157,7 +158,7 @@ class Library:
             if max_bytes is not None:
                 data = data[:max_bytes]
             return bytes(data), filename
-    def _read_metadata(self, filename, data):
+    def _read_metadata(self, filename, data: BytesLike):
         title,artist=_parse_filename(filename);album="Unknown Album";duration=0.;cover=make_placeholder_cover(title);has_cover=False
         with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1],delete=False) as f:path=f.name;f.write(data)
         try:
