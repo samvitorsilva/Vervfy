@@ -584,6 +584,10 @@ def startup() -> None:
             connection.execute(text(f"ALTER TABLE users ADD COLUMN photo_data {photo_type}"))
         if "photo_mime" not in existing_columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(64)"))
+        existing_track_columns = {column["name"] for column in inspect(engine).get_columns("tracks")}
+        if "size_bytes" not in existing_track_columns:
+            connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
+        connection.execute(text("UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0"))
     app.state.is_first_account = user_store.count() == 0
 
 

@@ -61,6 +61,7 @@ class TrackRecord(Base):
     has_cover: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     custom_lyrics: Mapped[str | None] = mapped_column(Text)
     audio_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 

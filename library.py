@@ -94,6 +94,12 @@ class Library:
         with SessionLocal() as s:
             return s.scalar(select(func.count()).select_from(TrackRecord).where(TrackRecord.user_id == self.user_id)) or 0
 
+    def total_bytes(self) -> int:
+        with SessionLocal() as s:
+            return s.scalar(
+                select(func.sum(TrackRecord.size_bytes)).where(TrackRecord.user_id == self.user_id)
+            ) or 0
+
     def set_custom_lyrics(self, track_id: str, lyrics: str):
         with SessionLocal() as s:
             row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
@@ -113,7 +119,7 @@ class Library:
         meta=self._read_metadata(safe,data)
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta; output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
-        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=data,cover_data=output.getvalue())
+        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=data,size_bytes=len(data),cover_data=output.getvalue())
         with SessionLocal() as s:s.add(row);s.commit();return self._track(row)
 
     def remove(self, track_id: str):
