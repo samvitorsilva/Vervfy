@@ -114,6 +114,7 @@ async def add_security_headers(request: Request, call_next):
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 login_throttle = auth.LoginThrottle()
+signup_throttle = auth.SignupThrottle()
 MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
@@ -671,7 +672,7 @@ def register_submit(
 ) -> Response:
     auth.verify_csrf(request, csrf_token)
 
-    def fail(message: str) -> HTMLResponse:
+    def fail(message: str, status_code: int = 400) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "register.html",
@@ -681,7 +682,7 @@ def register_submit(
                 "username": username,
                 "email": email,
             },
-            status_code=400,
+            status_code=status_code,
         )
 
     username_error = auth.validate_username(username)
@@ -690,12 +691,16 @@ def register_submit(
     password_error = auth.validate_password(password)
     if password_error:
         return fail(password_error)
+    ip = auth.client_ip(request)
+    if signup_throttle.is_limited(ip):
+        return fail("Too many sign-ups from this network. Try again later.", status_code=429)
 
     try:
         new_user = user_store.create_user(username, email or None, password)
     except ValueError as exc:
         return fail(str(exc))
 
+    signup_throttle.record_success(ip)
     request.app.state.is_first_account = False
 
     request.session.clear()

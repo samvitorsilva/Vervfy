@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 import time
@@ -148,6 +149,30 @@ class LoginThrottle:
 
     def clear(self, ip: str, username: str) -> None:
         self._failures.pop(self._key(ip, username), None)
+
+
+class SignupThrottle:
+    """Limit successful registrations from one client IP within an hour."""
+
+    WINDOW_SECONDS = 60 * 60
+
+    def __init__(self, max_signups: int | None = None):
+        self.max_signups = max_signups if max_signups is not None else int(
+            os.environ.get("VERVFY_SIGNUPS_PER_HOUR", "5")
+        )
+        self._successes: dict[str, list[float]] = {}
+
+    def _recent(self, ip: str) -> list[float]:
+        now = time.time()
+        recent = [timestamp for timestamp in self._successes.get(ip, []) if now - timestamp < self.WINDOW_SECONDS]
+        self._successes[ip] = recent
+        return recent
+
+    def is_limited(self, ip: str) -> bool:
+        return len(self._recent(ip)) >= self.max_signups
+
+    def record_success(self, ip: str) -> None:
+        self._recent(ip).append(time.time())
 
 
 # ------------------------------------------------------------------------ CSRF
