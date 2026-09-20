@@ -8,6 +8,7 @@ import argparse
 from io import BytesIO
 from html import escape as html_escape
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
@@ -30,6 +31,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
+import audio_store
 import auth
 from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord
 from library import Library, track_id_for_bytes
@@ -125,6 +127,7 @@ templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 login_throttle = auth.LoginThrottle()
 signup_throttle = auth.SignupThrottle()
+log = logging.getLogger("vervfy")
 MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
@@ -608,7 +611,14 @@ def startup() -> None:
         existing_track_columns = {column["name"] for column in inspect(engine).get_columns("tracks")}
         if "size_bytes" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
-        connection.execute(text("UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0"))
+        if "storage_path" not in existing_track_columns:
+            connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
+        if engine.dialect.name == "postgresql":
+            # Audio moved to Supabase Storage, so the blob column may now be empty.
+            connection.execute(text("ALTER TABLE tracks ALTER COLUMN audio_data DROP NOT NULL"))
+        connection.execute(text(
+            "UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0 AND audio_data IS NOT NULL"
+        ))
     app.state.is_first_account = user_store.count() == 0
 
 
@@ -926,7 +936,9 @@ def delete_account(
         raise HTTPException(status_code=400, detail='Type DELETE to confirm account deletion')
     if not auth.verify_password(payload.current_password, user["password_hash"]):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    storage_paths = get_library(user["id"]).storage_paths()
     user_store.delete_user(user["id"])
+    audio_store.delete_many_quietly(storage_paths)
     _libraries.pop(user["id"], None)
     request.session.clear()
     request.app.state.is_first_account = user_store.count() == 0
@@ -1060,7 +1072,11 @@ async def upload_track(
                 status_code=413,
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             )
-    track = library.add_upload(file.filename, buffer)
+    try:
+        track = library.add_upload(file.filename, buffer)
+    except audio_store.StorageError:
+        log.exception("audio storage failed during upload")
+        raise HTTPException(status_code=502, detail="Audio storage is unavailable, please try again shortly") from None
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
     return _track_payload(track)
@@ -1117,41 +1133,49 @@ def track_cover(
 @app.get("/api/tracks/{track_id}/stream")
 def track_stream(request: Request, track_id: str, user=Depends(require_api_user)) -> Response:
     library = get_library(user["id"])
-    track = library.get(track_id)
-    if track is None:
+    info = library.audio_info(track_id)
+    if info is None or not info.size_bytes:
         raise HTTPException(status_code=404, detail="Track not found")
-
-    data, filename = library.audio_bytes(track_id)
-    if data is None or filename is None:
-        raise HTTPException(status_code=404, detail="Track not found")
+    filename, size, storage_path = info.filename, info.size_bytes, info.storage_path
 
     media_type = mimetypes.guess_type(filename)[0] or "audio/mpeg"
-    safe_filename = _content_disposition_filename(filename)
-    size = len(data)
-    range_header = request.headers.get("range")
-    if not range_header:
-        headers = {
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(size),
-            "Content-Disposition": f'inline; filename="{safe_filename}"',
-            "Cache-Control": "private, max-age=3600",
-        }
-        return Response(content=data, media_type=media_type, headers=headers)
-
-    range_match = _parse_range_header(range_header, size)
-    if range_match is None:
-        return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
-
-    start, end = range_match
-    payload = data[start : end + 1]
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Range": f"bytes {start}-{end}/{size}",
-        "Content-Length": str(len(payload)),
-        "Content-Disposition": f'inline; filename="{safe_filename}"',
+        "Content-Disposition": f'inline; filename="{_content_disposition_filename(filename)}"',
         "Cache-Control": "private, max-age=3600",
     }
-    return Response(content=payload, status_code=206, media_type=media_type, headers=headers)
+    range_header = request.headers.get("range")
+    if range_header:
+        range_match = _parse_range_header(range_header, size)
+        if range_match is None:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
+        start, end = range_match
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    else:
+        start, end, status_code = 0, size - 1, 200
+    headers["Content-Length"] = str(end - start + 1)
+
+    if storage_path:
+        # Relay only the requested byte range from Supabase Storage.
+        try:
+            client, upstream = audio_store.open_range(storage_path, start, end)
+        except audio_store.StorageError:
+            log.exception("audio storage read failed for %s", track_id)
+            raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
+
+        def body():
+            try:
+                yield from upstream.iter_bytes(64 * 1024)
+            finally:
+                upstream.close()
+                client.close()
+
+        return StreamingResponse(body(), status_code=status_code, media_type=media_type, headers=headers)
+
+    # Legacy track whose audio is still in Postgres: fetch just the slice.
+    payload = library.read_range(track_id, start, end) or b""
+    return Response(content=payload, status_code=status_code, media_type=media_type, headers=headers)
 
 
 @app.get("/api/tracks/{track_id}/tag-head")
@@ -1168,17 +1192,21 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
     # Do not guess a prefix length: a large embedded cover can place USLT or
     # SYLT frames well beyond the old fixed 2 MiB cutoff. Read the ID3 header
     # first, then return the complete tag so the browser can parse every frame.
-    header, _ = library.audio_bytes(track_id, max_bytes=10)
-    if not header:
-        return Response(content=b"", media_type="application/octet-stream")
-    if len(header) < 10 or header[:3] != b"ID3":
-        data, _ = library.audio_bytes(track_id, max_bytes=10)
-    else:
-        tag_size = sum((header[index] & 0x7F) << shift for index, shift in zip(range(6, 10), (21, 14, 7, 0)))
-        tag_bytes = 10 + tag_size
-        if tag_bytes > 32 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="Embedded metadata tag is too large")
-        data, _ = library.audio_bytes(track_id, max_bytes=tag_bytes)
+    try:
+        header, _ = library.audio_bytes(track_id, max_bytes=10)
+        if not header:
+            return Response(content=b"", media_type="application/octet-stream")
+        if len(header) < 10 or header[:3] != b"ID3":
+            data = header
+        else:
+            tag_size = sum((header[index] & 0x7F) << shift for index, shift in zip(range(6, 10), (21, 14, 7, 0)))
+            tag_bytes = 10 + tag_size
+            if tag_bytes > 32 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="Embedded metadata tag is too large")
+            data, _ = library.audio_bytes(track_id, max_bytes=tag_bytes)
+    except audio_store.StorageError:
+        log.exception("audio storage read failed for %s", track_id)
+        raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
     return Response(
         content=data or b"",
         media_type="application/octet-stream",

@@ -61,7 +61,11 @@ class TrackRecord(Base):
     duration: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     has_cover: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     custom_lyrics: Mapped[str | None] = mapped_column(Text)
-    audio_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Legacy rows keep their audio here; new uploads live in Supabase Storage and
+    # only ``storage_path`` is stored.  ``deferred`` stops ordinary row loads
+    # (``session.get``) from dragging the whole blob out of Postgres.
+    audio_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    storage_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 

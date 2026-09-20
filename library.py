@@ -1,10 +1,11 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
-import hashlib, io, os, tempfile
+import hashlib, io, logging, os, tempfile
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
+import audio_store
 from db import SessionLocal, TrackRecord
 try:
     from mutagen import File as MutagenFile
@@ -119,14 +120,29 @@ class Library:
         meta=self._read_metadata(safe,data)
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta; output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
-        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=data,size_bytes=len(data),cover_data=output.getvalue())
-        with SessionLocal() as s:s.add(row);s.commit();return self._track(row)
+        storage_path=None
+        if audio_store.enabled():
+            # Audio goes to Supabase Storage; Postgres keeps only the object path.
+            storage_path=audio_store.object_path(self.user_id,track_id,safe)
+            audio_store.upload(storage_path,data,audio_store.guess_content_type(safe))
+        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
+        try:
+            with SessionLocal() as s:s.add(row);s.commit();return self._track(row)
+        except Exception:
+            # Don't leave an orphaned object behind — unless a concurrent upload of
+            # the same file already owns it (or we can't tell).
+            try:
+                with SessionLocal() as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
+            except Exception:still_used=True
+            if not still_used:audio_store.delete_quietly(storage_path)
+            raise
 
     def remove(self, track_id: str):
         from db import Favorite, Playlist, PlaylistTrack
         with SessionLocal() as s:
             row=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
             if not row:return False
+            storage_path=row.storage_path
             s.delete(row)
             s.query(Favorite).filter_by(user_id=self.user_id,track_id=track_id).delete()
             owned_playlist_ids = s.scalars(select(Playlist.id).where(Playlist.user_id == self.user_id)).all()
@@ -135,7 +151,9 @@ class Library:
                     PlaylistTrack.playlist_id.in_(owned_playlist_ids),
                     PlaylistTrack.track_id == track_id,
                 ).delete(synchronize_session=False)
-            s.commit();return True
+            s.commit()
+        audio_store.delete_quietly(storage_path)
+        return True
 
     def cover_bytes(self, track_id: str):
         with SessionLocal() as s:
@@ -150,20 +168,62 @@ class Library:
             return b""
         image=Image.open(io.BytesIO(cover_data)).convert("RGB").resize((size,size),Image.LANCZOS);out=io.BytesIO();image.save(out,format="JPEG",quality=90);return out.getvalue()
 
-    def audio_bytes(self, track_id: str, max_bytes: int | None = None):
+    def audio_info(self, track_id: str):
+        """``(filename, size_bytes, storage_path)`` or None — never touches the audio itself."""
         with SessionLocal() as s:
-            row = s.execute(
-                select(TrackRecord.audio_data, TrackRecord.filename).where(
+            return s.execute(
+                select(TrackRecord.filename, TrackRecord.size_bytes, TrackRecord.storage_path).where(
                     TrackRecord.id == track_id,
                     TrackRecord.user_id == self.user_id,
                 )
             ).one_or_none()
-            if row is None:
-                return None, None
-            data, filename = row
-            if max_bytes is not None:
-                data = data[:max_bytes]
-            return bytes(data), filename
+
+    def storage_paths(self) -> list[str]:
+        """Every Storage object this user owns (used when deleting an account)."""
+        with SessionLocal() as s:
+            return list(s.scalars(select(TrackRecord.storage_path).where(
+                TrackRecord.user_id == self.user_id, TrackRecord.storage_path.is_not(None))).all())
+
+    def read_range(self, track_id: str, start: int, end: int):
+        """Bytes ``start..end`` (inclusive) of a track, fetching only that slice.
+
+        Storage-backed tracks do a ranged request; legacy tracks whose audio is
+        still in Postgres use ``substr`` so the database sends just the slice.
+        """
+        info = self.audio_info(track_id)
+        if info is None:
+            return None
+        if info.storage_path:
+            return audio_store.read_range(info.storage_path, start, end)
+        with SessionLocal() as s:
+            data = s.scalar(
+                select(func.substr(TrackRecord.audio_data, start + 1, end - start + 1)).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            )
+        return bytes(data) if data is not None else b""
+
+    def audio_bytes(self, track_id: str, max_bytes: int | None = None):
+        """``(data, filename)``.  Prefer :meth:`read_range`; this reads the whole file when ``max_bytes`` is None."""
+        info = self.audio_info(track_id)
+        if info is None:
+            return None, None
+        filename, size, path = info.filename, info.size_bytes, info.storage_path
+        if max_bytes is not None:
+            if max_bytes <= 0:
+                return b"", filename
+            end = max_bytes - 1
+            if path and size:
+                end = min(end, size - 1)
+            return self.read_range(track_id, 0, end), filename
+        if path:
+            return audio_store.read_range(path, 0, max(size - 1, 0)), filename
+        with SessionLocal() as s:
+            data = s.scalar(select(TrackRecord.audio_data).where(
+                TrackRecord.id == track_id, TrackRecord.user_id == self.user_id))
+        return (bytes(data) if data is not None else None), filename
+
     def _read_metadata(self, filename, data: BytesLike):
         title,artist=_parse_filename(filename);album="Unknown Album";duration=0.;cover=make_placeholder_cover(title);has_cover=False
         with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1],delete=False) as f:path=f.name;f.write(data)
