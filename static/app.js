@@ -983,15 +983,21 @@ async function ensureCsrfToken(forceRefresh=false){
 async function uploadFileToServer(file){
   const body = new FormData();
   body.append("file", file, file.name);
-  const res = await fetch("/api/library/upload", {
+  const upload = async (refreshCsrf=false) => fetch("/api/library/upload", {
     method: "POST",
-    headers: { "X-CSRF-Token": await ensureCsrfToken() },
+    headers: { "X-CSRF-Token": await ensureCsrfToken(refreshCsrf) },
     body,
   });
+  let res = await upload();
+  // A page can keep an old token after the session changes in another tab.
+  // Refresh it once before reporting the upload as failed.
+  if(res.status === 403) res = await upload(true);
   if(!res.ok){
     let detail = "Upload failed";
     try{ const err = await res.json(); detail = err.detail || detail; }catch(_){}
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = res.status;
+    throw error;
   }
   return trackFromServer(await res.json());
 }
@@ -1089,6 +1095,7 @@ async function importFiles(fileList){
   toast(`Saving ${files.length} track${files.length>1?"s":""}…`);
 
   let added = 0, failed = 0;
+  const failures = [];
   for(const file of files){
     try{
       const track = await uploadFileToServer(file);
@@ -1097,13 +1104,21 @@ async function importFiles(fileList){
       added++;
     }catch(e){
       failed++;
+      failures.push(e?.message || "Upload failed");
       console.warn("Upload failed for", file.name, e);
     }
   }
   relinkPersistedLibrary();
   saveLibraryMeta();
-  if(added) toast(`Saved ${added} track${added!==1?"s":""} to your library.`);
-  else if(failed) toast("Couldn't save those files. Is Vervfy running?");
+  if(added && failed){
+    const reason = failures[0] || "Upload failed";
+    toast(`Saved ${added} track${added!==1?"s":""}; ${failed} couldn't be saved: ${reason}`);
+  } else if(added) toast(`Saved ${added} track${added!==1?"s":""} to your library.`);
+  else if(failed){
+    const reason = failures[0] || "Upload failed";
+    toast(files.length === 1 ? `Couldn't save the file: ${reason}` :
+      `Couldn't save those files: ${reason}${failed > 1 ? ` (+${failed - 1} more)` : ""}`);
+  }
   else toast("Those tracks were already in your library.");
   render();
 }
