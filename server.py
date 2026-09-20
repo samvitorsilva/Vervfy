@@ -31,7 +31,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import auth
 from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord
-from library import Library
+from library import Library, track_id_for_bytes
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -115,6 +115,8 @@ templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 login_throttle = auth.LoginThrottle()
 MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
+USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
+MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
 MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
@@ -908,6 +910,17 @@ def get_library_state(user=Depends(require_api_user)) -> dict:
     return _library_state(user["id"])
 
 
+@app.get("/api/library/usage")
+def get_library_usage(user=Depends(require_api_user)) -> dict:
+    library = get_library(user["id"])
+    return {
+        "used_bytes": library.total_bytes(),
+        "quota_bytes": USER_QUOTA_BYTES,
+        "track_count": library.count_tracks(),
+        "max_tracks": MAX_TRACKS_PER_USER,
+    }
+
+
 @app.put("/api/library/state")
 def save_library_state(
     payload: LibraryStateRequest,
@@ -989,6 +1002,17 @@ async def upload_track(
     if not buffer:
         raise HTTPException(status_code=400, detail="Empty upload")
     library = get_library(user["id"])
+    track_id = track_id_for_bytes(buffer)
+    if library.get(track_id) is None:
+        used_bytes = library.total_bytes()
+        track_count = library.count_tracks()
+        if used_bytes + len(buffer) > USER_QUOTA_BYTES or track_count >= MAX_TRACKS_PER_USER:
+            used_mb = used_bytes / (1024 * 1024)
+            quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
+            )
     track = library.add_upload(file.filename, buffer)
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
