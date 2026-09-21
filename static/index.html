@@ -10,7 +10,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=17">
+<link rel="stylesheet" href="/static/styles.css?v=19">
 <script>
 /* Clear stale service workers / caches that can leave the UI dead after updates.
    Do NOT register a new worker here — /sw.js is only served so an already-installed
@@ -191,7 +191,7 @@
           </button>
         </div>
         <div class="mobile-seek-row">
-          <div class="seek mobile-seek" id="mobileSeek"><div class="seek-track"><div class="seek-fill" id="mobileSeekFill"></div></div><div class="seek-thumb" id="mobileSeekThumb"></div></div>
+          <div class="seek mobile-seek" id="mobileSeek" role="slider" tabindex="0" aria-label="Track progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="seek-track"><div class="seek-fill" id="mobileSeekFill"></div></div><div class="seek-thumb" id="mobileSeekThumb"></div></div>
           <div class="mobile-times"><span id="mobileTimeCur">0:00</span><span id="mobileTimeDur">0:00</span></div>
         </div>
         <div class="mobile-transport">
