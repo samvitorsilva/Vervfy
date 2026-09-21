@@ -3404,8 +3404,15 @@ on("#btnRepeat", "click", ()=>{
 });
 on("#nowFav", "click", ()=>{ const t=currentTrack(); if(t) toggleFavorite(t); });
 on("#mobilePlayerFav", "click", ()=>{ const t=currentTrack(); if(t) toggleFavorite(t); });
+function isCompactTouchLayout(){
+  const compact = window.matchMedia("(max-width: 900px)");
+  const coarse = window.matchMedia("(pointer: coarse)");
+  const noHover = window.matchMedia("(hover: none)");
+  return compact.matches && (coarse.matches || noHover.matches || navigator.maxTouchPoints > 0);
+}
+
 on("#nowbar", "click", (e)=>{
-  if(window.matchMedia("(max-width: 900px)").matches && !e.target.closest("button,.seek")){
+  if(isCompactTouchLayout() && !e.target.closest("button,.seek")){
     $("#mobilePlayer").classList.add("open");
     updateNowPlayingUI();
   }

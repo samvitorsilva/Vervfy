@@ -373,7 +373,8 @@ input{ background:none; border:none; }
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 
-@media (max-width:900px){
+@media (max-width:900px) and (hover: none),
+       (max-width:900px) and (pointer: coarse){
   #btnShortcuts{ display:none; }
   .list-head, .row{ grid-template-columns:36px minmax(0, 1fr) 52px 96px; }
   .list-head > :nth-child(3), .row > .row-album-cell{ display:none; }
@@ -1021,7 +1022,8 @@ body.mini-mode .mini-player{ display:block; }
 }
 .reconnect-banner button:hover{ filter:brightness(1.06); }
 
-@media (max-width:900px){
+@media (max-width:900px) and (hover: none),
+       (max-width:900px) and (pointer: coarse){
   .rail{ width:68px; }
   .logo-word{ display:none; }
   .now-extra{ width:auto; flex:0 0 auto; }
@@ -1089,7 +1091,8 @@ body.mini-mode .mini-player{ display:block; }
   .mobile-lyrics-preview .lyric-active{ color:#fff; }
   .mobile-lyrics-preview .lyric-next{ color:rgba(242,243,247,.55); font-weight:600; }
 }
-@media (max-width:640px){
+@media (max-width:640px) and (hover: none),
+       (max-width:640px) and (pointer: coarse){
   /* Mobile chrome: bottom nav + now-playing bar stacked, never overlapping */
   :root{
     --rail-h:64px;
