@@ -308,6 +308,10 @@ input{ background:none; border:none; }
 
 /* .content owns the fixed nowbar / mini-player clearance. */
 .list{ display:flex; flex-direction:column; }
+@media (min-width:901px){
+  .content{ display:flex; flex-direction:column; }
+  .list{ flex:1 0 auto; }
+}
 .list-head{
   display:grid; grid-template-columns:36px minmax(0, 2fr) minmax(0, 1.2fr) 60px 96px; gap:14px; padding:8px 14px;
   font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim);
