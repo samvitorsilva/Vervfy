@@ -223,7 +223,7 @@ input{ background:none; border:none; }
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.15);
 }
 
-.content{ flex:1; min-height:0; overflow-y:auto; padding:20px 24px calc(var(--player-height) + 38px); scroll-padding-bottom:calc(var(--player-height) + 38px); }
+.content{ flex:1; min-height:0; overflow-x:hidden; overflow-y:auto; padding:20px 24px calc(var(--player-height) + 38px); scroll-padding-bottom:calc(var(--player-height) + 38px); }
 
 /* empty */
 .empty{
@@ -306,8 +306,8 @@ input{ background:none; border:none; }
 .card-fav svg, .card-queue svg, .card-menu svg{ width:13px; height:13px; }
 .card-fav.on{ color:var(--amber); }
 
-/* list — bottom padding clears the fixed nowbar / mini-player */
-.list{ display:flex; flex-direction:column; padding-bottom:var(--player-height); }
+/* .content owns the fixed nowbar / mini-player clearance. */
+.list{ display:flex; flex-direction:column; }
 .list-head{
   display:grid; grid-template-columns:36px minmax(0, 2fr) minmax(0, 1.2fr) 60px 96px; gap:14px; padding:8px 14px;
   font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim);
