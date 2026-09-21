@@ -155,6 +155,28 @@ def test_session_revocation_and_logout_all(app_module):
     assert client_c.get("/api/me").status_code == 401
 
 
+def test_logout_redirects_even_with_stale_csrf_token(app_module):
+    server, client = app_module
+    _register(client)
+
+    response = client.post(
+        "/logout",
+        headers={"X-CSRF-Token": "stale-token"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+    assert client.get("/api/me").status_code == 401
+
+
+def test_login_form_is_not_cached(app_module):
+    _, client = app_module
+    response = client.get("/login")
+
+    assert response.headers["cache-control"] == "no-store"
+
+
 def test_cookie_without_session_version_is_valid_at_zero(app_module):
     server, client = app_module
     _register(client)

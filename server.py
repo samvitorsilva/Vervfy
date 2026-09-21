@@ -398,6 +398,21 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "source": "Kodoku Spotify artist profile",
         "source_url": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
     },
+    "ruayoung": {
+        "bio": (
+            "RUA YOUNG is a Christian recording artist whose catalog includes "
+            "God Did, Say The Word, I’M GOD’S, and ADONAI."
+        ),
+        "genre": "Christian",
+        "highlights": (
+            "Recent releases include God Did (Remix Pack), Say The Word, "
+            "I’M GOD’S, Designer, and ADONAI."
+        ),
+        "website": "https://music.apple.com/us/artist/rua-young/1782603897",
+        "website_label": "Apple Music artist profile",
+        "source": "RUA YOUNG Apple Music artist profile",
+        "source_url": "https://music.apple.com/us/artist/rua-young/1782603897",
+    },
 }
 
 
@@ -509,6 +524,10 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
                 "popularity": artist.get("intPopularity") or "",
                 "label": artist.get("strLabel") or "",
                 "website": artist.get("strWebsite") or "",
+                "instagram": artist.get("strInstagram") or "",
+                "facebook": artist.get("strFacebook") or "",
+                "twitter": artist.get("strTwitter") or "",
+                "youtube": artist.get("strYoutube") or "",
             }
             profile = {field: str(value).strip() for field, value in fields.items() if value}
             if profile:
@@ -641,7 +660,10 @@ def login_form(request: Request) -> HTMLResponse:
     if current_user_row(request) is not None:
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
-        request, "login.html", {"csrf_token": auth.get_or_create_csrf_token(request)}
+        request,
+        "login.html",
+        {"csrf_token": auth.get_or_create_csrf_token(request)},
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -665,6 +687,7 @@ def login_submit(
                 "username": username,
             },
             status_code=400,
+            headers={"Cache-Control": "no-store"},
         )
 
     if login_throttle.is_locked(ip, username):
@@ -746,7 +769,14 @@ def register_submit(
 @app.post("/logout")
 def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
-    auth.verify_csrf(request, submitted_token)
+    # Logging out is safe to repeat.  A stale page may submit an old token
+    # after another login/logout cycle; do not expose a JSON CSRF error page
+    # when the desired outcome is simply to end the current session.
+    try:
+        auth.verify_csrf(request, submitted_token)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
     # A copied cookie stays valid after a plain logout until the password
     # changes or logout-all is used.
     request.session.clear()

@@ -235,6 +235,8 @@ function generateAura(seed, size=300){
    ============================================================ */
 let LYRICS_SYNC_DEBUG = false;
 let _lyricsLastLoggedIdx = null;
+let _lyricsRenderedIdx = null;
+let lyricsHighlightRaf = null;
 let lyricsSyncClockRaf = null;
 const LyricsDebug = {
   log(...args){ if(LYRICS_SYNC_DEBUG) console.log("%c[lyrics-sync]", "color:#54e8d4;font-weight:600;", ...args); },
@@ -645,6 +647,7 @@ const ArtistProfileEngine = (() => {
       section.setAttribute("aria-busy", "false");
       const bio = section.querySelector("[data-artist-bio]");
       const tags = section.querySelector("[data-artist-tags]");
+      const socials = section.querySelector("[data-artist-socials]");
       const website = section.querySelector("[data-artist-website]");
       const source = section.querySelector("[data-artist-source]");
       bio.textContent = profile?.bio || "No artist biography is available from the public catalog.";
@@ -666,6 +669,25 @@ const ArtistProfileEngine = (() => {
         return tag;
       }));
       tags.hidden = facts.length === 0;
+
+      const socialLinks = [
+        ["Instagram", profile?.instagram],
+        ["Facebook", profile?.facebook],
+        ["X / Twitter", profile?.twitter],
+        ["YouTube", profile?.youtube],
+      ].map(([label, value]) => {
+        const url = safeExternalUrl(value);
+        if(!url) return null;
+        const link = document.createElement("a");
+        link.className = "artist-social-link";
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = label;
+        return link;
+      }).filter(Boolean);
+      socials.replaceChildren(...socialLinks);
+      socials.hidden = socialLinks.length === 0;
 
       const sourceUrl = safeExternalUrl(profile?.source_url || profile?.website);
       source.replaceChildren();
@@ -1300,7 +1322,6 @@ audioEl.addEventListener("timeupdate", () => {
   updateSeekUI();
   updateMobileLyricsPreview(currentTrack());
   updateMediaSessionPosition();
-  if($("#lyricsOverlay").classList.contains("open")) updateLyricsHighlight();
 });
 audioEl.addEventListener("seeked", () => {
   LyricsDebug.log(`seeked → t=${audioEl.currentTime.toFixed(2)}s, recalculating active line`);
@@ -1516,6 +1537,7 @@ function renderLyricsStage(){
       }
     }
     _lyricsLastLoggedIdx = null; // new track/lines: force the next highlight update to log
+    _lyricsRenderedIdx = null;
     $$(".lyrics-line").forEach(el => {
       el.addEventListener("click", () => {
         const time = parseFloat(el.dataset.time)/1000;
@@ -1685,10 +1707,18 @@ function updateLyricsHighlight(instant){
   const curMs = curSec * 1000;
   const lines = t.lyrics.lines;
   // "Active" is defined as the LAST line whose timestamp is <= current playback
-  // time — lines are guaranteed ascending (sorted at parse time), so a single
-  // forward scan that stops at the first future line is correct and cheap.
-  let activeIdx = -1;
-  for(let i=0;i<lines.length;i++){ if(lines[i].time <= curMs) activeIdx = i; else break; }
+  // time. Use a binary search so the animation-clock update stays cheap for
+  // long transcripts and always chooses the correct line after seeking.
+  let low = 0, high = lines.length - 1, activeIdx = -1;
+  while(low <= high){
+    const middle = (low + high) >> 1;
+    if(lines[middle].time <= curMs){
+      activeIdx = middle;
+      low = middle + 1;
+    }else{
+      high = middle - 1;
+    }
+  }
 
   if(LYRICS_SYNC_DEBUG && activeIdx !== _lyricsLastLoggedIdx){
     const matched = activeIdx >= 0 ? lines[activeIdx] : null;
@@ -1699,6 +1729,9 @@ function updateLyricsHighlight(instant){
     );
     _lyricsLastLoggedIdx = activeIdx;
   }
+
+  if(!instant && activeIdx === _lyricsRenderedIdx) return;
+  _lyricsRenderedIdx = activeIdx;
 
   const els = track.children;
   for(let i=0;i<els.length;i++){
@@ -1731,14 +1764,32 @@ function updateLyricsHighlight(instant){
     }
   }
 }
+function startLyricsHighlightLoop(){
+  if(lyricsHighlightRaf) return;
+  const tick = () => {
+    lyricsHighlightRaf = null;
+    if(!$("#lyricsOverlay").classList.contains("open")) return;
+    updateLyricsHighlight();
+    lyricsHighlightRaf = requestAnimationFrame(tick);
+  };
+  lyricsHighlightRaf = requestAnimationFrame(tick);
+}
+function stopLyricsHighlightLoop(){
+  if(lyricsHighlightRaf){
+    cancelAnimationFrame(lyricsHighlightRaf);
+    lyricsHighlightRaf = null;
+  }
+}
 function openLyrics(){
   $("#mobilePlayer")?.classList.remove("open");
   closeViz();
   renderLyricsStage();
   $("#lyricsOverlay").classList.add("open");
+  startLyricsHighlightLoop();
 }
 function closeLyrics(){
   $("#lyricsOverlay").classList.remove("open");
+  stopLyricsHighlightLoop();
   if(lyricsSyncClockRaf){
     cancelAnimationFrame(lyricsSyncClockRaf);
     lyricsSyncClockRaf = null;
@@ -2972,15 +3023,34 @@ function renderArtistsView(){
   content.innerHTML = `
     <div class="artist-grid">
       ${artists.map(a => `
-        <button type="button" class="artist-card" data-artist="${escapeHtml(encodeURIComponent(a.name))}">
+        <div class="artist-card" role="button" tabindex="0" data-artist="${escapeHtml(encodeURIComponent(a.name))}">
           <img class="artist-card-photo media-image" data-artist-photo="${escapeHtml(a.name)}" ${artAttrs(a, 256)} alt="${escapeHtml(a.name)}">
           <div class="artist-card-name">${escapeHtml(a.name)}</div>
           <div class="artist-card-count">${a.tracks.length} song${a.tracks.length!==1?"s":""}</div>
-        </button>`).join("")}
+          <button type="button" class="artist-card-play" aria-label="Play ${escapeHtml(a.name)}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.8v10.4L18.2 12z"/></svg>
+            <span>Play</span>
+          </button>
+        </div>`).join("")}
     </div>`;
   ArtistPhotoEngine.resolveAll(artists);
   $$(".artist-card").forEach(card=>{
-    card.addEventListener("click", ()=> openArtist(decodeURIComponent(card.dataset.artist)));
+    const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
+    const open = () => openArtist(decodeURIComponent(card.dataset.artist));
+    card.addEventListener("click", event => {
+      if(event.target.closest(".artist-card-play")) return;
+      open();
+    });
+    card.addEventListener("keydown", event => {
+      if(event.target !== card || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      open();
+    });
+    card.querySelector(".artist-card-play")?.addEventListener("click", event => {
+      event.stopPropagation();
+      if(!artist?.tracks.length) return;
+      playTrackFromList(artist.tracks, artist.tracks[0].id);
+    });
   });
 }
 
@@ -3023,6 +3093,7 @@ function renderArtistDetailView(){
         <h2>About</h2>
         <p class="artist-bio" data-artist-bio>Looking up artist details…</p>
         <div class="artist-tags" data-artist-tags hidden></div>
+        <nav class="artist-socials" data-artist-socials aria-label="Social media" hidden></nav>
         <p class="artist-source" data-artist-source hidden></p>
         <a class="artist-website" data-artist-website hidden target="_blank" rel="noopener noreferrer">Source page <span aria-hidden="true">↗</span></a>
       </section>
