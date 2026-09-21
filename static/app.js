@@ -568,10 +568,7 @@ const LyricsEngine = (() => {
    ============================================================ */
 const ArtistPhotoEngine = (() => {
   const resolved = new Map(); // artist name -> URL or null (a confirmed miss)
-  const pending = new Set();
-  const queue = [];
-  let activeRequests = 0;
-  const MAX_CONCURRENT_REQUESTS = 4;
+  const pending = new Map();
 
   function apply(name, url){
     if(!url) return;
@@ -593,29 +590,28 @@ const ArtistPhotoEngine = (() => {
     }catch(_){
       // Offline or unavailable catalogs leave the existing album art in place.
       resolved.set(name, null);
+      return null;
     }finally{
       pending.delete(name);
     }
   }
 
-  function pump(){
-    while(activeRequests < MAX_CONCURRENT_REQUESTS && queue.length){
-      const name = queue.shift();
-      activeRequests++;
-      lookup(name).finally(() => { activeRequests--; pump(); });
-    }
-  }
-
   function resolve(name){
-    if(!name) return;
+    if(!name) return Promise.resolve(null);
+    if(offlineArtistPhotos.has(name)){
+      const url = offlineArtistPhotos.get(name);
+      resolved.set(name, url);
+      apply(name, url);
+      return Promise.resolve(url);
+    }
     if(resolved.has(name)){
       apply(name, resolved.get(name));
-      return;
+      return Promise.resolve(resolved.get(name));
     }
-    if(pending.has(name)) return;
-    pending.add(name);
-    queue.push(name);
-    pump();
+    if(pending.has(name)) return pending.get(name);
+    const request = lookup(name);
+    pending.set(name, request);
+    return request;
   }
 
   function resolveAll(artists){ artists.forEach(artist => resolve(artist.name)); }
@@ -624,7 +620,7 @@ const ArtistPhotoEngine = (() => {
 
 const ArtistProfileEngine = (() => {
   const resolved = new Map();
-  const pending = new Set();
+  const pending = new Map();
 
   function formatProfileNumber(value){
     const number = Number(value);
@@ -671,19 +667,24 @@ const ArtistProfileEngine = (() => {
       tags.hidden = facts.length === 0;
 
       const socialLinks = [
-        ["Instagram", profile?.instagram],
-        ["Facebook", profile?.facebook],
-        ["X / Twitter", profile?.twitter],
-        ["YouTube", profile?.youtube],
-      ].map(([label, value]) => {
+        ["Instagram", profile?.instagram, '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" class="social-icon-fill"/></svg>'],
+        ["YouTube", profile?.youtube, '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 7.2a2.8 2.8 0 0 0-2-2C17.2 4.7 12 4.7 12 4.7s-5.2 0-7 .5a2.8 2.8 0 0 0-2 2A29 29 0 0 0 2.5 12 29 29 0 0 0 3 16.8a2.8 2.8 0 0 0 2 2c1.8.5 7 .5 7 .5s5.2 0 7-.5a2.8 2.8 0 0 0 2-2 29 29 0 0 0 .5-4.8 29 29 0 0 0-.5-4.8Z"/><path d="m10 9 5 3-5 3Z" class="social-icon-cut"/></svg>'],
+        ["Twitter", profile?.twitter, '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.9 3.5h3.7l-8.1 9.3 9.5 7.7h-7.4l-5.8-4.7-4.1 4.7H3l7.7-8.8L1.6 3.5h7.6l5.2 4.3 4.5-4.3Zm-1.3 15.2h2L7.8 5.2H5.7l11.9 13.5Z"/></svg>'],
+        ["Facebook", profile?.facebook, '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 20v-7h2.5l.5-3H14V8.1c0-.9.3-1.6 1.7-1.6H17V3.8c-.6-.1-1.4-.2-2.3-.2-2.3 0-3.7 1.4-3.7 3.9V10H8.5v3h2.5v7Z" class="social-icon-fill"/></svg>'],
+      ].map(([label, value, icon]) => {
         const url = safeExternalUrl(value);
         if(!url) return null;
         const link = document.createElement("a");
-        link.className = "artist-social-link";
+        link.className = `artist-social-link artist-social-${label.toLowerCase()}`;
         link.href = url;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.textContent = label;
+        link.setAttribute("aria-label", `${name} on ${label}`);
+        link.title = `${name} on ${label}`;
+        link.insertAdjacentHTML("beforeend", icon);
+        const text = document.createElement("span");
+        text.textContent = label;
+        link.append(text);
         return link;
       }).filter(Boolean);
       socials.replaceChildren(...socialLinks);
@@ -722,22 +723,32 @@ const ArtistProfileEngine = (() => {
   }
 
   async function resolve(name){
-    if(!name) return;
-    if(resolved.has(name)){ apply(name, resolved.get(name)); return; }
-    if(pending.has(name)) return;
-    pending.add(name);
-    try{
+    if(!name) return null;
+    if(offlineArtistProfiles.has(name)){
+      const profile = offlineArtistProfiles.get(name);
+      resolved.set(name, profile);
+      apply(name, profile);
+      return profile;
+    }
+    if(resolved.has(name)){ apply(name, resolved.get(name)); return resolved.get(name); }
+    if(pending.has(name)) return pending.get(name);
+    const request = (async () => {
+      try{
       const res = await fetch("/api/artists/profile?" + new URLSearchParams({name}));
       const data = res.ok ? await res.json() : null;
       const profile = data && data.profile && typeof data.profile === "object" ? data.profile : null;
       resolved.set(name, profile);
       apply(name, profile);
+      return profile;
     }catch(_){
       resolved.set(name, null);
       apply(name, null);
+      return null;
     }finally{
       pending.delete(name);
-    }
+    }})();
+    pending.set(name, request);
+    return request;
   }
   return { resolve };
 })();
@@ -747,7 +758,7 @@ const ArtistProfileEngine = (() => {
    playlists, tracks, lyrics, covers, and audio are PostgreSQL-backed.
    ============================================================ */
 const AuralisDB = (() => {
-  const DB_NAME = "auralis-db", DB_VERSION = 1;
+  const DB_NAME = "auralis-db", DB_VERSION = 2;
   const STORE_KV = "kv", STORE_HANDLES = "handles";
   let dbPromise = null;
   function open(){
@@ -759,6 +770,7 @@ const AuralisDB = (() => {
         const db = req.result;
         if(!db.objectStoreNames.contains(STORE_KV)) db.createObjectStore(STORE_KV);
         if(!db.objectStoreNames.contains(STORE_HANDLES)) db.createObjectStore(STORE_HANDLES);
+        if(!db.objectStoreNames.contains("offlineTracks")) db.createObjectStore("offlineTracks", {keyPath:"id"});
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -795,8 +807,125 @@ const AuralisDB = (() => {
       });
     }catch(e){}
   }
-  return { get, set, del, STORE_KV, STORE_HANDLES };
+  async function getAll(storeName){
+    try{
+      const s = await store(storeName, "readonly");
+      return await new Promise((resolve,reject)=>{
+        const r = s.getAll();
+        r.onsuccess = () => resolve(r.result || []);
+        r.onerror = () => reject(r.error);
+      });
+    }catch(e){ return []; }
+  }
+  async function putRecord(record, storeName){
+    try{
+      const s = await store(storeName, "readwrite");
+      await new Promise((resolve,reject)=>{
+        const r = s.put(record);
+        r.onsuccess = () => resolve(); r.onerror = () => reject(r.error);
+      });
+      return true;
+    }catch(e){ return false; }
+  }
+  return { get, set, del, getAll, putRecord, STORE_KV, STORE_HANDLES };
 })();
+
+const OFFLINE_STORE = "offlineTracks";
+const offlineObjectUrls = new Set();
+const offlineArtistProfiles = new Map();
+const offlineArtistPhotos = new Map();
+
+function releaseOfflineObjectUrls(){
+  offlineObjectUrls.forEach(url => URL.revokeObjectURL(url));
+  offlineObjectUrls.clear();
+  offlineArtistProfiles.clear();
+  offlineArtistPhotos.clear();
+}
+
+function offlineTrackFromRecord(record){
+  const fallbackArt = generateAura(`${record.artist}|${record.album}|${record.title}`);
+  const art = record.cover instanceof Blob
+    ? URL.createObjectURL(record.cover)
+    : fallbackArt;
+  if(art !== fallbackArt) offlineObjectUrls.add(art);
+  const audio = record.audio instanceof Blob ? URL.createObjectURL(record.audio) : null;
+  if(audio) offlineObjectUrls.add(audio);
+  const profiles = record.artistProfiles || (record.artistProfile ? {[record.artist]: record.artistProfile} : {});
+  Object.entries(profiles).forEach(([name, profile]) => offlineArtistProfiles.set(name, profile));
+  const photos = record.artistPhotos || (record.artistPhoto instanceof Blob ? {[record.artist]: record.artistPhoto} : {});
+  Object.entries(photos).forEach(([name, blob]) => {
+    if(!(blob instanceof Blob)) return;
+    const photo = URL.createObjectURL(blob);
+    offlineObjectUrls.add(photo);
+    offlineArtistPhotos.set(name, photo);
+  });
+  const lyrics = record.lyrics
+    ? (record.lyrics.lines ? record.lyrics : {source:"offline", text:record.lyrics.text || ""})
+    : null;
+  return {
+    id: record.id, title: record.title, artist: record.artist, album: record.album,
+    year: "", duration: record.duration || 0, art, fallbackArt,
+    streamUrl: null, file: record.audio, offlineUrl: audio, offline: true,
+    favorite: false, dateAdded: record.dateAdded || Date.now(),
+    lyrics, customLyrics: record.customLyrics || null,
+    lyricsResolved: !!record.lyrics, lyricsLoading: false, fingerprint: record.id,
+  };
+}
+
+async function loadOfflineTracks(){
+  releaseOfflineObjectUrls();
+  const records = await AuralisDB.getAll(OFFLINE_STORE);
+  return records.map(offlineTrackFromRecord);
+}
+
+async function fetchBlob(url){
+  const response = await fetch(url, {cache:"no-store"});
+  if(!response.ok) throw new Error(`Download failed (${response.status})`);
+  return response.blob();
+}
+
+async function downloadTrackOffline(track){
+  if(!track || track.offline) return;
+  try{
+    if(!track.lyricsResolved) await ensureTrackLyrics(track);
+    const artistNames = artistsOf(track);
+    const [audio, cover, profiles] = await Promise.all([
+      fetchBlob(track.streamUrl),
+      track.has_cover === false || !track.art.includes("/cover") ? Promise.resolve(null) : fetchBlob(trackArtUrl(track, 512)),
+      Promise.all(artistNames.map(async name => [name, await ArtistProfileEngine.resolve(name)])),
+    ]);
+    const artistProfiles = Object.fromEntries(profiles.filter(([, profile]) => profile));
+    const artistPhotos = {};
+    await Promise.all(artistNames.map(async name => {
+      const photoUrl = await ArtistPhotoEngine.resolve(name);
+      if(photoUrl) artistPhotos[name] = await fetchBlob(photoUrl);
+    }));
+    const record = {
+      id: track.id, title: track.title, artist: track.artist, album: track.album,
+      duration: track.duration, customLyrics: track.customLyrics || null,
+      lyrics: track.lyrics || null, audio, cover, artistProfiles, artistPhotos,
+      dateAdded: Date.now(),
+    };
+    if(!await AuralisDB.putRecord(record, OFFLINE_STORE)) throw new Error("This browser could not save the offline track.");
+    const replacement = offlineTrackFromRecord(record);
+    Object.assign(track, replacement);
+    toast(`Downloaded “${track.title}” for offline listening.`);
+    render();
+  }catch(error){
+    console.warn("Offline download failed", error);
+    toast(error.message || "Could not download this track.");
+  }
+}
+
+async function removeOfflineTrack(track){
+  if(!track?.offline) return;
+  await AuralisDB.del(track.id, OFFLINE_STORE);
+  track.offline = false;
+  track.offlineUrl = null;
+  track.streamUrl = apiUrl(`/api/tracks/${encodeURIComponent(track.id)}/stream`);
+  toast(`Removed “${track.title}” from offline storage.`);
+  render();
+}
 
 //where section is saved
 async function saveSettings(){
@@ -956,6 +1085,12 @@ async function loadServerLibrary(force = false){
       if(!tracksRes.ok) throw new Error("bad status "+tracksRes.status);
       const data = await tracksRes.json();
       state.tracks = (data.tracks || []).map(trackFromServer);
+      const offlineTracks = await loadOfflineTracks();
+      const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
+      state.tracks = state.tracks.map(track => offlineById.get(track.id) || track);
+      offlineTracks.forEach(track => {
+        if(!state.tracks.some(existing => existing.id === track.id)) state.tracks.push(track);
+      });
       const legacy = window._persistedLibrary;
       if(stateRes.ok){
         const remote = await stateRes.json();
@@ -974,8 +1109,9 @@ async function loadServerLibrary(force = false){
       return state.tracks.length;
     }catch(e){
       console.warn("Could not load server library", e);
+      state.tracks = await loadOfflineTracks();
       serverLibraryLoading = false;
-      serverLibraryLoadFailed = true;
+      serverLibraryLoadFailed = state.tracks.length === 0;
       return 0;
     } finally {
       serverLibraryRequest = null;
@@ -1200,7 +1336,9 @@ function playCurrent(){
   if(!t) return;
   if(ensureAudioGraph() && audioCtx.state === "suspended") audioCtx.resume();
   if(currentBlobUrl){ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
-  if(t.streamUrl){
+  if(t.offlineUrl){
+    audioEl.src = t.offlineUrl;
+  } else if(t.streamUrl){
     audioEl.src = t.streamUrl;
   } else if(t.file){
     currentBlobUrl = URL.createObjectURL(t.file);
@@ -1410,19 +1548,22 @@ function updateMobileLyricsPreview(track){
 
 /** Resolve lyrics for a track once (ID3 → LRCLIB). Safe to call from preview or overlay. */
 function ensureTrackLyrics(track){
-  if(!track || track.lyricsResolved || track.lyricsLoading) return;
+  if(!track || track.lyricsResolved) return Promise.resolve(track?.lyrics || null);
+  if(track.lyricsPromise) return track.lyricsPromise;
   track.lyricsLoading = true;
   const requestedTrackId = track.id;
   LyricsDebug.log(`state: lyrics lookup started for "${track.title}" by ${track.artist}`);
-  (async () => {
+  track.lyricsPromise = (async () => {
     let result = track.customLyrics
       ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
       : null;
     try{
-      const headRes = result ? null : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
-      if(headRes?.ok){
-        const blob = await headRes.blob();
-        const file = new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
+      const headRes = result || track.offline
+        ? null
+        : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
+      const blob = track.offline && track.file ? track.file : (headRes?.ok ? await headRes.blob() : null);
+      if(blob){
+        const file = track.offline && track.file ? track.file : new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
         const meta = await parseID3(file);
         result = LyricsEngine.fromID3(meta);
         if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
@@ -1446,6 +1587,7 @@ function ensureTrackLyrics(track){
     if(currentTrack()?.id !== requestedTrackId) return;
     updateMobileLyricsPreview(track);
     if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
+    return result;
   }).catch(e => {
     track.lyricsResolved = true;
     track.lyricsLoading = false;
@@ -1454,7 +1596,9 @@ function ensureTrackLyrics(track){
       updateMobileLyricsPreview(track);
       if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
     }
+    return null;
   });
+  return track.lyricsPromise;
 }
 
 function updateNowPlayingUI(){
@@ -1477,6 +1621,12 @@ function updateNowPlayingUI(){
   $("#miniArtist").textContent = credits;
   document.title = `${t.title} — ${credits} · Vervfy`;
   $("#nowFav").classList.toggle("on", !!t.favorite);
+  const offlineButton = $("#btnOffline");
+  if(offlineButton){
+    offlineButton.classList.toggle("on", !!t.offline);
+    offlineButton.title = t.offline ? "Remove offline download" : "Download for offline";
+    offlineButton.setAttribute("aria-label", offlineButton.title);
+  }
   $("#mobilePlayerBg").style.backgroundImage = `url("${t.art}")`;
   $("#mobilePlayerArt").src = t.art;
   $("#mobilePlayerTitle").textContent = t.title;
@@ -2295,6 +2445,7 @@ function openTrackMenu(e, t){
     <div class="menu-item" data-act="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="m16 15 4 3-4 3"/></svg>Play next</div>
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
     <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
+    <div class="menu-item" data-act="offline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v11"/><path d="m8 11 4 4 4-4"/><path d="M5 20h14"/></svg>${t.offline ? "Remove offline download" : "Download for offline"}</div>
     <div class="menu-sep"></div>
     ${inPlaylist ? `<div class="menu-item" data-act="remove-from-playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6 6 18"/></svg>Remove from this playlist</div>` : ""}
     <div class="menu-item" data-act="remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>Remove from library</div>
@@ -2303,6 +2454,7 @@ function openTrackMenu(e, t){
   menu.querySelector('[data-act="play-next"]').addEventListener("click", ()=>{ playNextTrack(t); closeMenus(); });
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", (ev)=>{ openPlaylistSubmenu(ev, t, menu); });
+  menu.querySelector('[data-act="offline"]').addEventListener("click", ()=>{ closeMenus(); t.offline ? removeOfflineTrack(t) : downloadTrackOffline(t); });
   if(inPlaylist) menu.querySelector('[data-act="remove-from-playlist"]').addEventListener("click", ()=>{ removeFromPlaylist(inPlaylist, t); closeMenus(); });
   menu.querySelector('[data-act="remove"]').addEventListener("click", ()=>{ removeTrack(t); closeMenus(); });
   setTimeout(armMenuOutsideClick, 0);
@@ -2320,6 +2472,7 @@ function openNowPlayingMenu(anchor, t){
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
     <div class="menu-item" data-act="favorite"><svg viewBox="0 0 24 24" fill="${t.favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg>${t.favorite ? "Remove from liked songs" : "Save to liked songs"}</div>
     <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
+    <div class="menu-item" data-act="offline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v11"/><path d="m8 11 4 4 4-4"/><path d="M5 20h14"/></svg>${t.offline ? "Remove offline download" : "Download for offline"}</div>
     <div class="menu-sep"></div>
     <div class="menu-item" data-act="artist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/></svg>About ${escapeHtml(artist)}</div>
     <div class="menu-item" data-act="album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M7.5 7.5h.01M16.5 16.5h.01"/></svg>Go to album</div>
@@ -2330,6 +2483,7 @@ function openNowPlayingMenu(anchor, t){
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", ev=> openPlaylistSubmenu(ev, t, menu));
+  menu.querySelector('[data-act="offline"]').addEventListener("click", ()=>{ closeMenus(); t.offline ? removeOfflineTrack(t) : downloadTrackOffline(t); });
   menu.querySelector('[data-act="artist"]').addEventListener("click", ()=>{
     closeMenus();
     $("#mobilePlayer")?.classList.remove("open");
@@ -3403,6 +3557,10 @@ on("#btnRepeat", "click", ()=>{
   saveSettings(); toast("Repeat: "+state.repeat);
 });
 on("#nowFav", "click", ()=>{ const t=currentTrack(); if(t) toggleFavorite(t); });
+on("#btnOffline", "click", ()=>{
+  const t = currentTrack();
+  if(t) t.offline ? removeOfflineTrack(t) : downloadTrackOffline(t);
+});
 on("#mobilePlayerFav", "click", ()=>{ const t=currentTrack(); if(t) toggleFavorite(t); });
 function isCompactTouchLayout(){
   const compact = window.matchMedia("(max-width: 900px)");

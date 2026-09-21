@@ -473,12 +473,17 @@ input{ background:none; border:none; }
 }
 .artist-socials{ display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .artist-social-link{
-  display:inline-flex; align-items:center; gap:6px; padding:7px 11px;
+  display:inline-flex; align-items:center; gap:7px; padding:8px 12px;
   border:1px solid rgba(84,232,212,.24); border-radius:999px;
   color:var(--cyan); background:rgba(84,232,212,.07);
   font-size:11px; font-weight:700; text-decoration:none;
   transition:background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
+.artist-social-link svg{ width:15px; height:15px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.artist-social-link.artist-social-youtube svg{ fill:currentColor; stroke:none; }
+.artist-social-link.artist-social-twitter svg{ fill:currentColor; stroke:none; }
+.artist-social-link .social-icon-fill{ fill:currentColor; stroke:none; }
+.artist-social-link .social-icon-cut{ fill:var(--bg); stroke:none; }
 .artist-social-link::after{ content:'↗'; font-size:12px; opacity:.75; }
 .artist-social-link:hover{ background:rgba(84,232,212,.14); border-color:rgba(84,232,212,.5); }
 .artist-source{ margin-top:14px; color:var(--text-dim); font-size:11px; }

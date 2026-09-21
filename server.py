@@ -976,7 +976,7 @@ def delete_account(
 
 @app.get("/sw.js")
 def service_worker() -> FileResponse:
-    """Serve a kill-switch worker so stale registrations can't brick the UI."""
+    """Serve the worker that keeps the app shell available offline."""
     path = STATIC_DIR / "sw.js"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Not found")
