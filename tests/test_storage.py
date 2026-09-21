@@ -236,3 +236,46 @@ def test_legacy_rows_still_stream_by_slice_and_migrate(env, tmp_path):
     r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": "bytes=10-19"})
     assert r.status_code == 206 and r.content == data[10:20]
     assert fake.bytes_served == 10
+
+
+def test_unreachable_storage_is_reported_not_a_bare_500(env):
+    server, client, fake, headers, monkeypatch = env
+    import audio_store
+
+    def boom(request):
+        raise httpx.ConnectError("name resolution failed")
+
+    audio_store._transport = httpx.MockTransport(boom)
+    r = upload(client, headers, make_wav())
+    assert r.status_code == 502
+    assert "ConnectError" in r.json()["detail"]
+    assert client.get("/api/tracks").json()["tracks"] == []
+
+
+@pytest.mark.parametrize("bad_url", [
+    "sb_secret_" + "x" * 170,                # key pasted into SUPABASE_URL (no scheme)
+    "https://" + "a" * 170 + ".supabase.co",  # label too long -> idna UnicodeError
+    "https://fake.supabase.co/storage/v1",    # extra path
+    "not a url",
+])
+def test_bad_supabase_url_gives_clear_502_without_leaking_it(env, bad_url):
+    server, client, fake, headers, monkeypatch = env
+    monkeypatch.setenv("SUPABASE_URL", bad_url)
+    r = upload(client, headers, make_wav())
+    assert r.status_code == 502, r.text
+    detail = r.json()["detail"]
+    assert "SUPABASE_URL" in detail
+    assert bad_url not in detail and "x" * 20 not in detail
+    assert client.get("/api/tracks").json()["tracks"] == []
+
+
+def test_unicode_error_from_the_resolver_is_wrapped(env):
+    server, client, fake, headers, monkeypatch = env
+    import audio_store
+
+    def boom(request):
+        raise UnicodeError("encoding with 'idna' codec failed (label too long)")
+
+    audio_store._transport = httpx.MockTransport(boom)
+    r = upload(client, headers, make_wav())
+    assert r.status_code == 502 and "UnicodeError" in r.json()["detail"]

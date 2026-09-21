@@ -13,11 +13,12 @@ Environment variables (set them on Render, never ship them to the browser):
 """
 from __future__ import annotations
 
+import functools
 import logging
 import mimetypes
 import os
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -29,6 +30,47 @@ _transport: httpx.BaseTransport | None = None
 
 class StorageError(RuntimeError):
     """Storage is misconfigured or Supabase refused / failed a request."""
+
+
+def _scrub(text: str) -> str:
+    """Never let the key (or a mis-pasted one) leak into an error message."""
+    url, key, _ = _settings()
+    for secret in (key, url):
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+def _wrap_errors(fn):
+    """Network problems (bad URL, DNS, timeout...) surface as StorageError, not a bare 500."""
+
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except StorageError:
+            raise
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError) as exc:  # ValueError covers UnicodeError
+            raise StorageError(_scrub(f"{type(exc).__name__}: {exc}")[:300]) from exc
+
+    return inner
+
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9-]{1,63}\.)*[A-Za-z0-9-]{1,63}$")
+
+
+def _validate_url(url: str) -> None:
+    """Fail with a clear message if SUPABASE_URL is not a plain https://<ref>.supabase.co address."""
+    parts = urlsplit(url)
+    try:
+        host = parts.hostname or ""
+    except ValueError:
+        host = ""
+    if parts.scheme not in ("http", "https") or not _HOST_RE.match(host) or parts.path.strip("/"):
+        raise StorageError(
+            "SUPABASE_URL is not a valid project URL - it must look like https://<project-ref>.supabase.co "
+            "(no path, and the secret key belongs in SUPABASE_SERVICE_KEY, not here)"
+        )
 
 
 def _settings() -> tuple[str, str, str]:
@@ -48,6 +90,7 @@ def _client() -> httpx.Client:
     url, key, _ = _settings()
     if not (url and key):
         raise StorageError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+    _validate_url(url)
     return httpx.Client(
         base_url=f"{url}/storage/v1",
         headers={"Authorization": f"Bearer {key}", "apikey": key},
@@ -74,6 +117,7 @@ def guess_content_type(filename: str) -> str:
     return mimetypes.guess_type(filename)[0] or "audio/mpeg"
 
 
+@_wrap_errors
 def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = "audio/mpeg") -> None:
     with _client() as client:
         resp = client.post(
@@ -85,6 +129,7 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
         raise StorageError(f"upload failed ({resp.status_code}): {resp.text[:200]}")
 
 
+@_wrap_errors
 def delete(path: str) -> None:
     with _client() as client:
         resp = client.delete(_object_url(path))
@@ -117,6 +162,7 @@ def delete_many_quietly(paths: list[str]) -> None:
             log.warning("bulk storage delete failed", exc_info=True)
 
 
+@_wrap_errors
 def read_range(path: str, start: int, end: int) -> bytes:
     """Return bytes ``start..end`` (inclusive) of an object."""
     with _client() as client:
@@ -128,6 +174,7 @@ def read_range(path: str, start: int, end: int) -> bytes:
     raise StorageError(f"read failed ({resp.status_code}): {resp.text[:200]}")
 
 
+@_wrap_errors
 def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Response]:
     """Open a streaming ranged GET.  The caller must close both objects."""
     client = _client()
@@ -149,6 +196,7 @@ def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Res
     return client, resp
 
 
+@_wrap_errors
 def object_size(path: str) -> int | None:
     """Size in bytes of a stored object, or None if it does not exist."""
     with _client() as client:
@@ -163,6 +211,7 @@ def object_size(path: str) -> int | None:
     raise StorageError(f"stat failed ({resp.status_code}): {resp.text[:200]}")
 
 
+@_wrap_errors
 def bucket_exists() -> bool:
     _, _, bucket = _settings()
     with _client() as client:

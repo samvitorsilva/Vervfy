@@ -1074,9 +1074,9 @@ async def upload_track(
             )
     try:
         track = library.add_upload(file.filename, buffer)
-    except audio_store.StorageError:
+    except audio_store.StorageError as exc:
         log.exception("audio storage failed during upload")
-        raise HTTPException(status_code=502, detail="Audio storage is unavailable, please try again shortly") from None
+        raise HTTPException(status_code=502, detail=f"Audio storage error: {str(exc)[:200]}") from None
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
     return _track_payload(track)
