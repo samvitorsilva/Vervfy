@@ -71,18 +71,15 @@ vervfy/
 │
 ├── data/
 │
-├── start.sh
-├── stop.sh
-├── open_app.sh
-├── install_launcher.sh
 └── README.md
 ```
 
 ---
 
-## Getting it open
+## Hosted app
 
-For local use, run `./start.sh`; it creates the virtual environment, installs dependencies, starts the server, and opens `http://127.0.0.1:8765`. Set `DATABASE_URL` before starting, using a PostgreSQL connection string for deployment. The hosted app is https://vervfy-app.onrender.com; the free Render service may show a starting page while it wakes.
+Vervfy is deployed globally at https://vervfy-app.onrender.com. The free Render
+service may show a starting page while it wakes.
 
 ---
 

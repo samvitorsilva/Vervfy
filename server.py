@@ -4,7 +4,7 @@
 from __future__ import annotations
 from database import Base, engine
 
-import argparse
+
 from io import BytesIO
 from html import escape as html_escape
 import json
@@ -13,7 +13,6 @@ import mimetypes
 import os
 import re
 import secrets
-import socket
 import time
 import unicodedata
 from typing import Annotated
@@ -1249,30 +1248,3 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-def local_ip() -> str:
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            return sock.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-
-
-def main() -> None:
-    import uvicorn
-
-    parser = argparse.ArgumentParser(description="Run Vervfy")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args()
-
-    print("\n  Vervfy")
-    print(f"  http://127.0.0.1:{args.port}")
-    print(f"  http://{local_ip()}:{args.port}\n")
-    uvicorn.run("server:app", host=args.host, port=args.port)
-
-
-if __name__ == "__main__":
-    main()

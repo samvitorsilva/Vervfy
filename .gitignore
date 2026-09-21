@@ -20,6 +20,11 @@ data/*
 # Logs
 *.log
 *.pid
+.pytest_cache/
+.ruff_cache/
+*.db
+*.sqlite
+*.sqlite3
 
 # OS/editor
 .DS_Store

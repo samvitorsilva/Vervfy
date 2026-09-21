@@ -1357,6 +1357,12 @@ function updateSeekUI(){
   $("#mobileTimeDur").textContent = fmtTime(dur);
   $("#mobileSeekFill").style.width = pct+"%";
   $("#mobileSeekThumb").style.left = pct+"%";
+  [$("#seek"), $("#miniSeek"), $("#mobileSeek")].forEach(el=>{
+    if(!el) return;
+    el.setAttribute("aria-valuemax", String(Math.round(dur)));
+    el.setAttribute("aria-valuenow", String(Math.round(cur)));
+    el.setAttribute("aria-valuetext", `${fmtTime(cur)} of ${fmtTime(dur)}`);
+  });
 }
 
 function viewPlaybackContext(){
@@ -1783,8 +1789,13 @@ function stopLyricsHighlightLoop(){
 function openLyrics(){
   $("#mobilePlayer")?.classList.remove("open");
   closeViz();
-  renderLyricsStage();
+  // Render only after the overlay is visible so the lyric viewport has real
+  // dimensions when the active line is positioned.
   $("#lyricsOverlay").classList.add("open");
+  renderLyricsStage();
+  requestAnimationFrame(() => {
+    if($("#lyricsOverlay").classList.contains("open")) updateLyricsHighlight(true);
+  });
   startLyricsHighlightLoop();
 }
 function closeLyrics(){
@@ -3426,9 +3437,47 @@ function seekTo(clientX, seekEl){
   const pct = Math.min(1, Math.max(0, (clientX-rect.left)/rect.width));
   if(audioEl.duration) audioEl.currentTime = pct*audioEl.duration;
 }
-[$("#seek"), $("#miniSeek"), $("#mobileSeek")].forEach(el=>{
-  if(el) el.addEventListener("click",(e)=> seekTo(e.clientX, el));
-});
+function bindSeek(seekEl){
+  if(!seekEl) return;
+  let dragging = false;
+  const updateFromPointer = e => seekTo(e.clientX, seekEl);
+  seekEl.addEventListener("pointerdown", e=>{
+    if(e.button !== undefined && e.button !== 0) return;
+    dragging = true;
+    seekEl.setPointerCapture?.(e.pointerId);
+    updateFromPointer(e);
+    e.preventDefault();
+  });
+  seekEl.addEventListener("pointermove", e=>{
+    if(dragging) updateFromPointer(e);
+  });
+  const stopDragging = e=>{
+    if(!dragging) return;
+    updateFromPointer(e);
+    dragging = false;
+    if(seekEl.hasPointerCapture?.(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
+  };
+  seekEl.addEventListener("pointerup", stopDragging);
+  seekEl.addEventListener("pointercancel", ()=>{ dragging = false; });
+  seekEl.addEventListener("keydown", e=>{
+    if(!audioEl.duration) return;
+    const step = e.shiftKey ? 10 : 5;
+    if(e.key === "ArrowRight" || e.key === "ArrowUp"){
+      audioEl.currentTime = Math.min(audioEl.duration, audioEl.currentTime + step);
+      e.preventDefault();
+    } else if(e.key === "ArrowLeft" || e.key === "ArrowDown"){
+      audioEl.currentTime = Math.max(0, audioEl.currentTime - step);
+      e.preventDefault();
+    } else if(e.key === "Home"){
+      audioEl.currentTime = 0;
+      e.preventDefault();
+    } else if(e.key === "End"){
+      audioEl.currentTime = audioEl.duration;
+      e.preventDefault();
+    }
+  });
+}
+[$("#seek"), $("#miniSeek"), $("#mobileSeek")].forEach(bindSeek);
 on("#volTrack", "click", (e)=>{
   const rect = e.currentTarget.getBoundingClientRect();
   setVolume((e.clientX-rect.left)/rect.width);
