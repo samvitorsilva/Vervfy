@@ -10,7 +10,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=20">
+<link rel="stylesheet" href="/static/styles.css?v=23">
 <script>
 /* Keep the app shell available so downloaded music can still be opened offline. */
 (function(){
@@ -51,6 +51,9 @@
       </button>
       <button class="rail-btn" data-view="favorites" data-tip="Favorites">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.35-9.4-8.9C.8 7.5 3.1 4.2 6.6 4.2c1.9 0 3.3 1.05 4.4 2.55C12.1 5.25 13.5 4.2 15.4 4.2c3.5 0 5.8 3.3 4 6.9C17 15.65 12 20 12 20Z"/></svg>
+      </button>
+      <button class="rail-btn" data-view="offline" data-tip="Offline">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m8 11 4 4 4-4"/><path d="M5 20h14"/></svg>
       </button>
       <button class="rail-btn" data-view="queue" data-tip="Queue">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg>
@@ -339,6 +342,6 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
-<script src="/static/app.js?v=16"></script>
+<script src="/static/app.js?v=23"></script>
 </body>
 </html>

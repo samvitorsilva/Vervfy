@@ -465,7 +465,9 @@ def _lookup_artist_photo(name: str) -> str | None:
                 results = json.load(response).get("data", [])
             result, _ = _matching_catalog_artist(results, [candidate_name], "name")
             if result:
-                candidate = result.get("picture_big") or result.get("picture_medium")
+                # Artist cards are small; the medium CDN variant avoids
+                # downloading a 500px portrait for a ~100px avatar.
+                candidate = result.get("picture_medium") or result.get("picture_big")
                 if isinstance(candidate, str) and candidate.startswith("https://"):
                     photo = candidate
                 break

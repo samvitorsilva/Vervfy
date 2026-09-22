@@ -474,12 +474,20 @@ const LyricsEngine = (() => {
     if(!lrcText) return null;
     const stamp = /\[(\d{1,2}):(\d{2}(?:[.:]\d{1,3})?)\]/g;
     const lines = [];
+    let offsetMs = 0;
     lrcText.split(/\r?\n/).forEach(raw => {
+      const offset = raw.match(/^\s*\[offset\s*:\s*([+-]?\d+)\s*\]\s*$/i);
+      if(offset){
+        offsetMs = Number(offset[1]) || 0;
+        return;
+      }
       const matches = [...raw.matchAll(stamp)];
       if(matches.length === 0) return;
       const text = raw.replace(stamp,"").trim();
       matches.forEach(m => {
-        const time = (parseInt(m[1],10)*60 + parseFloat(m[2].replace(":","."))) * 1000;
+        const seconds = Number(m[2].replace(":", "."));
+        if(!Number.isFinite(seconds)) return;
+        const time = Math.max(0, (parseInt(m[1],10)*60 + seconds) * 1000 + offsetMs);
         lines.push({ time, text });
       });
     });
@@ -556,10 +564,31 @@ const LyricsEngine = (() => {
   async function resolve(track, idMeta){
     let result = fromID3(idMeta);
     if(!result) result = await fromOnline(track);
-    return result || null;
+    return normalizeSyncedLyrics(result, track?.duration) || null;
   }
   return { fromID3, fromLRC, fromOnline, resolve };
 })();
+
+function normalizeSyncedLyrics(lyrics, duration){
+  if(!lyrics?.lines?.length || !Number.isFinite(duration) || duration <= 0) return lyrics;
+  const lines = lyrics.lines
+    .filter(line => Number.isFinite(line.time) && line.time >= 0)
+    .sort((a,b)=>a.time-b.time);
+  if(!lines.length) return null;
+  const lastTime = lines[lines.length - 1].time;
+  const durationMs = duration * 1000;
+  // Some lyric providers return a version whose timestamps run past the
+  // actual audio. Compress only that clearly invalid tail; normal outro
+  // silence and early final lines are left untouched.
+  if(lastTime > durationMs + 1500){
+    const scale = Math.max(0.85, (durationMs - 500) / lastTime);
+    return {
+      ...lyrics,
+      lines: lines.map(line => ({...line, time: Math.max(0, line.time * scale)})),
+    };
+  }
+  return {...lyrics, lines};
+}
 
 /* ============================================================
    ARTIST PHOTOS — resolved on demand, just like online lyrics.
@@ -1630,11 +1659,13 @@ function updateNowPlayingUI(){
   $("#mobilePlayerBg").style.backgroundImage = `url("${t.art}")`;
   $("#mobilePlayerArt").src = t.art;
   $("#mobilePlayerTitle").textContent = t.title;
-  $("#mobilePlayerArtist").textContent = credits;
+  $("#mobilePlayerArtist").innerHTML = artistLinksMarkup(t);
+  wireArtistLinks($("#mobilePlayerArtist"));
   $("#mobilePlayerContext").textContent = state.playingContext || viewPlaybackContext();
   $("#mobilePlayerFav").classList.toggle("on", !!t.favorite);
   updateMobileLyricsPreview(t);
   updateVolUI();
+  updateVizTrackInfo(t);
   if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
 }
 
@@ -1670,7 +1701,7 @@ function renderLyricsStage(){
   const sideMarkup = `
     <div class="lyrics-side">
       <div class="lyrics-art"><img src="${escapeHtml(t.art)}" alt=""></div>
-      <div class="lyrics-meta"><div class="t">${escapeHtml(t.title)}</div><div class="a">${escapeHtml(t.artist)}</div></div>
+      <div class="lyrics-meta"><div class="t">${escapeHtml(t.title)}</div><div class="a">${artistLinksMarkup(t)}</div></div>
       ${t.lyrics ? `<div class="lyrics-source">${sourceLabel[t.lyrics.source] || "Lyrics"}</div>` : ""}
     </div>`;
 
@@ -1719,6 +1750,7 @@ function renderLyricsStage(){
     ) + `<button class="btn btn-primary lyrics-paste-btn" id="btnPasteLyrics">Paste lyrics</button>`;
     $("#btnPasteLyrics").addEventListener("click", () => openLyricsEditor(t));
   }
+  wireArtistLinks(stage);
 }
 function timedLyricsToLrc(lines){
   return lines.map(line => {
@@ -1843,7 +1875,10 @@ function openLyricsEditor(track){
       // Use the value accepted by the account-scoped API, rather than merely
       // assuming the browser's request succeeded.
       track.customLyrics = saved.custom_lyrics;
-      track.lyrics = LyricsEngine.fromLRC(track.customLyrics) || synced || { source:"custom", text:track.customLyrics };
+      track.lyrics = normalizeSyncedLyrics(
+        LyricsEngine.fromLRC(track.customLyrics) || synced,
+        track.duration
+      ) || { source:"custom", text:track.customLyrics };
       track.lyricsResolved = true;
       toast(synced?.lines ? "Timestamped lyrics saved" : "Lyrics saved — use Sync to audio to add timing");
       renderLyricsStage();
@@ -1958,44 +1993,69 @@ function closeLyrics(){
 }
 
 /* ---------- full visualizer overlay (radial spectrum) ---------- */
+let vizAmplitudes = [];
+let vizPhase = 0;
+
+function updateVizTrackInfo(track = currentTrack()){
+  if(!$("#vizOverlay")?.classList.contains("open")) return;
+  $("#vizTitle").textContent = track ? track.title : "Nothing playing";
+  $("#vizArtist").innerHTML = track ? artistLinksMarkup(track) : "Import and play a track";
+  wireArtistLinks($("#vizArtist"));
+}
+
 function drawViz(){
   const canvas = $("#vizCanvas");
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
-  const cx=w/2, cy=h/2, baseR = w*0.22;
-  ctx.beginPath(); ctx.arc(cx,cy,baseR,0,Math.PI*2);
-  ctx.fillStyle = "rgba(255,255,255,0.02)"; ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth=1; ctx.stroke();
+  const cx=w/2, cy=h/2, baseR = w*0.21;
+  vizPhase += 0.008;
+  const calmPulse = Math.sin(vizPhase) * 0.5 + 0.5;
+  ctx.save();
+  ctx.translate(cx, cy);
+  const halo = ctx.createRadialGradient(0,0,baseR*.35,0,0,baseR*2.2);
+  halo.addColorStop(0, `rgba(139,127,255,${0.13 + calmPulse*.03})`);
+  halo.addColorStop(.55, "rgba(84,232,212,.035)");
+  halo.addColorStop(1, "rgba(8,10,16,0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath(); ctx.arc(0,0,baseR*2.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0,0,baseR + calmPulse*3,0,Math.PI*2);
+  ctx.fillStyle = "rgba(255,255,255,.035)"; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.14)"; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0,0,baseR + 14 + calmPulse*2,0,Math.PI*2);
+  ctx.strokeStyle = "rgba(84,232,212,.13)"; ctx.lineWidth=1; ctx.stroke();
+  ctx.restore();
 
   if(analyser && !audioEl.paused){
     analyser.getByteFrequencyData(freqData);
-    const bands = 64;
+    const bands = 72;
     const step = Math.floor(freqData.length/bands);
     ctx.save(); ctx.translate(cx,cy);
     for(let i=0;i<bands;i++){
       let sum=0; for(let j=0;j<step;j++) sum += freqData[i*step+j];
       const amp = (sum/step)/255;
+      const previous = vizAmplitudes[i] || 0;
+      vizAmplitudes[i] = previous + (amp - previous) * 0.12;
       const angle = (i/bands)*Math.PI*2 - Math.PI/2;
-      const r1 = baseR+4, r2 = baseR+4+amp*(w*0.24);
+      const r1 = baseR+8, r2 = baseR+8+vizAmplitudes[i]*(w*0.2);
       const x1=Math.cos(angle)*r1, y1=Math.sin(angle)*r1;
       const x2=Math.cos(angle)*r2, y2=Math.sin(angle)*r2;
       const grad = ctx.createLinearGradient(x1,y1,x2,y2);
-      grad.addColorStop(0,"#8b7fff"); grad.addColorStop(1,"#54e8d455");
-      ctx.strokeStyle=grad; ctx.lineWidth=w*0.006; ctx.lineCap="round";
-      ctx.shadowBlur=14; ctx.shadowColor="#8b7fff88";
+      grad.addColorStop(0,"rgba(139,127,255,.75)"); grad.addColorStop(1,"rgba(84,232,212,.3)");
+      ctx.strokeStyle=grad; ctx.lineWidth=Math.max(2, w*0.004); ctx.lineCap="round";
+      ctx.shadowBlur=8; ctx.shadowColor="rgba(139,127,255,.35)";
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     }
     ctx.restore();
+  } else {
+    vizAmplitudes = vizAmplitudes.map(value => value * 0.92);
   }
   rafViz = requestAnimationFrame(drawViz);
 }
 function openViz(){
   closeLyrics();
-  const t = currentTrack();
-  $("#vizTitle").textContent = t? t.title : "Nothing playing";
-  $("#vizArtist").textContent = t? t.artist : "Import and play a track";
   $("#vizOverlay").classList.add("open");
+  updateVizTrackInfo();
   ensureAudioGraph();
   drawViz();
 }
@@ -2133,12 +2193,15 @@ function openArtist(name){
   const input = $("#searchInput");
   if(input) input.value = "";
   render();
+  const content = $("#content");
+  if(content) content.scrollTop = 0;
 }
 
 function getVisibleTracks(){
   let list;
   if(state.view === "library") list = state.tracks;
   else if(state.view === "favorites") list = state.tracks.filter(t=>t.favorite);
+  else if(state.view === "offline") list = state.tracks.filter(t=>t.offline);
   else if(state.view.startsWith("playlist:")){
     const pl = state.playlists.find(p=>p.id===state.view.slice(9));
     list = pl ? pl.trackIds.map(id=>state.tracks.find(t=>t.id===id)).filter(Boolean) : [];
@@ -2176,7 +2239,7 @@ function render(){
 }
 
 function renderTopbar(){
-  const titles = { library:"Library", favorites:"Favorites", playlists:"Playlists", artists:"Artists", queue:"Queue", account:"Account" };
+  const titles = { library:"Library", favorites:"Favorites", offline:"Offline", playlists:"Playlists", artists:"Artists", queue:"Queue", account:"Account" };
   let title = titles[state.view];
   if(!title && state.view.startsWith("playlist:")){
     const pl = state.playlists.find(p=>p.id===state.view.slice(9));
@@ -2285,7 +2348,8 @@ function trackArtUrl(track, size=512){
 function artAttrs(track, size=512, priority="low"){
   const src = escapeHtml(trackArtUrl(track, size));
   const fallback = escapeHtml(track.fallbackArt || "");
-  return `src="${src}" data-fallback="${fallback}" loading="lazy" decoding="async" fetchpriority="${priority}"`;
+  const loading = priority === "high" ? "eager" : "lazy";
+  return `src="${src}" data-fallback="${fallback}" loading="${loading}" decoding="async" fetchpriority="${priority}"`;
 }
 
 function wireMediaImages(root=document){
@@ -2335,6 +2399,10 @@ function renderTrackListView(){
     return;
   }
   if(list.length === 0){
+    if(state.view === "offline"){
+      content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>No downloaded songs</h3><p>Download a song from the player or its menu to listen without an internet connection.</p></div>`;
+      return;
+    }
     if(playlist && !state.search.trim()){
       content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>This playlist is empty</h3><p>Add songs from your library to start building it.</p><div style="margin-top:6px;">${addPlaylistBtn}</div></div>`;
       $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
@@ -2375,6 +2443,9 @@ function wireArtistLinks(root=document){
   root.querySelectorAll('[data-action="artist"]').forEach(el=>{
     el.addEventListener("click",(e)=>{
       e.stopPropagation();
+      $("#lyricsOverlay")?.classList.remove("open");
+      closeViz();
+      $("#mobilePlayer")?.classList.remove("open");
       openArtist(decodeURIComponent(el.dataset.artist || ""));
     });
   });
@@ -3189,7 +3260,7 @@ function renderArtistsView(){
     <div class="artist-grid">
       ${artists.map(a => `
         <div class="artist-card" role="button" tabindex="0" data-artist="${escapeHtml(encodeURIComponent(a.name))}">
-          <img class="artist-card-photo media-image" data-artist-photo="${escapeHtml(a.name)}" ${artAttrs(a, 256)} alt="${escapeHtml(a.name)}">
+          <img class="artist-card-photo media-image" data-artist-photo="${escapeHtml(a.name)}" ${artAttrs(a, 256, "high")} alt="${escapeHtml(a.name)}">
           <div class="artist-card-name">${escapeHtml(a.name)}</div>
           <div class="artist-card-count">${a.tracks.length} song${a.tracks.length!==1?"s":""}</div>
           <button type="button" class="artist-card-play" aria-label="Play ${escapeHtml(a.name)}">
@@ -3597,33 +3668,67 @@ on("#mobileLyricsCard", "keydown", (e)=>{
 });
 on("#mobileQueue", "click", ()=>{ $("#mobilePlayer").classList.remove("open"); $("#sidePanel").classList.add("open"); });
 
-function seekTo(clientX, seekEl){
+function seekPercent(clientX, seekEl){
   const rect = seekEl.getBoundingClientRect();
-  const pct = Math.min(1, Math.max(0, (clientX-rect.left)/rect.width));
-  if(audioEl.duration) audioEl.currentTime = pct*audioEl.duration;
+  if(!rect.width) return 0;
+  return Math.min(1, Math.max(0, (clientX-rect.left)/rect.width));
+}
+function previewSeek(pct){
+  if(!audioEl.duration) return;
+  const time = pct * audioEl.duration;
+  const percent = `${pct * 100}%`;
+  $("#seekFill").style.width = percent;
+  $("#seekThumb").style.left = percent;
+  $("#miniSeekFill").style.width = percent;
+  $("#miniSeekThumb").style.left = percent;
+  $("#mobileSeekFill").style.width = percent;
+  $("#mobileSeekThumb").style.left = percent;
+  $("#timeCur").textContent = fmtTime(time);
+  $("#miniCur").textContent = fmtTime(time);
+  $("#mobileTimeCur").textContent = fmtTime(time);
+}
+function commitSeek(pct){
+  if(!audioEl.duration) return;
+  audioEl.currentTime = Math.min(audioEl.duration, Math.max(0, pct * audioEl.duration));
+  updateSeekUI();
 }
 function bindSeek(seekEl){
   if(!seekEl) return;
   let dragging = false;
-  const updateFromPointer = e => seekTo(e.clientX, seekEl);
+  let wasPlaying = false;
+  let pendingPercent = 0;
+  const updateFromPointer = e => {
+    pendingPercent = seekPercent(e.clientX, seekEl);
+    previewSeek(pendingPercent);
+  };
   seekEl.addEventListener("pointerdown", e=>{
     if(e.button !== undefined && e.button !== 0) return;
     dragging = true;
+    wasPlaying = !audioEl.paused;
+    if(wasPlaying) audioEl.pause();
     seekEl.setPointerCapture?.(e.pointerId);
     updateFromPointer(e);
     e.preventDefault();
   });
   seekEl.addEventListener("pointermove", e=>{
-    if(dragging) updateFromPointer(e);
+    if(dragging)     updateFromPointer(e);
   });
   const stopDragging = e=>{
     if(!dragging) return;
     updateFromPointer(e);
+    commitSeek(pendingPercent);
     dragging = false;
     if(seekEl.hasPointerCapture?.(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
+    if(wasPlaying) audioEl.play().catch(()=>{});
   };
   seekEl.addEventListener("pointerup", stopDragging);
-  seekEl.addEventListener("pointercancel", ()=>{ dragging = false; });
+  seekEl.addEventListener("pointercancel", e=>{
+    if(!dragging) return;
+    dragging = false;
+    updateSeekUI();
+    if(seekEl.hasPointerCapture?.(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
+    if(wasPlaying) audioEl.play().catch(()=>{});
+  });
   seekEl.addEventListener("keydown", e=>{
     if(!audioEl.duration) return;
     const step = e.shiftKey ? 10 : 5;
