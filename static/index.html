@@ -283,9 +283,26 @@
 
   <!-- VISUALIZER OVERLAY -->
   <div class="viz-overlay" id="vizOverlay">
-    <button class="viz-close" id="vizClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
-    <canvas id="vizCanvas" width="640" height="640"></canvas>
-    <div class="viz-meta"><div class="t" id="vizTitle">—</div><div class="a" id="vizArtist">—</div></div>
+    <button class="viz-close" id="vizClose" aria-label="Close visualizer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
+    <div class="viz-layout">
+      <div class="viz-stage">
+        <div class="viz-kicker"><span class="viz-live-dot"></span>Live rhythm view</div>
+        <canvas id="vizCanvas" width="720" height="720"></canvas>
+        <div class="viz-meta"><div class="t" id="vizTitle">—</div><div class="a" id="vizArtist">—</div></div>
+      </div>
+      <aside class="viz-insights" aria-label="Song rhythm insights">
+        <div class="viz-insight-head"><div><span class="viz-eyebrow">Song insight</span><h2>Find the groove</h2></div><span class="viz-source">LIVE ESTIMATE</span></div>
+        <p class="viz-description">A glance at how this song moves right now — from pulse to intensity.</p>
+        <div class="viz-metrics">
+          <div class="viz-metric"><span>Tempo</span><strong id="vizTempo">—</strong><small id="vizTempoHint">Waiting for audio</small></div>
+          <div class="viz-metric"><span>Energy</span><strong id="vizEnergy">—</strong><div class="viz-meter"><i id="vizEnergyFill"></i></div></div>
+          <div class="viz-metric"><span>Low end</span><strong id="vizBass">—</strong><small>Kick &amp; bass weight</small></div>
+          <div class="viz-metric"><span>Groove</span><strong id="vizGroove">—</strong><small id="vizGrooveHint">Building a rhythm profile</small></div>
+        </div>
+        <div class="viz-legend"><span><i class="legend-dot legend-low"></i>Low end</span><span><i class="legend-dot legend-mid"></i>Body</span><span><i class="legend-dot legend-high"></i>Air</span></div>
+        <p class="viz-footnote">Tempo and groove are inferred from the live audio signal and may change as the song develops.</p>
+      </aside>
+    </div>
   </div>
 
   <!-- SHORTCUTS OVERLAY -->

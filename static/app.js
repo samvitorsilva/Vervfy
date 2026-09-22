@@ -1995,16 +1995,52 @@ function closeLyrics(){
 /* ---------- full visualizer overlay (radial spectrum) ---------- */
 let vizAmplitudes = [];
 let vizPhase = 0;
+let vizEnergy = 0;
+let vizLowEnd = 0;
+let vizBeatTimes = [];
+let vizLastBeat = 0;
 
 function updateVizTrackInfo(track = currentTrack()){
   if(!$("#vizOverlay")?.classList.contains("open")) return;
+  if(track && $("#vizTitle").textContent !== track.title){
+    vizBeatTimes = [];
+    vizLastBeat = 0;
+    vizEnergy = 0;
+    vizLowEnd = 0;
+  }
   $("#vizTitle").textContent = track ? track.title : "Nothing playing";
   $("#vizArtist").innerHTML = track ? artistLinksMarkup(track) : "Import and play a track";
   wireArtistLinks($("#vizArtist"));
 }
 
+function updateVizInsights(low, mid, high, energy){
+  const now = performance.now();
+  const threshold = Math.max(.22, vizEnergy * 1.18);
+  if(low > threshold && low > mid * .72 && now - vizLastBeat > 260){
+    if(vizLastBeat) vizBeatTimes.push(now - vizLastBeat);
+    vizLastBeat = now;
+    vizBeatTimes = vizBeatTimes.slice(-8);
+  }
+  vizEnergy += (energy - vizEnergy) * .1;
+  vizLowEnd += (low - vizLowEnd) * .1;
+  const average = vizBeatTimes.length ? vizBeatTimes.reduce((a,b)=>a+b,0) / vizBeatTimes.length : 0;
+  const bpm = average ? Math.max(60, Math.min(180, Math.round(60000 / average))) : null;
+  const deviation = average && vizBeatTimes.length >= 3
+    ? Math.sqrt(vizBeatTimes.reduce((sum, interval)=>sum + Math.pow(interval - average, 2), 0) / vizBeatTimes.length)
+    : null;
+  const groove = deviation == null ? null : Math.max(0, Math.min(100, 100 - deviation / 8));
+  $("#vizTempo").textContent = bpm ? `${bpm} BPM` : "—";
+  $("#vizTempoHint").textContent = bpm ? (bpm < 90 ? "laid-back pulse" : bpm > 128 ? "driving pulse" : "steady pulse") : "Listening for a pulse";
+  $("#vizEnergy").textContent = `${Math.round(vizEnergy * 100)}%`;
+  $("#vizEnergyFill").style.width = `${Math.round(vizEnergy * 100)}%`;
+  $("#vizBass").textContent = vizLowEnd > .62 ? "Heavy" : vizLowEnd > .34 ? "Balanced" : "Light";
+  $("#vizGroove").textContent = groove == null ? "—" : `${Math.round(groove)}%`;
+  $("#vizGrooveHint").textContent = groove == null ? "Building a rhythm profile" : groove > 72 ? "locked-in beat" : groove > 45 ? "some variation" : "loose / evolving";
+}
+
 function drawViz(){
   const canvas = $("#vizCanvas");
+  if(!canvas) return;
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
@@ -2028,12 +2064,16 @@ function drawViz(){
 
   if(analyser && !audioEl.paused){
     analyser.getByteFrequencyData(freqData);
-    const bands = 72;
-    const step = Math.floor(freqData.length/bands);
+    const bands = 48;
+    const step = Math.max(1, Math.floor(freqData.length/bands));
+    let low = 0, mid = 0, high = 0;
     ctx.save(); ctx.translate(cx,cy);
     for(let i=0;i<bands;i++){
       let sum=0; for(let j=0;j<step;j++) sum += freqData[i*step+j];
       const amp = (sum/step)/255;
+      if(i < bands * .24) low += amp;
+      else if(i < bands * .65) mid += amp;
+      else high += amp;
       const previous = vizAmplitudes[i] || 0;
       vizAmplitudes[i] = previous + (amp - previous) * 0.12;
       const angle = (i/bands)*Math.PI*2 - Math.PI/2;
@@ -2047,21 +2087,29 @@ function drawViz(){
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     }
     ctx.restore();
+    updateVizInsights(low/(bands*.24), mid/(bands*.41), high/(bands*.35), Math.min(1, low/(bands*.24)*.45 + mid/(bands*.41)*.4 + high/(bands*.35)*.15));
   } else {
     vizAmplitudes = vizAmplitudes.map(value => value * 0.92);
+    vizEnergy *= .98;
+    vizLowEnd *= .98;
+    updateVizInsights(0, 0, 0, vizEnergy);
   }
   rafViz = requestAnimationFrame(drawViz);
 }
 function openViz(){
   closeLyrics();
+  vizBeatTimes = [];
+  vizLastBeat = 0;
+  vizEnergy = 0;
+  vizLowEnd = 0;
   $("#vizOverlay").classList.add("open");
   updateVizTrackInfo();
   ensureAudioGraph();
-  drawViz();
+  if(!rafViz) drawViz();
 }
 function closeViz(){
   $("#vizOverlay").classList.remove("open");
-  if(rafViz) cancelAnimationFrame(rafViz);
+  if(rafViz){ cancelAnimationFrame(rafViz); rafViz = null; }
 }
 
 function updateVolUI(){
@@ -3773,10 +3821,26 @@ on("#btnLogout", "click", () => logoutAndRedirect());
   
 on("#btnMini", "click", ()=> enterMiniMode());
 on("#btnMiniExit", "click", ()=> exitMiniMode());
+function clampMiniPosition(mp, left, top){
+  const margin = 8;
+  const rect = mp.getBoundingClientRect();
+  return {
+    left: Math.max(margin, Math.min(window.innerWidth - rect.width - margin, left)),
+    top: Math.max(margin, Math.min(window.innerHeight - rect.height - margin, top)),
+  };
+}
 function enterMiniMode(){
   document.body.classList.add("mini-mode");
   const mp = $("#miniPlayer");
-  mp.style.right = "24px"; mp.style.bottom = "24px"; mp.style.left="auto"; mp.style.top="auto";
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem("vervfy:mini-position") || "null"); } catch(_) { return null; }
+  })();
+  mp.style.right = "auto"; mp.style.bottom = "auto";
+  const position = saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)
+    ? clampMiniPosition(mp, saved.left, saved.top)
+    : clampMiniPosition(mp, window.innerWidth - mp.offsetWidth - 24, window.innerHeight - mp.offsetHeight - 24);
+  mp.style.left = `${position.left}px`;
+  mp.style.top = `${position.top}px`;
 }
 function exitMiniMode(){ document.body.classList.remove("mini-mode"); }
 
@@ -3792,11 +3856,28 @@ function exitMiniMode(){ document.body.classList.remove("mini-mode"); }
   });
   handle.addEventListener("pointermove",(e)=>{
     if(!dragging) return;
-    mp.style.left = Math.max(4,Math.min(window.innerWidth-304, e.clientX-offX))+"px";
-    mp.style.top = Math.max(4,Math.min(window.innerHeight-320, e.clientY-offY))+"px";
+    const position = clampMiniPosition(mp, e.clientX-offX, e.clientY-offY);
+    mp.style.left = position.left+"px";
+    mp.style.top = position.top+"px";
     mp.style.right="auto"; mp.style.bottom="auto";
   });
-  handle.addEventListener("pointerup",()=>dragging=false);
+  const stopDragging = ()=>{
+    if(!dragging) return;
+    dragging=false;
+    try {
+      const rect = mp.getBoundingClientRect();
+      localStorage.setItem("vervfy:mini-position", JSON.stringify({left:rect.left, top:rect.top}));
+    } catch(_) {}
+  };
+  handle.addEventListener("pointerup", stopDragging);
+  handle.addEventListener("pointercancel", stopDragging);
+  window.addEventListener("resize", ()=>{
+    if(!document.body.classList.contains("mini-mode")) return;
+    const rect = mp.getBoundingClientRect();
+    const position = clampMiniPosition(mp, rect.left, rect.top);
+    mp.style.left = position.left+"px";
+    mp.style.top = position.top+"px";
+  });
 })();
 
 on("#btnShortcuts", "click", ()=> $("#shortcutsOverlay").classList.add("open"));
