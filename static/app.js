@@ -90,7 +90,7 @@ const state = {
 
 let audioEl = new Audio();
 audioEl.preload = "metadata";
-let audioCtx = null, analyser = null, sourceNode = null, freqData = null;
+let audioCtx = null, analyser = null, sourceNode = null, freqData = null, waveData = null;
 let rafViz = null;
 
 /* ============================================================
@@ -1320,8 +1320,9 @@ function ensureAudioGraph(){
   audioCtx = new AudioContextClass();
   sourceNode = audioCtx.createMediaElementSource(audioEl);
   analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 128;
+  analyser.fftSize = 256;
   freqData = new Uint8Array(analyser.frequencyBinCount);
+  waveData = new Uint8Array(analyser.fftSize);
   sourceNode.connect(analyser);
   analyser.connect(audioCtx.destination);
   return true;
@@ -1999,6 +2000,24 @@ let vizEnergy = 0;
 let vizLowEnd = 0;
 let vizBeatTimes = [];
 let vizLastBeat = 0;
+let vizBeatKick = 0;      // spikes to 1 on each detected beat, decays every frame
+let vizBpm = 0;            // last known bpm, drives rotation speed
+let vizHue = 255;          // smoothed color hue, shifts with the bass/treble balance
+let vizParticles = [];     // beat-triggered sparks
+
+function spawnVizParticles(intensity){
+  const count = 5 + Math.round(intensity * 6);
+  for(let i=0;i<count;i++){
+    vizParticles.push({
+      angle: Math.random() * Math.PI * 2,
+      r: 0,
+      speed: 2.2 + Math.random() * 2.4,
+      life: 1,
+      decay: 0.018 + Math.random() * 0.012,
+    });
+  }
+  if(vizParticles.length > 160) vizParticles = vizParticles.slice(-160);
+}
 
 function updateVizTrackInfo(track = currentTrack()){
   if(!$("#vizOverlay")?.classList.contains("open")) return;
@@ -2007,6 +2026,9 @@ function updateVizTrackInfo(track = currentTrack()){
     vizLastBeat = 0;
     vizEnergy = 0;
     vizLowEnd = 0;
+    vizBeatKick = 0;
+    vizBpm = 0;
+    vizParticles = [];
   }
   $("#vizTitle").textContent = track ? track.title : "Nothing playing";
   $("#vizArtist").innerHTML = track ? artistLinksMarkup(track) : "Import and play a track";
@@ -2016,15 +2038,19 @@ function updateVizTrackInfo(track = currentTrack()){
 function updateVizInsights(low, mid, high, energy){
   const now = performance.now();
   const threshold = Math.max(.22, vizEnergy * 1.18);
-  if(low > threshold && low > mid * .72 && now - vizLastBeat > 260){
+  const beatHit = low > threshold && low > mid * .72 && now - vizLastBeat > 260;
+  if(beatHit){
     if(vizLastBeat) vizBeatTimes.push(now - vizLastBeat);
     vizLastBeat = now;
     vizBeatTimes = vizBeatTimes.slice(-8);
+    vizBeatKick = 1;
+    spawnVizParticles(low);
   }
   vizEnergy += (energy - vizEnergy) * .1;
   vizLowEnd += (low - vizLowEnd) * .1;
   const average = vizBeatTimes.length ? vizBeatTimes.reduce((a,b)=>a+b,0) / vizBeatTimes.length : 0;
   const bpm = average ? Math.max(60, Math.min(180, Math.round(60000 / average))) : null;
+  vizBpm = bpm || vizBpm;
   const deviation = average && vizBeatTimes.length >= 3
     ? Math.sqrt(vizBeatTimes.reduce((sum, interval)=>sum + Math.pow(interval - average, 2), 0) / vizBeatTimes.length)
     : null;
@@ -2036,6 +2062,9 @@ function updateVizInsights(low, mid, high, energy){
   $("#vizBass").textContent = vizLowEnd > .62 ? "Heavy" : vizLowEnd > .34 ? "Balanced" : "Light";
   $("#vizGroove").textContent = groove == null ? "—" : `${Math.round(groove)}%`;
   $("#vizGrooveHint").textContent = groove == null ? "Building a rhythm profile" : groove > 72 ? "locked-in beat" : groove > 45 ? "some variation" : "loose / evolving";
+
+  const targetHue = 255 - Math.min(1, Math.max(0, high - low + .5)) * 90;
+  vizHue += (targetHue - vizHue) * .04;
 }
 
 function drawViz(){
@@ -2043,27 +2072,42 @@ function drawViz(){
   if(!canvas) return;
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0,0,w,h);
+
+  ctx.fillStyle = "rgba(8,10,16,.16)";     // trail instead of a hard clear
+  ctx.fillRect(0,0,w,h);
+
   const cx=w/2, cy=h/2, baseR = w*0.21;
-  vizPhase += 0.008;
+  const rotSpeed = 0.003 + (vizBpm ? (vizBpm/120) * 0.006 : 0.003);
+  vizPhase += rotSpeed;
+  vizBeatKick *= 0.90;
+
   const calmPulse = Math.sin(vizPhase) * 0.5 + 0.5;
+  const kick = vizBeatKick;
+
   ctx.save();
   ctx.translate(cx, cy);
-  const halo = ctx.createRadialGradient(0,0,baseR*.35,0,0,baseR*2.2);
-  halo.addColorStop(0, `rgba(139,127,255,${0.13 + calmPulse*.03})`);
-  halo.addColorStop(.55, "rgba(84,232,212,.035)");
+
+  const haloR = baseR*2.2 * (1 + kick*0.12);
+  const halo = ctx.createRadialGradient(0,0,baseR*.35,0,0,haloR);
+  halo.addColorStop(0, `hsla(${vizHue},85%,72%,${0.13 + calmPulse*.03 + kick*.12})`);
+  halo.addColorStop(.55, `hsla(${vizHue+40},85%,60%,${0.035 + kick*.05})`);
   halo.addColorStop(1, "rgba(8,10,16,0)");
   ctx.fillStyle = halo;
-  ctx.beginPath(); ctx.arc(0,0,baseR*2.2,0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(0,0,baseR + calmPulse*3,0,Math.PI*2);
-  ctx.fillStyle = "rgba(255,255,255,.035)"; ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,.14)"; ctx.lineWidth=1; ctx.stroke();
-  ctx.beginPath(); ctx.arc(0,0,baseR + 14 + calmPulse*2,0,Math.PI*2);
-  ctx.strokeStyle = "rgba(84,232,212,.13)"; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0,0,haloR,0,Math.PI*2); ctx.fill();
+
+  const coreR = baseR + calmPulse*3 + kick*10;
+  ctx.beginPath(); ctx.arc(0,0,coreR,0,Math.PI*2);
+  ctx.fillStyle = `hsla(${vizHue},60%,90%,${.035 + kick*.05})`; ctx.fill();
+  ctx.strokeStyle = `hsla(${vizHue},70%,80%,${.14 + kick*.25})`; ctx.lineWidth=1 + kick*1.5; ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(0,0,baseR + 14 + calmPulse*2 + kick*6,0,Math.PI*2);
+  ctx.strokeStyle = `hsla(${vizHue+60},80%,65%,${.13 + kick*.2})`; ctx.lineWidth=1; ctx.stroke();
   ctx.restore();
 
   if(analyser && !audioEl.paused){
     analyser.getByteFrequencyData(freqData);
+    analyser.getByteTimeDomainData(waveData);
+
     const bands = 48;
     const step = Math.max(1, Math.floor(freqData.length/bands));
     let low = 0, mid = 0, high = 0;
@@ -2076,16 +2120,32 @@ function drawViz(){
       else high += amp;
       const previous = vizAmplitudes[i] || 0;
       vizAmplitudes[i] = previous + (amp - previous) * 0.12;
-      const angle = (i/bands)*Math.PI*2 - Math.PI/2;
-      const r1 = baseR+8, r2 = baseR+8+vizAmplitudes[i]*(w*0.2);
+      const angle = (i/bands)*Math.PI*2 - Math.PI/2 + vizPhase;
+      const r1 = baseR+8, r2 = baseR+8+vizAmplitudes[i]*(w*0.2)*(1+kick*.25);
       const x1=Math.cos(angle)*r1, y1=Math.sin(angle)*r1;
       const x2=Math.cos(angle)*r2, y2=Math.sin(angle)*r2;
       const grad = ctx.createLinearGradient(x1,y1,x2,y2);
-      grad.addColorStop(0,"rgba(139,127,255,.75)"); grad.addColorStop(1,"rgba(84,232,212,.3)");
+      grad.addColorStop(0,`hsla(${vizHue},80%,72%,.78)`); grad.addColorStop(1,`hsla(${vizHue+50},80%,60%,.3)`);
       ctx.strokeStyle=grad; ctx.lineWidth=Math.max(2, w*0.004); ctx.lineCap="round";
-      ctx.shadowBlur=8; ctx.shadowColor="rgba(139,127,255,.35)";
+      ctx.shadowBlur=8 + kick*10; ctx.shadowColor=`hsla(${vizHue},80%,70%,.4)`;
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     }
+
+    ctx.beginPath();
+    const waveR = baseR - 30;
+    for(let i=0;i<waveData.length;i++){
+      const v = (waveData[i]-128)/128;
+      const angle = (i/waveData.length)*Math.PI*2 - Math.PI/2 - vizPhase*1.4;
+      const r = waveR + v * 16 * (1+kick*.4);
+      const x = Math.cos(angle)*r, y = Math.sin(angle)*r;
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = `hsla(${vizHue+20},85%,75%,${.4 + kick*.3})`;
+    ctx.lineWidth = 1.5;
+    ctx.shadowBlur = 6; ctx.shadowColor = `hsla(${vizHue+20},85%,70%,.5)`;
+    ctx.stroke();
+
     ctx.restore();
     updateVizInsights(low/(bands*.24), mid/(bands*.41), high/(bands*.35), Math.min(1, low/(bands*.24)*.45 + mid/(bands*.41)*.4 + high/(bands*.35)*.15));
   } else {
@@ -2094,6 +2154,21 @@ function drawViz(){
     vizLowEnd *= .98;
     updateVizInsights(0, 0, 0, vizEnergy);
   }
+
+  ctx.save(); ctx.translate(cx,cy);
+  vizParticles.forEach(p=>{
+    p.r += p.speed;
+    p.life -= p.decay;
+    if(p.life <= 0) return;
+    const x = Math.cos(p.angle)*(baseR+8+p.r), y = Math.sin(p.angle)*(baseR+8+p.r);
+    ctx.beginPath();
+    ctx.arc(x,y, 2 + p.life*2, 0, Math.PI*2);
+    ctx.fillStyle = `hsla(${vizHue},90%,80%,${p.life*.8})`;
+    ctx.fill();
+  });
+  vizParticles = vizParticles.filter(p=>p.life > 0);
+  ctx.restore();
+
   rafViz = requestAnimationFrame(drawViz);
 }
 function openViz(){
@@ -2102,6 +2177,9 @@ function openViz(){
   vizLastBeat = 0;
   vizEnergy = 0;
   vizLowEnd = 0;
+  vizBeatKick = 0;
+  vizBpm = 0;
+  vizParticles = [];
   $("#vizOverlay").classList.add("open");
   updateVizTrackInfo();
   ensureAudioGraph();
