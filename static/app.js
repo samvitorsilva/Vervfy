@@ -92,6 +92,8 @@ let audioEl = new Audio();
 audioEl.preload = "metadata";
 let audioCtx = null, analyser = null, sourceNode = null, freqData = null, waveData = null;
 let rafViz = null;
+let vizLastFrameAt = 0;
+let vizCanvasSize = 0;
 
 /* ============================================================
    SYSTEM MEDIA CONTROLS
@@ -1666,7 +1668,7 @@ function updateNowPlayingUI(){
   $("#mobilePlayerFav").classList.toggle("on", !!t.favorite);
   updateMobileLyricsPreview(t);
   updateVolUI();
-  updateVizTrackInfo(t);
+  resetVizTrack(t);
   if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
 }
 
@@ -1997,13 +1999,13 @@ function closeLyrics(){
 let vizAmplitudes = [];
 let vizPhase = 0;
 let vizEnergy = 0;
-let vizLowEnd = 0;
 let vizBeatTimes = [];
 let vizLastBeat = 0;
 let vizBeatKick = 0;      // spikes to 1 on each detected beat, decays every frame
 let vizBpm = 0;            // last known bpm, drives rotation speed
 let vizHue = 255;          // smoothed color hue, shifts with the bass/treble balance
 let vizParticles = [];     // beat-triggered sparks
+let vizTrackId = null;
 
 function spawnVizParticles(intensity){
   const count = 5 + Math.round(intensity * 6);
@@ -2019,23 +2021,21 @@ function spawnVizParticles(intensity){
   if(vizParticles.length > 160) vizParticles = vizParticles.slice(-160);
 }
 
-function updateVizTrackInfo(track = currentTrack()){
+function resetVizTrack(track = currentTrack()){
   if(!$("#vizOverlay")?.classList.contains("open")) return;
-  if(track && $("#vizTitle").textContent !== track.title){
+  const trackId = track?.id || null;
+  if(trackId !== vizTrackId){
+    vizTrackId = trackId;
     vizBeatTimes = [];
     vizLastBeat = 0;
     vizEnergy = 0;
-    vizLowEnd = 0;
     vizBeatKick = 0;
     vizBpm = 0;
     vizParticles = [];
   }
-  $("#vizTitle").textContent = track ? track.title : "Nothing playing";
-  $("#vizArtist").innerHTML = track ? artistLinksMarkup(track) : "Import and play a track";
-  wireArtistLinks($("#vizArtist"));
 }
 
-function updateVizInsights(low, mid, high, energy){
+function updateVizMotion(low, mid, high, energy){
   const now = performance.now();
   const threshold = Math.max(.22, vizEnergy * 1.18);
   const beatHit = low > threshold && low > mid * .72 && now - vizLastBeat > 260;
@@ -2047,29 +2047,45 @@ function updateVizInsights(low, mid, high, energy){
     spawnVizParticles(low);
   }
   vizEnergy += (energy - vizEnergy) * .1;
-  vizLowEnd += (low - vizLowEnd) * .1;
   const average = vizBeatTimes.length ? vizBeatTimes.reduce((a,b)=>a+b,0) / vizBeatTimes.length : 0;
   const bpm = average ? Math.max(60, Math.min(180, Math.round(60000 / average))) : null;
   vizBpm = bpm || vizBpm;
-  const deviation = average && vizBeatTimes.length >= 3
-    ? Math.sqrt(vizBeatTimes.reduce((sum, interval)=>sum + Math.pow(interval - average, 2), 0) / vizBeatTimes.length)
-    : null;
-  const groove = deviation == null ? null : Math.max(0, Math.min(100, 100 - deviation / 8));
-  $("#vizTempo").textContent = bpm ? `${bpm} BPM` : "—";
-  $("#vizTempoHint").textContent = bpm ? (bpm < 90 ? "laid-back pulse" : bpm > 128 ? "driving pulse" : "steady pulse") : "Listening for a pulse";
-  $("#vizEnergy").textContent = `${Math.round(vizEnergy * 100)}%`;
-  $("#vizEnergyFill").style.width = `${Math.round(vizEnergy * 100)}%`;
-  $("#vizBass").textContent = vizLowEnd > .62 ? "Heavy" : vizLowEnd > .34 ? "Balanced" : "Light";
-  $("#vizGroove").textContent = groove == null ? "—" : `${Math.round(groove)}%`;
-  $("#vizGrooveHint").textContent = groove == null ? "Building a rhythm profile" : groove > 72 ? "locked-in beat" : groove > 45 ? "some variation" : "loose / evolving";
 
   const targetHue = 255 - Math.min(1, Math.max(0, high - low + .5)) * 90;
   vizHue += (targetHue - vizHue) * .04;
 }
 
-function drawViz(){
+function isCompactViz(){
+  return window.matchMedia("(max-width: 900px)").matches ||
+    window.matchMedia("(pointer: coarse)").matches;
+}
+
+function resizeVizCanvas(){
   const canvas = $("#vizCanvas");
   if(!canvas) return;
+  const cssSize = Math.min(
+    window.innerWidth <= 780 ? window.innerWidth * .84 : window.innerHeight * .76,
+    window.innerWidth <= 780 ? 520 : 760
+  );
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, isCompactViz() ? 1.25 : 1.5);
+  const maxPixels = isCompactViz() ? 640 : 900;
+  const size = Math.max(320, Math.min(maxPixels, Math.round(cssSize * pixelRatio)));
+  if(size === vizCanvasSize) return;
+  vizCanvasSize = size;
+  canvas.width = size;
+  canvas.height = size;
+  canvas.getContext("2d")?.clearRect(0, 0, size, size);
+}
+
+function drawViz(timestamp = performance.now()){
+  const canvas = $("#vizCanvas");
+  if(!canvas) return;
+  const compact = isCompactViz();
+  if(compact && timestamp - vizLastFrameAt < 32){
+    rafViz = requestAnimationFrame(drawViz);
+    return;
+  }
+  vizLastFrameAt = timestamp;
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
 
@@ -2108,7 +2124,7 @@ function drawViz(){
     analyser.getByteFrequencyData(freqData);
     analyser.getByteTimeDomainData(waveData);
 
-    const bands = 48;
+    const bands = compact ? 32 : 48;
     const step = Math.max(1, Math.floor(freqData.length/bands));
     let low = 0, mid = 0, high = 0;
     ctx.save(); ctx.translate(cx,cy);
@@ -2127,7 +2143,8 @@ function drawViz(){
       const grad = ctx.createLinearGradient(x1,y1,x2,y2);
       grad.addColorStop(0,`hsla(${vizHue},80%,72%,.78)`); grad.addColorStop(1,`hsla(${vizHue+50},80%,60%,.3)`);
       ctx.strokeStyle=grad; ctx.lineWidth=Math.max(2, w*0.004); ctx.lineCap="round";
-      ctx.shadowBlur=8 + kick*10; ctx.shadowColor=`hsla(${vizHue},80%,70%,.4)`;
+      ctx.shadowBlur = compact ? 0 : 8 + kick*10;
+      ctx.shadowColor=`hsla(${vizHue},80%,70%,.4)`;
       ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     }
 
@@ -2143,16 +2160,16 @@ function drawViz(){
     ctx.closePath();
     ctx.strokeStyle = `hsla(${vizHue+20},85%,75%,${.4 + kick*.3})`;
     ctx.lineWidth = 1.5;
-    ctx.shadowBlur = 6; ctx.shadowColor = `hsla(${vizHue+20},85%,70%,.5)`;
+    ctx.shadowBlur = compact ? 0 : 6;
+    ctx.shadowColor = `hsla(${vizHue+20},85%,70%,.5)`;
     ctx.stroke();
 
     ctx.restore();
-    updateVizInsights(low/(bands*.24), mid/(bands*.41), high/(bands*.35), Math.min(1, low/(bands*.24)*.45 + mid/(bands*.41)*.4 + high/(bands*.35)*.15));
+    updateVizMotion(low/(bands*.24), mid/(bands*.41), high/(bands*.35), Math.min(1, low/(bands*.24)*.45 + mid/(bands*.41)*.4 + high/(bands*.35)*.15));
   } else {
     vizAmplitudes = vizAmplitudes.map(value => value * 0.92);
     vizEnergy *= .98;
-    vizLowEnd *= .98;
-    updateVizInsights(0, 0, 0, vizEnergy);
+    updateVizMotion(0, 0, 0, vizEnergy);
   }
 
   ctx.save(); ctx.translate(cx,cy);
@@ -2176,12 +2193,13 @@ function openViz(){
   vizBeatTimes = [];
   vizLastBeat = 0;
   vizEnergy = 0;
-  vizLowEnd = 0;
   vizBeatKick = 0;
   vizBpm = 0;
   vizParticles = [];
+  vizTrackId = null;
   $("#vizOverlay").classList.add("open");
-  updateVizTrackInfo();
+  resizeVizCanvas();
+  resetVizTrack();
   ensureAudioGraph();
   if(!rafViz) drawViz();
 }
@@ -2734,36 +2752,10 @@ function openPlaylistSubmenu(e, t, parentMenu){
   parentMenu.appendChild(sub);
   requestAnimationFrame(()=>{
     const parentRect = parentMenu.getBoundingClientRect();
-    let subRect;
-    if(window.innerWidth <= 640){
-      sub.style.position = "fixed";
-      sub.style.maxHeight = "calc(100vh - 16px)";
-      sub.style.overflowY = "auto";
-      subRect = sub.getBoundingClientRect();
-      const left = Math.max(8, Math.min(window.innerWidth - subRect.width - 8, parentRect.left));
-      const belowTop = parentRect.bottom + 6;
-      const aboveTop = parentRect.top - subRect.height - 6;
-      const top = belowTop + subRect.height <= window.innerHeight - 8
-        ? belowTop
-        : aboveTop >= 8
-          ? aboveTop
-          : Math.max(8, window.innerHeight - subRect.height - 8);
-      sub.style.left = `${left}px`;
-      sub.style.top = `${top}px`;
-      return;
-    }
-    sub.classList.remove("menu-sub-right");
-    sub.classList.add("menu-sub-left");
-    subRect = sub.getBoundingClientRect();
-    if(parentRect.left < subRect.width + 18){
-      sub.classList.remove("menu-sub-left");
-      sub.classList.add("menu-sub-right");
-      subRect = sub.getBoundingClientRect();
-    }
-    const minTop = 8 - parentRect.top;
-    const maxTop = window.innerHeight - 8 - parentRect.top - subRect.height;
-    const top = Math.min(Math.max(-6, minTop), maxTop);
-    sub.style.top = `${Math.min(top, maxTop)}px`;
+    const subRect = sub.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - subRect.width - 8, parentRect.left));
+    sub.style.left = `${left}px`;
+    sub.style.top = `${parentRect.bottom + 6}px`;
   });
   sub.querySelectorAll("[data-pl]").forEach(item=>{
     item.addEventListener("click", ()=>{
@@ -2816,18 +2808,39 @@ function removeQueueSlot(i){
   }
 }
 
-function wireTouchQueueDrag(row, getIndex, refresh){
-  let startX = 0, startY = 0, dragging = false, startIndex = -1;
-  const handle = row.querySelector(".q-drag") || row;
+function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
+  let startX = 0, startY = 0, dragging = false, startIndex = -1, longPressTimer = null;
+  const handle = longPress ? row : (row.querySelector(".q-drag") || row);
+  const clearLongPress = ()=>{
+    if(longPressTimer){
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  };
   handle.addEventListener("pointerdown", e=>{
     if(e.pointerType === "mouse") return;
-    startX = e.clientX; startY = e.clientY; startIndex = getIndex();
+    if(longPress) row.draggable = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    startIndex = getIndex();
     dragging = false;
     handle.setPointerCapture?.(e.pointerId);
+    if(longPress){
+      longPressTimer = setTimeout(()=>{
+        dragging = true;
+        row.classList.add("dragging");
+      }, 300);
+    }
   });
   handle.addEventListener("pointermove", e=>{
     if(startIndex < 0) return;
-    if(!dragging && Math.hypot(e.clientX-startX, e.clientY-startY) < 8) return;
+    const distance = Math.hypot(e.clientX-startX, e.clientY-startY);
+    if(longPress && !dragging){
+      if(distance > 10) clearLongPress();
+      return;
+    }
+    if(!dragging && distance < 8) return;
+    clearLongPress();
     dragging = true;
     e.preventDefault();
     row.classList.add("dragging");
@@ -2837,6 +2850,7 @@ function wireTouchQueueDrag(row, getIndex, refresh){
   });
   const finish = e=>{
     if(startIndex < 0) return;
+    clearLongPress();
     const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
     if(handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
     row.classList.remove("dragging");
@@ -2849,9 +2863,11 @@ function wireTouchQueueDrag(row, getIndex, refresh){
     }
     startIndex = -1;
     dragging = false;
+    if(longPress) row.draggable = true;
   };
   handle.addEventListener("pointerup", finish);
   handle.addEventListener("pointercancel", finish);
+  handle.addEventListener("lostpointercapture", clearLongPress);
 }
 
 async function removeTrack(t){
@@ -3540,7 +3556,7 @@ function renderQueueView(){
       dragSrcIndex = null;
       renderQueueView(); renderQueuePanel();
     });
-    wireTouchQueueDrag(row, ()=>+row.dataset.qi, ()=>{ renderQueueView(); renderQueuePanel(); });
+    wireTouchQueueDrag(row, ()=>+row.dataset.qi, ()=>{ renderQueueView(); renderQueuePanel(); }, {longPress:true});
   });
   wireArtistLinks(content);
 }
@@ -3605,7 +3621,7 @@ function renderQueuePanel(){
     wireTouchQueueDrag(row, ()=>+row.dataset.i, ()=>{
       renderQueuePanel();
       if(state.view==="queue") renderQueueView();
-    });
+    }, {longPress:true});
   });
 }
 
@@ -3950,11 +3966,13 @@ function exitMiniMode(){ document.body.classList.remove("mini-mode"); }
   handle.addEventListener("pointerup", stopDragging);
   handle.addEventListener("pointercancel", stopDragging);
   window.addEventListener("resize", ()=>{
-    if(!document.body.classList.contains("mini-mode")) return;
-    const rect = mp.getBoundingClientRect();
-    const position = clampMiniPosition(mp, rect.left, rect.top);
-    mp.style.left = position.left+"px";
-    mp.style.top = position.top+"px";
+    if(document.body.classList.contains("mini-mode")){
+      const rect = mp.getBoundingClientRect();
+      const position = clampMiniPosition(mp, rect.left, rect.top);
+      mp.style.left = position.left+"px";
+      mp.style.top = position.top+"px";
+    }
+    if($("#vizOverlay")?.classList.contains("open")) resizeVizCanvas();
   });
 })();
 
