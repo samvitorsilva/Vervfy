@@ -2824,7 +2824,7 @@ function removeQueueSlot(i){
 
 function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
   let startX = 0, startY = 0, dragging = false, startIndex = -1, longPressTimer = null;
-  const handle = longPress ? row : (row.querySelector(".q-drag") || row);
+  const handle = row.querySelector(".q-drag") || row;
   const clearLongPress = ()=>{
     if(longPressTimer){
       clearTimeout(longPressTimer);
