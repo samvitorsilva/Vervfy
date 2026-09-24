@@ -818,7 +818,12 @@ body.mini-mode .mini-player{ display:block; }
 .q-row .q-remove{ opacity:1; }
 .q-remove:hover{ color:var(--danger); }
 .q-remove svg{ width:12px; height:12px; }
-.q-drag{ color:var(--text-dim); cursor:grab; display:flex; touch-action:none; }
+.q-drag{
+  width:28px; height:36px; margin:-8px -8px; flex:0 0 28px;
+  align-items:center; justify-content:center;
+  color:var(--text-dim); cursor:grab; display:flex; touch-action:none;
+  -webkit-tap-highlight-color:transparent;
+}
 .q-drag svg{ width:12px; height:12px; }
 .q-row.dragging{ touch-action:none; }
 

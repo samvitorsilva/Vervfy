@@ -2848,6 +2848,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     startIndex = getIndex();
     dragging = false;
     moved = false;
+    e.stopPropagation();
     handle.setPointerCapture?.(e.pointerId);
     if(longPress){
       longPressTimer = setTimeout(()=>{
@@ -2860,7 +2861,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     if(startIndex < 0) return;
     const distance = Math.hypot(e.clientX-startX, e.clientY-startY);
     if(longPress && !dragging){
-      if(distance > 10) clearLongPress();
+      if(distance > 24) clearLongPress();
       return;
     }
     if(!dragging && distance < 8) return;
