@@ -822,7 +822,7 @@ body.mini-mode .mini-player{ display:block; }
   width:28px; height:36px; margin:-8px -8px; flex:0 0 28px;
   align-items:center; justify-content:center;
   color:var(--text-dim); cursor:grab; display:flex; touch-action:none;
-  -webkit-tap-highlight-color:transparent;
+  -webkit-tap-highlight-color:transparent; -webkit-touch-callout:none;
 }
 .q-drag svg{ width:12px; height:12px; }
 .q-row.dragging{ touch-action:none; }

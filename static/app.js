@@ -2824,7 +2824,6 @@ function removeQueueSlot(i){
 
 function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
   let startX = 0, startY = 0, dragging = false, moved = false, startIndex = -1, longPressTimer = null;
-  const handle = row.querySelector(".q-drag") || row;
   const targetRowAt = clientY=>{
     const rows = [...row.parentElement.querySelectorAll(".q-row")];
     if(!rows.length) return null;
@@ -2840,8 +2839,9 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
       longPressTimer = null;
     }
   };
-  handle.addEventListener("pointerdown", e=>{
+  row.addEventListener("pointerdown", e=>{
     if(e.pointerType === "mouse") return;
+    if(longPress && !e.target.closest(".q-drag")) return;
     if(longPress) row.draggable = false;
     startX = e.clientX;
     startY = e.clientY;
@@ -2849,7 +2849,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     dragging = false;
     moved = false;
     e.stopPropagation();
-    handle.setPointerCapture?.(e.pointerId);
+    row.setPointerCapture?.(e.pointerId);
     if(longPress){
       longPressTimer = setTimeout(()=>{
         dragging = true;
@@ -2857,7 +2857,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
       }, 300);
     }
   });
-  handle.addEventListener("pointermove", e=>{
+  row.addEventListener("pointermove", e=>{
     if(startIndex < 0) return;
     const distance = Math.hypot(e.clientX-startX, e.clientY-startY);
     if(longPress && !dragging){
@@ -2880,7 +2880,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     if(startIndex < 0) return;
     clearLongPress();
     const target = targetRowAt(e.clientY);
-    if(handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    if(row.hasPointerCapture?.(e.pointerId)) row.releasePointerCapture(e.pointerId);
     row.classList.remove("dragging");
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
     if(dragging && moved && target){
@@ -2893,9 +2893,9 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     dragging = false;
     if(longPress) row.draggable = true;
   };
-  handle.addEventListener("pointerup", finish);
-  handle.addEventListener("pointercancel", finish);
-  handle.addEventListener("lostpointercapture", clearLongPress);
+  row.addEventListener("pointerup", finish);
+  row.addEventListener("pointercancel", finish);
+  row.addEventListener("lostpointercapture", clearLongPress);
 }
 
 async function removeTrack(t){
