@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 
@@ -16,6 +17,59 @@ from sqlalchemy.exc import IntegrityError
 from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, User
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
+
+try:
+    import redis
+except ImportError:  # pragma: no cover - dependency is required in production
+    redis = None
+
+
+class RequestThrottle:
+    """Fixed-window limiter with Redis sharing across workers and instances."""
+
+    def __init__(self, redis_url: str | None = None):
+        self._redis = None
+        self._local: dict[str, tuple[int, float]] = {}
+        self._lock = threading.Lock()
+        if redis_url:
+            if redis is None:
+                raise RuntimeError("redis is required when REDIS_URL is configured")
+            self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
+
+    def allow(self, key: str, limit: int, window_seconds: int) -> bool:
+        now = time.time()
+        if self._redis is not None:
+            redis_key = f"vervfy:ratelimit:{key}"
+            try:
+                with self._redis.pipeline(transaction=True) as pipe:
+                    count, _ = pipe.incr(redis_key).expire(redis_key, window_seconds).execute()
+                return int(count) <= limit
+            except redis.RedisError as exc:
+                raise RuntimeError("rate-limit backend unavailable") from exc
+
+        with self._lock:
+            count, expires_at = self._local.get(key, (0, now))
+            if now >= expires_at:
+                count, expires_at = 0, now + window_seconds
+            count += 1
+            self._local[key] = (count, expires_at)
+            if len(self._local) > 10_000:
+                self._local = {
+                    item_key: item
+                    for item_key, item in self._local.items()
+                    if item[1] > now
+                }
+            return count <= limit
+
+    def discard(self, key: str) -> None:
+        if self._redis is not None:
+            try:
+                self._redis.delete(f"vervfy:ratelimit:{key}")
+            except redis.RedisError as exc:
+                raise RuntimeError("rate-limit backend unavailable") from exc
+            return
+        with self._lock:
+            self._local.pop(key, None)
 
 
 # ---------------------------------------------------------------- user store
@@ -143,13 +197,18 @@ class LoginThrottle:
     MAX_ATTEMPTS = 5
     WINDOW_SECONDS = 15 * 60
 
-    def __init__(self):
+    def __init__(self, limiter: RequestThrottle | None = None):
         self._failures: dict[str, list[float]] = {}
+        self._limiter = limiter
 
     def _key(self, ip: str, username: str) -> str:
         return f"{ip}:{username.lower()}"
 
     def is_locked(self, ip: str, username: str) -> bool:
+        if self._limiter is not None:
+            return not self._limiter.allow(
+                f"login:{ip}:{username.lower()}", self.MAX_ATTEMPTS, self.WINDOW_SECONDS
+            )
         key = self._key(ip, username)
         now = time.time()
         attempts = [t for t in self._failures.get(key, []) if now - t < self.WINDOW_SECONDS]
@@ -157,10 +216,15 @@ class LoginThrottle:
         return len(attempts) >= self.MAX_ATTEMPTS
 
     def record_failure(self, ip: str, username: str) -> None:
+        if self._limiter is not None:
+            return
         key = self._key(ip, username)
         self._failures.setdefault(key, []).append(time.time())
 
     def clear(self, ip: str, username: str) -> None:
+        if self._limiter is not None:
+            self._limiter.discard(f"login:{ip}:{username.lower()}")
+            return
         self._failures.pop(self._key(ip, username), None)
 
 
@@ -169,11 +233,12 @@ class SignupThrottle:
 
     WINDOW_SECONDS = 60 * 60
 
-    def __init__(self, max_signups: int | None = None):
+    def __init__(self, max_signups: int | None = None, limiter: RequestThrottle | None = None):
         self.max_signups = max_signups if max_signups is not None else int(
             os.environ.get("VERVFY_SIGNUPS_PER_HOUR", "5")
         )
         self._successes: dict[str, list[float]] = {}
+        self._limiter = limiter
 
     def _recent(self, ip: str) -> list[float]:
         now = time.time()
@@ -182,9 +247,13 @@ class SignupThrottle:
         return recent
 
     def is_limited(self, ip: str) -> bool:
+        if self._limiter is not None:
+            return not self._limiter.allow(f"signup:{ip}", self.max_signups, self.WINDOW_SECONDS)
         return len(self._recent(ip)) >= self.max_signups
 
     def record_success(self, ip: str) -> None:
+        if self._limiter is not None:
+            return
         self._recent(ip).append(time.time())
 
 
@@ -214,4 +283,12 @@ def verify_api_csrf(request: Request) -> None:
 # --------------------------------------------------------------------- misc
 
 def client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    trusted_hops = int(os.environ.get("VERVFY_TRUSTED_PROXY_HOPS", "0"))
+    if trusted_hops <= 0:
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "")
+    addresses = [item.strip() for item in forwarded.split(",") if item.strip()]
+    if len(addresses) >= trusted_hops:
+        return addresses[-trusted_hops]
+    return peer

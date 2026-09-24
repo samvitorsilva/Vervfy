@@ -66,7 +66,15 @@ def _validate_url(url: str) -> None:
         host = parts.hostname or ""
     except ValueError:
         host = ""
-    if parts.scheme not in ("http", "https") or not _HOST_RE.match(host) or parts.path.strip("/"):
+    if (
+        parts.scheme != "https"
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or not _HOST_RE.match(host)
+        or parts.path.strip("/")
+    ):
         raise StorageError(
             "SUPABASE_URL is not a valid project URL - it must look like https://<project-ref>.supabase.co "
             "(no path, and the secret key belongs in SUPABASE_SERVICE_KEY, not here)"
@@ -91,12 +99,14 @@ def _client() -> httpx.Client:
     if not (url and key):
         raise StorageError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
     _validate_url(url)
-    return httpx.Client(
+    client = httpx.Client(
         base_url=f"{url}/storage/v1",
         headers={"Authorization": f"Bearer {key}", "apikey": key},
         timeout=httpx.Timeout(60.0, connect=10.0),
         transport=_transport,
     )
+    client.headers["Authorization"] = "Bearer " + key
+    return client
 
 
 def _object_url(path: str, *, authenticated: bool = False) -> str:
@@ -172,6 +182,13 @@ def read_range(path: str, start: int, end: int) -> bytes:
     if resp.status_code == 200:  # server ignored Range; slice locally
         return resp.content[start : end + 1]
     raise StorageError(f"read failed ({resp.status_code}): {resp.text[:200]}")
+
+
+def read_all(path: str, size: int) -> bytes:
+    """Read a staged object for worker processing, bounded by its known size."""
+    if size < 0:
+        raise StorageError("invalid staged object size")
+    return read_range(path, 0, max(size - 1, 0)) if size else b""
 
 
 @_wrap_errors

@@ -7,8 +7,23 @@ URL in tests without changing application code.
 from __future__ import annotations
 
 import os
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine
+from contextvars import ContextVar
+from sqlalchemy import (
+    Boolean,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+
+current_tenant_id: ContextVar[str | None] = ContextVar("current_tenant_id", default=None)
 
 
 def database_url() -> str:
@@ -26,6 +41,18 @@ def database_url() -> str:
 DATABASE_URL = database_url()
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+@event.listens_for(SessionLocal, "after_begin")
+def set_database_tenant(session, transaction, connection) -> None:
+    """Pass the authenticated tenant into PostgreSQL RLS policies."""
+    del session, transaction
+    tenant_id = current_tenant_id.get()
+    if tenant_id and connection.dialect.name == "postgresql":
+        connection.execute(
+            text("SELECT set_config('app.current_user_id', :tenant_id, true)"),
+            {"tenant_id": tenant_id},
+        )
 
 
 class Base(DeclarativeBase):
@@ -72,6 +99,13 @@ class TrackRecord(Base):
 
 class Favorite(Base):
     __tablename__ = "favorites"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "track_id"],
+            ["tracks.user_id", "tracks.id"],
+            ondelete="CASCADE",
+        ),
+    )
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     track_id: Mapped[str] = mapped_column(String(64), primary_key=True)
 
@@ -89,3 +123,15 @@ class PlaylistTrack(Base):
     playlist_id: Mapped[str] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"), primary_key=True)
     track_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class UploadJob(Base):
+    __tablename__ = "upload_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(600), nullable=False, unique=True)
+    track_id: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
+    error: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)

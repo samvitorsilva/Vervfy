@@ -15,6 +15,7 @@ import re
 import secrets
 import time
 import unicodedata
+import uuid
 from typing import Annotated
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
@@ -29,11 +30,13 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.concurrency import run_in_threadpool
 
 import audio_store
 import auth
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord
-from library import Library, track_id_for_bytes
+from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, current_tenant_id
+from library import Library, UploadQuotaExceeded, track_id_for_bytes
+import upload_queue
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -77,10 +80,22 @@ app = FastAPI(
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
+environment = (
+    os.environ.get("VERVFY_ENVIRONMENT")
+    or os.environ.get("ENVIRONMENT", "development")
+).lower()
+is_production = environment in {"production", "prod"}
+async_uploads = os.environ.get("VERVFY_ASYNC_UPLOADS") == "1"
 https_only = (
     os.environ.get("VERVFY_HTTPS_ONLY")
     or os.environ.get("AURALIS_HTTPS_ONLY", "0")
 ) == "1"
+if is_production and not https_only:
+    raise RuntimeError("VERVFY_HTTPS_ONLY=1 is required in production")
+if is_production and not os.environ.get("REDIS_URL"):
+    raise RuntimeError("REDIS_URL is required in production for distributed rate limiting")
+if is_production and not async_uploads:
+    raise RuntimeError("VERVFY_ASYNC_UPLOADS=1 is required in production")
 # For same-origin app hosting, lax is sufficient; only use the stricter None
 # setting when explicitly needed.
 configured_same_site = (
@@ -89,6 +104,8 @@ configured_same_site = (
 ).lower()
 if configured_same_site not in {"lax", "strict", "none"}:
     configured_same_site = "lax"
+if is_production and configured_same_site == "none" and not https_only:
+    raise RuntimeError("SameSite=None requires HTTPS in production")
 app.add_middleware(
     SessionMiddleware,
     secret_key=_load_or_create_secret_key(),
@@ -111,6 +128,26 @@ app.add_middleware(
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
+        path = request.url.path
+        if path.startswith("/api/"):
+            limit, window = (10, 10 * 60) if path == "/api/library/upload" else (120, 60)
+            key = f"api:{auth.client_ip(request)}:{path if limit == 10 else 'mutations'}"
+            try:
+                allowed = request_throttle.allow(key, limit, window)
+            except RuntimeError:
+                return Response("Rate-limit service unavailable", status_code=503)
+            if not allowed:
+                return Response("Too many requests", status_code=429, headers={"Retry-After": str(window)})
+        elif path in {"/login", "/register"}:
+            try:
+                allowed = request_throttle.allow(
+                    f"auth:{auth.client_ip(request)}:{path}", 30, 15 * 60
+                )
+            except RuntimeError:
+                return Response("Rate-limit service unavailable", status_code=503)
+            if not allowed:
+                return Response("Too many requests", status_code=429, headers={"Retry-After": "900"})
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -124,8 +161,9 @@ async def add_security_headers(request: Request, call_next):
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
-login_throttle = auth.LoginThrottle()
-signup_throttle = auth.SignupThrottle()
+request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
+login_throttle = auth.LoginThrottle(limiter=request_throttle)
+signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 log = logging.getLogger("vervfy")
 MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
@@ -569,6 +607,7 @@ def current_user_row(request: Request):
     if request.session.get("sv", 0) != row["session_version"]:
         request.session.clear()
         return None
+    current_tenant_id.set(row["id"])
     return row
 
 
@@ -614,6 +653,9 @@ def _track_payload(track) -> dict:
 
 @app.on_event("startup")
 def startup() -> None:
+    if is_production:
+        app.state.is_first_account = user_store.count() == 0
+        return
     # create_all does not add columns to an existing deployment. Keep older
     # databases usable while Alembic catches up on the next deployment.
     from sqlalchemy import inspect, text
@@ -831,7 +873,7 @@ async def upload_account_photo(
         with Image.open(BytesIO(photo_data)) as image:
             image.verify()
             image_format = (image.format or "").upper()
-    except (UnidentifiedImageError, OSError):
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
         raise HTTPException(status_code=400, detail="That file is not a valid image")
     allowed_formats = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif"}
     photo_mime = allowed_formats.get(image_format)
@@ -1092,6 +1134,27 @@ async def upload_track(
     if not buffer:
         raise HTTPException(status_code=400, detail="Empty upload")
     library = get_library(user["id"])
+    if async_uploads:
+        job_id = uuid.uuid4().hex
+        suffix = os.path.splitext(os.path.basename(file.filename))[1].lower()
+        staging_path = f"{user['id']}/.staging/{job_id}{suffix}"
+        try:
+            audio_store.upload(staging_path, buffer, audio_store.guess_content_type(file.filename))
+            with SessionLocal() as session:
+                session.add(UploadJob(
+                    id=job_id,
+                    user_id=user["id"],
+                    filename=file.filename,
+                    storage_path=staging_path,
+                    created_at=time.time(),
+                ))
+                session.commit()
+            upload_queue.enqueue(job_id)
+        except Exception as exc:
+            audio_store.delete_quietly(staging_path)
+            log.exception("could not queue upload")
+            raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
+        return {"id": job_id, "status": "processing"}
     track_id = track_id_for_bytes(buffer)
     if library.get(track_id) is None:
         used_bytes = library.total_bytes()
@@ -1104,13 +1167,44 @@ async def upload_track(
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             )
     try:
-        track = library.add_upload(file.filename, buffer)
+        track = await run_in_threadpool(
+            library.add_upload,
+            file.filename,
+            buffer,
+            quota_bytes=USER_QUOTA_BYTES,
+            max_tracks=MAX_TRACKS_PER_USER,
+        )
+    except UploadQuotaExceeded:
+        used_bytes = library.total_bytes()
+        used_mb = used_bytes / (1024 * 1024)
+        quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
+        ) from None
     except audio_store.StorageError as exc:
         log.exception("audio storage failed during upload")
         raise HTTPException(status_code=502, detail=f"Audio storage error: {str(exc)[:200]}") from None
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
     return _track_payload(track)
+
+
+@app.get("/api/library/upload/{job_id}")
+def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
+    with SessionLocal() as session:
+        job = session.scalar(select(UploadJob).where(
+            UploadJob.id == job_id,
+            UploadJob.user_id == user["id"],
+        ))
+        if not job:
+            raise HTTPException(status_code=404, detail="Upload job not found")
+        payload = {"id": job.id, "status": job.status, "error": job.error}
+        if job.track_id:
+            track = get_library(user["id"]).get(job.track_id)
+            if track:
+                payload["track"] = _track_payload(track)
+        return payload
 
 
 @app.delete("/api/tracks/{track_id}")

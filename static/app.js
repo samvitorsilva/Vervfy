@@ -1188,7 +1188,25 @@ async function uploadFileToServer(file){
     error.status = res.status;
     throw error;
   }
-  return trackFromServer(await res.json());
+  const payload = await res.json();
+  if(res.status === 202 || payload.status === "processing"){
+    for(let attempt = 0; attempt < 60; attempt++){
+      await wait(1000);
+      const statusRes = await fetch(`/api/library/upload/${encodeURIComponent(payload.id)}`);
+      if(!statusRes.ok) throw new Error("Could not check upload status");
+      const status = await statusRes.json();
+      if(status.status === "completed"){
+        if(status.track) return trackFromServer(status.track);
+        await loadServerLibrary(true);
+        const refreshed = state.tracks.find(t => t.id === status.track?.id);
+        if(refreshed) return refreshed;
+        throw new Error("Upload completed but the track is not available yet");
+      }
+      if(status.status === "failed") throw new Error(status.error || "Upload processing failed");
+    }
+    throw new Error("Upload is still processing; refresh the library shortly");
+  }
+  return trackFromServer(payload);
 }
 
 async function deleteTrackOnServer(trackId){

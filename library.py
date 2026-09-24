@@ -6,7 +6,9 @@ from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 import audio_store
-from db import SessionLocal, TrackRecord
+from db import SessionLocal, TrackRecord, User
+
+Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "25000000"))
 try:
     from mutagen import File as MutagenFile
     from mutagen.id3 import APIC, ID3
@@ -19,6 +21,10 @@ BytesLike = bytes | bytearray | memoryview
 @dataclass
 class Track:
     id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
+
+
+class UploadQuotaExceeded(RuntimeError):
+    """Raised when an upload no longer fits the account quota at commit time."""
 
 def track_id_for_bytes(data: BytesLike) -> str:
     size, sample_size = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:sample_size])
@@ -110,7 +116,15 @@ class Library:
             s.commit()
             return self._track(row)
 
-    def add_upload(self, filename: str, data: BytesLike):
+    def add_upload(
+        self,
+        filename: str,
+        data: BytesLike,
+        *,
+        quota_bytes: int | None = None,
+        max_tracks: int | None = None,
+        storage_path_override: str | None = None,
+    ):
         safe=os.path.basename(filename.replace("\\","/")).replace("\x00","") or "upload.mp3"
         if os.path.splitext(safe)[1].lower() not in AUDIO_EXTENSIONS:return None
         track_id=track_id_for_bytes(data)
@@ -121,13 +135,38 @@ class Library:
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta; output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
         storage_path=None
-        if audio_store.enabled():
+        if storage_path_override:
+            storage_path = storage_path_override
+        elif audio_store.enabled():
             # Audio goes to Supabase Storage; Postgres keeps only the object path.
             storage_path=audio_store.object_path(self.user_id,track_id,safe)
             audio_store.upload(storage_path,data,audio_store.guess_content_type(safe))
         row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
         try:
-            with SessionLocal() as s:s.add(row);s.commit();return self._track(row)
+            with SessionLocal() as s:
+                if s.bind.dialect.name == "postgresql":
+                    # Serialize quota checks for this account across workers.
+                    s.get(User, self.user_id, with_for_update=True)
+                if quota_bytes is not None or max_tracks is not None:
+                    current_bytes = s.scalar(
+                        select(func.coalesce(func.sum(TrackRecord.size_bytes), 0)).where(
+                            TrackRecord.user_id == self.user_id
+                        )
+                    ) or 0
+                    current_count = s.scalar(
+                        select(func.count()).select_from(TrackRecord).where(
+                            TrackRecord.user_id == self.user_id
+                        )
+                    ) or 0
+                    if (
+                        quota_bytes is not None and current_bytes + len(data) > quota_bytes
+                    ) or (
+                        max_tracks is not None and current_count >= max_tracks
+                    ):
+                        raise UploadQuotaExceeded()
+                s.add(row)
+                s.commit()
+                return self._track(row)
         except Exception:
             # Don't leave an orphaned object behind — unless a concurrent upload of
             # the same file already owns it (or we can't tell).

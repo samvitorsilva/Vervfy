@@ -189,3 +189,23 @@ def test_cookie_without_session_version_is_valid_at_zero(app_module):
     old_client = TestClient(server.app)
     old_client.cookies.set("auralis_session", old_cookie)
     assert old_client.get("/api/me").status_code == 200
+
+
+def test_authenticated_user_cannot_access_another_users_library(app_module):
+    server, client_a = app_module
+    _register(client_a, username="alice")
+    client_b = TestClient(server.app)
+    _register(client_b, username="bob")
+
+    csrf_a = client_a.get("/api/csrf").json()["csrf_token"]
+    response = client_a.put(
+        "/api/library/state",
+        headers={"X-CSRF-Token": csrf_a},
+        json={"favorites": [], "playlists": [{"id": "private", "name": "Private", "trackIds": []}]},
+    )
+    assert response.status_code == 200
+    assert client_b.get("/api/library/state").json()["playlists"] == []
+    assert client_b.get("/api/tracks").json()["tracks"] == []
+    assert client_b.delete("/api/tracks/not-owned", headers={
+        "X-CSRF-Token": client_b.get("/api/csrf").json()["csrf_token"]
+    }).status_code == 404
