@@ -1152,6 +1152,35 @@ async function loadServerLibrary(force = false){
   return serverLibraryRequest;
 }
 
+let librarySyncInFlight = false;
+async function syncServerLibrary(){
+  if(librarySyncInFlight || document.hidden || !serverLibraryLoaded) return;
+  librarySyncInFlight = true;
+  try{
+    const response = await fetch("/api/tracks", {cache:"no-store"});
+    if(!response.ok) return;
+    const remoteTracks = (await response.json()).tracks || [];
+    const previousIds = new Set(state.tracks.map(track => track.id));
+    const offlineTracks = await loadOfflineTracks();
+    const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
+    const remoteById = new Map(remoteTracks.map(payload => {
+      const track = trackFromServer(payload);
+      return [track.id, offlineById.get(track.id) || track];
+    }));
+    const localOnly = state.tracks.filter(track => track.offline && !remoteById.has(track.id));
+    state.tracks = [...remoteById.values(), ...localOnly];
+    const added = state.tracks.filter(track => !previousIds.has(track.id));
+    if(added.length){
+      render();
+      toast(`${added.length} new song${added.length === 1 ? "" : "s"} synced.`);
+    }
+  }catch(error){
+    console.warn("Background library sync failed", error);
+  }finally{
+    librarySyncInFlight = false;
+  }
+}
+
 /* ============================================================
    CSRF — fetched once per page load, sent on any state-changing
    /api/* call (upload, delete, password change).
@@ -1337,15 +1366,26 @@ function ensureAudioGraph(){
   if(audioCtx) return true;
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if(!AudioContextClass) return false;
-  audioCtx = new AudioContextClass();
-  sourceNode = audioCtx.createMediaElementSource(audioEl);
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 256;
-  freqData = new Uint8Array(analyser.frequencyBinCount);
-  waveData = new Uint8Array(analyser.fftSize);
-  sourceNode.connect(analyser);
-  analyser.connect(audioCtx.destination);
-  return true;
+  try{
+    audioCtx = new AudioContextClass();
+    sourceNode = audioCtx.createMediaElementSource(audioEl);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    waveData = new Uint8Array(analyser.fftSize);
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    return true;
+  }catch(error){
+    console.warn("Visualizer audio analysis unavailable", error);
+    try{ audioCtx?.close(); }catch(_){}
+    audioCtx = null;
+    sourceNode = null;
+    analyser = null;
+    freqData = null;
+    waveData = null;
+    return false;
+  }
 }
 
 function currentTrack(){
@@ -4010,7 +4050,10 @@ on("#dropOverlay", "click", hideDropOverlay);
 /* pause visualizer rAF when tab hidden to save CPU */
 document.addEventListener("visibilitychange", ()=>{
   if(document.hidden){ if(rafViz){ cancelAnimationFrame(rafViz); rafViz=null; } }
-  else { if($("#vizOverlay")?.classList.contains("open") && !rafViz) drawViz(); }
+  else {
+    if($("#vizOverlay")?.classList.contains("open") && !rafViz) drawViz();
+    syncServerLibrary();
+  }
 });
 
 /* ============================================================
@@ -4038,6 +4081,7 @@ async function init(){
       render();
       if(count) toast(`Loaded ${count} saved track${count!==1?"s":""}.`);
     });
+    window.setInterval(syncServerLibrary, 15000);
   }catch(e){
     console.error("Vervfy init failed", e);
     toast("Something went wrong loading the library.");

@@ -209,3 +209,42 @@ def test_authenticated_user_cannot_access_another_users_library(app_module):
     assert client_b.delete("/api/tracks/not-owned", headers={
         "X-CSRF-Token": client_b.get("/api/csrf").json()["csrf_token"]
     }).status_code == 404
+
+
+def test_artist_profile_uses_wikipedia_when_audiodb_is_unavailable(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def fake_urlopen(request, timeout):
+        url = request.full_url
+        if "theaudiodb.com" in url:
+            return FakeResponse({"Message": "Not found"})
+        if "w/api.php" in url:
+            return FakeResponse({"query": {"search": [{"title": "Example Artist"}]}})
+        return FakeResponse(
+            {
+                "extract": "Example Artist is a musician known for influential recordings.",
+                "content_urls": {
+                    "desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist"}
+                },
+            }
+        )
+
+    monkeypatch.setattr(server, "urlopen", fake_urlopen)
+    server._artist_profile_cache.clear()
+    profile = server._lookup_artist_profile("Example Artist")
+
+    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
+    assert profile["source"] == "Wikipedia"

@@ -17,7 +17,7 @@ import time
 import unicodedata
 import uuid
 from typing import Annotated
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from pathlib import Path
 
@@ -521,7 +521,8 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
     """Get an inline artist profile from public catalogs.
 
     AudioDB provides structured artist facts for profiles that have not been
-    identity-checked against an artist or artist-specific profile.
+    identity-checked against an artist or artist-specific profile. Wikipedia
+    is the fallback because AudioDB occasionally returns a service-wide miss.
     """
     key = _artist_search_key(name)
     if not key:
@@ -580,6 +581,55 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
             break
     except (OSError, ValueError, json.JSONDecodeError):
         pass
+
+    if not profile:
+        try:
+            for candidate_name in _artist_name_candidates(name):
+                search_query = urlencode(
+                    {
+                        "action": "query",
+                        "list": "search",
+                        "srsearch": f'"{candidate_name}"',
+                        "srnamespace": "0",
+                        "srlimit": "5",
+                        "format": "json",
+                    }
+                )
+                search_request = UrlRequest(
+                    f"https://en.wikipedia.org/w/api.php?{search_query}",
+                    headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
+                )
+                with urlopen(search_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
+                    results = json.load(response).get("query", {}).get("search", [])
+                match, matched_name = _matching_catalog_artist(
+                    results, [candidate_name], "title"
+                )
+                if not match:
+                    continue
+                title = str(match["title"])
+                summary_request = UrlRequest(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}",
+                    headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
+                )
+                with urlopen(summary_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
+                    summary = json.load(response)
+                bio = _concise_artist_bio(summary.get("extract"))
+                if not bio:
+                    continue
+                profile = {
+                    "bio": bio,
+                    "source": "Wikipedia",
+                    "source_url": (
+                        summary.get("content_urls", {})
+                        .get("desktop", {})
+                        .get("page", "")
+                    ),
+                }
+                if matched_name != name.strip():
+                    profile["lookup_name"] = matched_name
+                break
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            pass
 
     # Keep successful profiles for a day, but retry a catalog miss soon. Public
     # catalog records are occasionally incomplete or temporarily unavailable.
