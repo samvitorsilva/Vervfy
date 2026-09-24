@@ -75,7 +75,7 @@ window.fetch = async (...args) => {
 const state = {
   tracks: [],            // {id,title,artist,album,year,art,duration,favorite,file,fingerprint}
   playlists: [],         // {id,name,trackIds:[]}
-  view: "library",       // library | playlists | artists | favorites | queue | playlist:<id> | artist:<name>
+  view: "library",       // library | playlists | artists | favorites | playlist:<id> | artist:<name>
   listMode: "grid",
   search: "",
   queue: [],             // array of track ids, the play order
@@ -1541,7 +1541,6 @@ function viewPlaybackContext(){
     const playlist = state.playlists.find(p => p.id === state.view.slice(9));
     return playlist ? playlist.name : "Playlist";
   }
-  if(state.view === "queue") return "Queue";
   if(state.view === "artists" || state.view.startsWith("artist:")) return "Artist radio";
   return "Library";
 }
@@ -2375,7 +2374,6 @@ function render(){
   else if(state.view === "playlists") renderPlaylistsView();
   else if(state.view === "artists") renderArtistsView();
   else if(state.view.startsWith("artist:")) renderArtistDetailView();
-  else if(state.view === "queue") renderQueueView();
   else renderTrackListView();
   renderQueuePanel();
   renderLibraryHighlight();
@@ -2383,7 +2381,7 @@ function render(){
 }
 
 function renderTopbar(){
-  const titles = { library:"Library", favorites:"Favorites", offline:"Offline", playlists:"Playlists", artists:"Artists", queue:"Queue", account:"Account" };
+  const titles = { library:"Library", favorites:"Favorites", offline:"Offline", playlists:"Playlists", artists:"Artists", account:"Account" };
   let title = titles[state.view];
   if(!title && state.view.startsWith("playlist:")){
     const pl = state.playlists.find(p=>p.id===state.view.slice(9));
@@ -2406,7 +2404,7 @@ function renderTopbar(){
   }
   else count = getVisibleTracks().length;
   $("#viewCount").textContent = (state.view!=="account" && state.tracks.length) ? `· ${count}` : "";
-  $("#viewToggle").style.display = (state.view==="playlists"||state.view==="artists"||state.view==="queue"||state.view==="account") ? "none" : "flex";
+  $("#viewToggle").style.display = (state.view==="playlists"||state.view==="artists"||state.view==="account") ? "none" : "flex";
   $(".search-wrap").style.display = state.view==="account" ? "none" : "flex";
   $("#btnImportTop").style.display = state.view==="account" ? "none" : "flex";
   $$(".rail-btn[data-view]").forEach(b=>{
@@ -2744,18 +2742,34 @@ async function shareTrack(t){
 }
 function openPlaylistSubmenu(e, t, parentMenu){
   e.stopPropagation();
-  const old = parentMenu.querySelector(".menu-sub"); if(old) old.remove();
+  const old = document.querySelector(".menu-sub"); if(old) old.remove();
+  const anchor = e.currentTarget?.closest?.('[data-act="playlist"]') || e.target.closest?.('[data-act="playlist"]');
+  if(!anchor) return;
   const sub = document.createElement("div");
   sub.className = "menu menu-sub";
   const items = state.playlists.map(p=>`<div class="menu-item" data-pl="${escapeHtml(p.id)}">${escapeHtml(p.name)}</div>`).join("");
   sub.innerHTML = items + `<div class="menu-sep"></div><div class="menu-item" data-pl="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>New playlist…</div>`;
-  parentMenu.appendChild(sub);
+  document.body.appendChild(sub);
   requestAnimationFrame(()=>{
-    const parentRect = parentMenu.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
     const subRect = sub.getBoundingClientRect();
-    const left = Math.max(8, Math.min(window.innerWidth - subRect.width - 8, parentRect.left));
-    sub.style.left = `${left}px`;
-    sub.style.top = `${parentRect.bottom + 6}px`;
+    const viewportPadding = 8;
+    const bottomReserved = (() => {
+      const nowbar = $("#nowbar");
+      if(!nowbar || nowbar.classList.contains("hidden")) return 0;
+      const rect = nowbar.getBoundingClientRect();
+      return rect.top > 0 && rect.top < window.innerHeight ? window.innerHeight - rect.top : 0;
+    })();
+    const minTop = viewportPadding;
+    const maxBottom = Math.max(minTop, window.innerHeight - Math.max(viewportPadding, bottomReserved + viewportPadding));
+    const rightLeft = anchorRect.right + 6;
+    const leftLeft = anchorRect.left - subRect.width - 6;
+    const left = rightLeft + subRect.width <= window.innerWidth - viewportPadding
+      ? rightLeft
+      : Math.max(viewportPadding, leftLeft);
+    const top = Math.max(minTop, Math.min(anchorRect.top, maxBottom - subRect.height));
+    sub.style.left = `${Math.max(viewportPadding, Math.min(left, window.innerWidth - subRect.width - viewportPadding))}px`;
+    sub.style.top = `${top}px`;
   });
   sub.querySelectorAll("[data-pl]").forEach(item=>{
     item.addEventListener("click", ()=>{
@@ -2844,14 +2858,14 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     dragging = true;
     e.preventDefault();
     row.classList.add("dragging");
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-i]");
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
     if(target && target !== row) target.classList.add("drag-over");
   });
   const finish = e=>{
     if(startIndex < 0) return;
     clearLongPress();
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-qi],[data-i]");
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-i]");
     if(handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
     row.classList.remove("dragging");
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
@@ -2916,7 +2930,6 @@ function addToQueue(t){
   if(state.queueIndex < 0) state.queueIndex = 0;
   toast(`Added “${t.title}” to the queue.`);
   renderQueuePanel();
-  if(state.view === "queue") renderQueueView();
 }
 
 // Insert directly after the current song, without disturbing the active slot.
@@ -2927,7 +2940,6 @@ function playNextTrack(t){
   if(state.queueIndex < 0) state.queueIndex = 0;
   toast(`“${t.title}” will play next.`);
   renderQueuePanel();
-  if(state.view === "queue") renderQueueView();
 }
 
 function addTrackToPlaylist(playlistId, t, {quiet=false}={}){
@@ -3482,85 +3494,6 @@ function renderArtistDetailView(){
   if(list.length) wireTrackInteractions(list);
 }
 
-/* ---------- queue view (full page) ---------- */
-function renderQueueView(){
-  const content = $("#content");
-  const addBtn = `<button class="btn" id="btnAddQueueView" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      Add from library
-    </button>`;
-  if(state.queue.length===0){
-    content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>Queue is empty</h3><p>Add songs from your library to build an up-next list.</p><div style="margin-top:6px;">${addBtn}</div></div>`;
-    $("#btnAddQueueView")?.addEventListener("click", openQueueLibraryPicker);
-    return;
-  }
-  const rows = state.queue.map((id,i)=>{
-    const t = state.tracks.find(x=>x.id===id);
-    if(!t) return "";
-    const playing = i === state.queueIndex;
-    const title = escapeHtml(t.title);
-    return `
-    <div class="row" data-id="${escapeHtml(t.id)}" data-qi="${i}" draggable="true">
-      <div class="row-idx"><span class="num">${i+1}</span></div>
-      <div class="row-title-wrap">
-        <img class="row-art" src="${escapeHtml(t.art)}" alt="">
-        <div class="row-title-stack">
-          <div class="row-title" title="${escapeHtml(title)}">${title}</div>
-          <div class="row-meta"><div class="row-artist">${artistLinksMarkup(t)}</div></div>
-        </div>
-      </div>
-      <div class="row-time">${t.duration?fmtTime(t.duration):"--:--"}</div>
-      <div class="row-actions"><button data-act="remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
-    </div>`;
-  }).join("");
-  content.innerHTML = `<div class="queue-toolbar">${addBtn}</div><div class="list">${rows}</div>`;
-  $("#btnAddQueueView")?.addEventListener("click", openQueueLibraryPicker);
-  let dragSrcIndex = null;
-  $$(".row[data-qi]").forEach(row=>{
-    row.addEventListener("click",(e)=>{
-      if(e.target.closest("button")) return;
-      if(row.dataset.dragged){
-        delete row.dataset.dragged;
-        return;
-      }
-      capturePlaybackContext();
-      state.queueIndex = +row.dataset.qi; playCurrent();
-    });
-    row.querySelector('[data-act="remove"]').addEventListener("click",(e)=>{
-      e.stopPropagation();
-      removeQueueSlot(+row.dataset.qi);
-      render();
-    });
-    // drag-to-reorder: the row was already marked draggable="true" with a
-    // drag-handle-style layout, but nothing ever listened for the drag
-    // events, so dragging a queue row did nothing (and could even trip the
-    // window-level "drop files to import" overlay). Wired up for real here.
-    row.addEventListener("dragstart", e=>{
-      dragSrcIndex = +row.dataset.qi;
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", String(dragSrcIndex));
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", ()=> row.classList.remove("dragging"));
-    row.addEventListener("dragover", e=>{
-      if(dragSrcIndex===null) return;
-      e.preventDefault(); e.dataTransfer.dropEffect = "move";
-      row.classList.add("drag-over");
-    });
-    row.addEventListener("dragleave", ()=> row.classList.remove("drag-over"));
-    row.addEventListener("drop", e=>{
-      if(dragSrcIndex===null) return;
-      e.preventDefault(); row.classList.remove("drag-over");
-      const toIndex = +row.dataset.qi;
-      if(dragSrcIndex !== toIndex) reorderQueue(dragSrcIndex, toIndex);
-      dragSrcIndex = null;
-      renderQueueView(); renderQueuePanel();
-    });
-    wireTouchQueueDrag(row, ()=>+row.dataset.qi, ()=>{ renderQueueView(); renderQueuePanel(); }, {longPress:true});
-  });
-  wireArtistLinks(content);
-}
-
 /* ---------- queue side panel ---------- */
 function renderQueuePanel(){
   const el = $("#queueList");
@@ -3594,7 +3527,6 @@ function renderQueuePanel(){
       e.stopPropagation();
       removeQueueSlot(+row.dataset.i);
       renderQueuePanel();
-      if(state.view==="queue") renderQueueView();
     });
     row.addEventListener("dragstart", e=>{
       dragSrcIndex = +row.dataset.i;
@@ -3616,11 +3548,9 @@ function renderQueuePanel(){
       if(dragSrcIndex !== toIndex) reorderQueue(dragSrcIndex, toIndex);
       dragSrcIndex = null;
       renderQueuePanel();
-      if(state.view==="queue") renderQueueView();
     });
     wireTouchQueueDrag(row, ()=>+row.dataset.i, ()=>{
       renderQueuePanel();
-      if(state.view==="queue") renderQueueView();
     }, {longPress:true});
   });
 }
