@@ -2823,8 +2823,17 @@ function removeQueueSlot(i){
 }
 
 function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
-  let startX = 0, startY = 0, dragging = false, startIndex = -1, longPressTimer = null;
+  let startX = 0, startY = 0, dragging = false, moved = false, startIndex = -1, longPressTimer = null;
   const handle = row.querySelector(".q-drag") || row;
+  const targetRowAt = clientY=>{
+    const rows = [...row.parentElement.querySelectorAll(".q-row")];
+    if(!rows.length) return null;
+    return rows.reduce((closest, candidate)=>{
+      const distance = Math.abs(clientY - (candidate.getBoundingClientRect().top + candidate.offsetHeight / 2));
+      if(!closest || distance < closest.distance) return {row:candidate, distance};
+      return closest;
+    }, null)?.row || null;
+  };
   const clearLongPress = ()=>{
     if(longPressTimer){
       clearTimeout(longPressTimer);
@@ -2838,6 +2847,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     startY = e.clientY;
     startIndex = getIndex();
     dragging = false;
+    moved = false;
     handle.setPointerCapture?.(e.pointerId);
     if(longPress){
       longPressTimer = setTimeout(()=>{
@@ -2858,18 +2868,21 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
     dragging = true;
     e.preventDefault();
     row.classList.add("dragging");
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-i]");
+    const target = targetRowAt(e.clientY);
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
-    if(target && target !== row) target.classList.add("drag-over");
+    if(target && target !== row){
+      target.classList.add("drag-over");
+      moved = true;
+    }
   });
   const finish = e=>{
     if(startIndex < 0) return;
     clearLongPress();
-    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-i]");
+    const target = targetRowAt(e.clientY);
     if(handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
     row.classList.remove("dragging");
     document.querySelectorAll(".drag-over").forEach(el=>el.classList.remove("drag-over"));
-    if(dragging && target){
+    if(dragging && moved && target){
       const targetIndex = Number(target.dataset.qi ?? target.dataset.i);
       if(startIndex !== targetIndex) reorderQueue(startIndex, targetIndex);
       row.dataset.dragged = "true";
