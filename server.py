@@ -174,6 +174,7 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, str | None]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+AUDIODB_API_KEY = os.environ.get("VERVFY_AUDIODB_API_KEY", "123")
 # A detail page should provide context without pushing a user's music library
 # off screen. Keep catalog descriptions to a compact, scan-friendly blurb.
 MAX_ARTIST_BIO_CHARS = 180
@@ -544,7 +545,7 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
         for candidate_name in _artist_name_candidates(name):
             query = urlencode({"s": candidate_name})
             request = UrlRequest(
-                f"https://www.theaudiodb.com/api/v1/json/2/search.php?{query}",
+                f"https://www.theaudiodb.com/api/v1/json/{AUDIODB_API_KEY}/search.php?{query}",
                 headers={"User-Agent": "Vervfy/1.0"},
             )
             with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
