@@ -131,6 +131,36 @@ def test_library_ids_are_validated(app_module):
     ).status_code == 422
 
 
+def test_favorites_persist_for_owned_tracks(app_module):
+    server, client = app_module
+    _register(client)
+    user = server.user_store.get_by_username("alice")
+    with server.SessionLocal() as session:
+        session.add(server.TrackRecord(
+            id="track-one",
+            user_id=user["id"],
+            filename="song.wav",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            duration=1,
+            has_cover=False,
+            size_bytes=10,
+            cover_data=b"",
+        ))
+        session.commit()
+
+    headers = {"X-CSRF-Token": client.get("/api/csrf").json()["csrf_token"]}
+    saved = client.put(
+        "/api/library/state",
+        headers=headers,
+        json={"favorites": ["track-one"], "playlists": []},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["favorites"] == ["track-one"]
+    assert client.get("/api/library/state").json()["favorites"] == ["track-one"]
+
+
 def test_session_revocation_and_logout_all(app_module):
     server, client_a = app_module
     _register(client_a)

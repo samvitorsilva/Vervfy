@@ -29,6 +29,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.concurrency import run_in_threadpool
 
@@ -174,6 +175,7 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, str | None]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+MAX_ARTIST_CACHE_ENTRIES = 1024
 AUDIODB_API_KEY = os.environ.get("VERVFY_AUDIODB_API_KEY", "123")
 # A detail page should provide context without pushing a user's music library
 # off screen. Keep catalog descriptions to a compact, scan-friendly blurb.
@@ -185,6 +187,17 @@ def _artist_search_key(name: str) -> str:
     normalized = unicodedata.normalize("NFKD", name)
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
     return "".join(c.lower() for c in normalized if c.isalnum())
+
+
+def _cache_artist_result(cache, key: str, value, expires_at: float) -> None:
+    """Keep public catalog caches bounded and discard expired entries opportunistically."""
+    now = time.monotonic()
+    for cached_key, (_, _) in list(cache.items()):
+        if cache[cached_key][0] <= now:
+            del cache[cached_key]
+    if len(cache) >= MAX_ARTIST_CACHE_ENTRIES and key not in cache:
+        del cache[min(cache, key=lambda item: cache[item][0])]
+    cache[key] = (expires_at, value)
 
 
 def _concise_artist_bio(value: object) -> str:
@@ -514,7 +527,7 @@ def _lookup_artist_photo(name: str) -> str | None:
         # Being offline must leave the local library fully usable.
         pass
 
-    _artist_photo_cache[key] = (now + 60 * 60 * 24, photo)
+    _cache_artist_result(_artist_photo_cache, key, photo, now + 60 * 60 * 24)
     return photo
 
 
@@ -533,7 +546,9 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
     if verified_profile:
         # An identity-checked profile must not be replaced with a same-name
         # result from an unauthenticated catalog search.
-        _artist_profile_cache[key] = (now + 60 * 60 * 24, verified_profile)
+        _cache_artist_result(
+            _artist_profile_cache, key, verified_profile, now + 60 * 60 * 24
+        )
         return verified_profile
 
     cached = _artist_profile_cache.get(key)
@@ -635,7 +650,7 @@ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
     # Keep successful profiles for a day, but retry a catalog miss soon. Public
     # catalog records are occasionally incomplete or temporarily unavailable.
     cache_seconds = 60 * 60 * 24 if profile and profile.get("bio") else 10 * 60
-    _artist_profile_cache[key] = (now + cache_seconds, profile)
+    _cache_artist_result(_artist_profile_cache, key, profile, now + cache_seconds)
     return profile
 
 
@@ -658,7 +673,6 @@ def current_user_row(request: Request):
     if request.session.get("sv", 0) != row["session_version"]:
         request.session.clear()
         return None
-    current_tenant_id.set(row["id"])
     return row
 
 
@@ -677,7 +691,12 @@ def require_page_user(request: Request):
     row = current_user_row(request)
     if row is None:
         raise LoginRequired()
-    return row
+    token = current_tenant_id.set(row["id"])
+    try:
+        yield row
+    finally:
+        del token
+        current_tenant_id.set(None)
 
 
 def require_api_user(request: Request):
@@ -685,7 +704,12 @@ def require_api_user(request: Request):
     row = current_user_row(request)
     if row is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return row
+    token = current_tenant_id.set(row["id"])
+    try:
+        yield row
+    finally:
+        del token
+        current_tenant_id.set(None)
 
 
 def _track_payload(track) -> dict:
@@ -979,7 +1003,11 @@ class LibraryStateRequest(BaseModel):
 def _library_state(user_id: str) -> dict:
     with SessionLocal() as session:
         favorites = session.scalars(select(Favorite.track_id).where(Favorite.user_id == user_id)).all()
-        playlists = session.scalars(select(Playlist).where(Playlist.user_id == user_id)).all()
+        playlists = session.scalars(
+            select(Playlist)
+            .options(selectinload(Playlist.tracks))
+            .where(Playlist.user_id == user_id)
+        ).all()
         return {"favorites": favorites, "playlists": [
             {"id": playlist.id, "name": playlist.name,
              "trackIds": [item.track_id for item in playlist.tracks]}
@@ -1123,12 +1151,15 @@ def save_library_state(
             if item.id in requested:
                 continue
             requested.add(item.id)
+            name = item.name.strip()
+            if not name:
+                raise HTTPException(status_code=422, detail="Playlist name cannot be empty")
             playlist = existing.pop(item.id, None)
             if playlist is None:
-                playlist = Playlist(id=item.id, user_id=user["id"], name=item.name.strip())
+                playlist = Playlist(id=item.id, user_id=user["id"], name=name)
                 session.add(playlist)
             else:
-                playlist.name = item.name.strip()
+                playlist.name = name
                 playlist.tracks.clear()
             ids = list(dict.fromkeys(track_id for track_id in item.trackIds if track_id in valid_ids))
             playlist.tracks = [PlaylistTrack(track_id=track_id, position=index) for index, track_id in enumerate(ids)]

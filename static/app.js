@@ -966,20 +966,47 @@ async function saveSettings(){
     profilePhotoFit: state.profilePhotoFit
   }));
 }
-async function saveLibraryMeta(){
-  const favorites = state.tracks.filter(t=>t.favorite).map(t=>t.id);
-  const playlists = state.playlists.map(p => ({
-    id:p.id, name:p.name,
-    trackIds: [...p.trackIds]
-  }));
-  try{
-    const res = await fetch("/api/library/state", {
-      method:"PUT", credentials:"same-origin",
-      headers:{"Content-Type":"application/json", "X-CSRF-Token":await ensureCsrfToken()},
-      body:JSON.stringify({favorites, playlists})
-    });
-    if(!res.ok) throw new Error("Could not save library state");
-  }catch(error){ console.warn("Could not sync library state", error); }
+let libraryMetaSaveQueue = Promise.resolve();
+
+async function persistLibraryMeta(snapshot){
+  let lastError;
+  for(let attempt = 0; attempt < 3; attempt++){
+    try{
+      const token = await ensureCsrfToken(attempt > 0);
+      const res = await fetch("/api/library/state", {
+        method:"PUT", credentials:"same-origin",
+        headers:{"Content-Type":"application/json", "X-CSRF-Token":token || ""},
+        body:JSON.stringify(snapshot)
+      });
+      if(res.status === 403 && attempt < 2) continue;
+      if(res.ok) return;
+      const error = new Error(`Could not save library state (${res.status})`);
+      error.status = res.status;
+      if(res.status < 500 && res.status !== 429) throw error;
+      lastError = error;
+    }catch(error){
+      lastError = error;
+      if(error?.status && error.status < 500 && error.status !== 429) throw error;
+    }
+    if(attempt < 2) await wait(250 * (2 ** attempt));
+  }
+  throw lastError || new Error("Could not save library state");
+}
+
+function saveLibraryMeta(){
+  const snapshot = {
+    favorites: state.tracks.filter(t=>t.favorite).map(t=>t.id),
+    playlists: state.playlists.map(p => ({
+      id:p.id, name:p.name,
+      trackIds: [...p.trackIds]
+    }))
+  };
+  const save = () => persistLibraryMeta(snapshot);
+  libraryMetaSaveQueue = libraryMetaSaveQueue.then(save, save);
+  return libraryMetaSaveQueue.catch(error => {
+    console.warn("Could not sync library state", error);
+    toast("Library changes could not be synced. Please try again.");
+  });
 }
 async function loadPersisted(){
   const [settings, library] = await Promise.all([
@@ -1161,11 +1188,14 @@ async function syncServerLibrary(){
     if(!response.ok) return;
     const remoteTracks = (await response.json()).tracks || [];
     const previousIds = new Set(state.tracks.map(track => track.id));
+    const previousById = new Map(state.tracks.map(track => [track.id, track]));
     const offlineTracks = await loadOfflineTracks();
     const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
     const remoteById = new Map(remoteTracks.map(payload => {
       const track = trackFromServer(payload);
-      return [track.id, offlineById.get(track.id) || track];
+      const syncedTrack = offlineById.get(track.id) || track;
+      syncedTrack.favorite = previousById.get(track.id)?.favorite || false;
+      return [track.id, syncedTrack];
     }));
     const localOnly = state.tracks.filter(track => track.offline && !remoteById.has(track.id));
     state.tracks = [...remoteById.values(), ...localOnly];
