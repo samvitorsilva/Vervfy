@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import audio_store
 import upload_queue
-from db import SessionLocal, UploadJob
+from db import SessionLocal, UploadJob, current_tenant_id
 from library import Library, UploadQuotaExceeded
 from sqlalchemy import select
 
@@ -20,17 +20,24 @@ log = logging.getLogger("vervfy.upload_worker")
 MAX_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
 MAX_TRACKS = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
+MAX_ATTEMPTS = 3
 
 
-def process(job_id: str) -> None:
-    with SessionLocal() as session:
-        job = session.scalar(select(UploadJob).where(UploadJob.id == job_id))
-        if not job or job.status not in {"pending", "processing"}:
-            return
-        job.status = "processing"
-        session.commit()
-        filename, user_id, path = job.filename, job.user_id, job.storage_path
+def process(job_id: str, user_id: str) -> None:
+    tenant_token = current_tenant_id.set(user_id)
+    path: str | None = None
     try:
+        with SessionLocal() as session:
+            job = session.scalar(select(UploadJob).where(
+                UploadJob.id == job_id,
+                UploadJob.user_id == user_id,
+            ))
+            if not job or job.status not in {"pending", "processing"}:
+                return
+            job.status = "processing"
+            job.attempts += 1
+            session.commit()
+            filename, path = job.filename, job.storage_path
         size = audio_store.object_size(path)
         if size is None or size > MAX_BYTES:
             raise ValueError("staged upload is missing or exceeds the size limit")
@@ -44,29 +51,49 @@ def process(job_id: str) -> None:
         )
         if track is None:
             raise ValueError("could not read uploaded audio file")
+        stored_info = Library(user_id).audio_info(track.id)
+        if stored_info and stored_info.storage_path != path:
+            audio_store.delete_quietly(path)
         with SessionLocal() as session:
             job = session.get(UploadJob, job_id)
             if job:
                 job.status = "completed"
                 job.track_id = track.id
                 session.commit()
-    except (Exception,) as exc:
+    except Exception as exc:
         log.exception("upload job %s failed", job_id)
+        retry = False
         with SessionLocal() as session:
             job = session.get(UploadJob, job_id)
             if job:
-                job.status = "failed"
-                job.error = str(exc)[:500]
+                retry = job.attempts < MAX_ATTEMPTS
+                job.status = "pending" if retry else "failed"
+                job.error = (
+                    "Upload processing will be retried."
+                    if retry
+                    else "Upload processing failed after repeated attempts."
+                )
                 session.commit()
-        audio_store.delete_quietly(path)
+        if retry:
+            upload_queue.requeue(job_id, user_id)
+        else:
+            upload_queue.dead_letter(job_id, user_id, str(exc))
+            audio_store.delete_quietly(path)
+    finally:
+        current_tenant_id.reset(tenant_token)
 
 
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     while True:
-        job_id = upload_queue.dequeue()
-        if job_id:
-            process(job_id)
+        job = upload_queue.dequeue()
+        if job:
+            try:
+                with upload_queue.keep_lease(*job):
+                    process(*job)
+                upload_queue.acknowledge(*job)
+            except Exception:
+                log.exception("worker failed while processing job %s", job[0])
         else:
             time.sleep(1)
 

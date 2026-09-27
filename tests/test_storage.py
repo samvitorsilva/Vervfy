@@ -84,7 +84,16 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key")
     monkeypatch.setenv("SUPABASE_BUCKET", "songs")
-    for name in ("server", "auth", "db", "database", "library", "audio_store"):
+    for name in (
+        "server",
+        "auth",
+        "db",
+        "database",
+        "library",
+        "audio_store",
+        "upload_queue",
+        "scripts.upload_worker",
+    ):
         sys.modules.pop(name, None)
     audio_store = importlib.import_module("audio_store")
     fake = FakeSupabase()
@@ -104,6 +113,25 @@ def upload(client, headers, data, name="song.wav"):
     return client.post("/api/library/upload", headers=headers, files={"file": (name, data, "audio/wav")})
 
 
+def register_another_user(server, username="bob"):
+    client = TestClient(server.app)
+    csrf_response = client.get("/login")
+    token = re.search(r'name="csrf_token" value="([^"]+)"', csrf_response.text).group(1)
+    response = client.post(
+        "/register",
+        data={
+            "username": username,
+            "password": "other-password",
+            "email": "",
+            "csrf_token": token,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    headers = {"X-CSRF-Token": client.get("/api/csrf").json()["csrf_token"]}
+    return client, headers
+
+
 def test_upload_goes_to_storage_not_postgres(env):
     server, client, fake, headers, _ = env
     data = make_wav()
@@ -117,6 +145,140 @@ def test_upload_goes_to_storage_not_postgres(env):
         assert row.storage_path == f"{row.user_id}/{track_id}.wav"
         assert row.size_bytes == len(data)
     assert fake.objects[row.storage_path] == data
+
+
+def test_async_upload_runs_under_the_job_tenant(env):
+    server, client, fake, headers, monkeypatch = env
+    import upload_queue
+    from db import SessionLocal, UploadJob, current_tenant_id
+    from sqlalchemy import select
+    upload_worker = importlib.import_module("scripts.upload_worker")
+
+    queued = []
+    monkeypatch.setattr(server, "async_uploads", True)
+    monkeypatch.setattr(upload_queue, "enqueue", lambda job_id, user_id: queued.append((job_id, user_id)))
+    response = upload(client, headers, make_wav(level=7))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "processing"
+    assert len(queued) == 1
+    assert queued[0][0] == payload["id"]
+
+    with SessionLocal() as session:
+        job = session.scalar(select(UploadJob).where(UploadJob.id == payload["id"]))
+        assert job and job.user_id == queued[0][1] and job.status == "pending"
+        assert job.storage_path in fake.objects
+
+    upload_worker.process(*queued[0])
+    assert current_tenant_id.get() is None
+    with SessionLocal() as session:
+        job = session.scalar(select(UploadJob).where(UploadJob.id == payload["id"]))
+        assert job and job.status == "completed" and job.track_id
+
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    status = client.get(f"/api/library/upload/{payload['id']}", headers={"X-CSRF-Token": csrf})
+    assert status.status_code == 200
+    assert status.json()["status"] == "completed"
+    assert status.json()["track"]["id"] == job.track_id
+
+
+def test_async_upload_retries_then_dead_letters_and_cleans_staging(env, monkeypatch):
+    server, client, fake, headers, _ = env
+    import upload_queue
+    from db import SessionLocal, UploadJob
+    upload_worker = importlib.import_module("scripts.upload_worker")
+
+    queued = []
+    dead_letters = []
+    monkeypatch.setattr(server, "async_uploads", True)
+    monkeypatch.setattr(upload_queue, "enqueue", lambda job_id, user_id: queued.append((job_id, user_id)))
+    monkeypatch.setattr(upload_queue, "requeue", lambda job_id, user_id: queued.append((job_id, user_id)))
+    monkeypatch.setattr(
+        upload_queue,
+        "dead_letter",
+        lambda job_id, user_id, reason: dead_letters.append((job_id, user_id, reason)),
+    )
+    response = upload(client, headers, make_wav(level=8))
+    job_id, user_id = queued[0]
+    staging_path = response.json()["id"]
+    with SessionLocal() as session:
+        job = session.get(UploadJob, job_id)
+        staging_path = job.storage_path
+
+    def fail_read(path):
+        raise RuntimeError("backend credentials must not reach user-facing error")
+
+    monkeypatch.setattr(upload_worker.audio_store, "object_size", fail_read)
+    upload_worker.process(job_id, user_id)
+    with SessionLocal() as session:
+        job = session.get(UploadJob, job_id)
+        assert job.status == "pending" and job.attempts == 1
+        assert job.error == "Upload processing will be retried."
+    assert staging_path in fake.objects
+    assert queued[-1] == (job_id, user_id)
+
+    upload_worker.process(job_id, user_id)
+    upload_worker.process(job_id, user_id)
+    with SessionLocal() as session:
+        job = session.get(UploadJob, job_id)
+        assert job.status == "failed" and job.attempts == upload_worker.MAX_ATTEMPTS
+        assert job.error == "Upload processing failed after repeated attempts."
+    assert dead_letters and dead_letters[0][0:2] == (job_id, user_id)
+    assert staging_path not in fake.objects
+
+
+def test_redis_queue_reclaims_jobs_after_worker_crash(monkeypatch):
+    import json
+    import upload_queue
+
+    class FakeRedis:
+        def __init__(self):
+            self.lists = {}
+            self.leases = {}
+
+        def close(self):
+            pass
+
+        def rpush(self, key, value):
+            self.lists.setdefault(key, []).append(value)
+
+        def zrem(self, key, value):
+            return int(self.leases.pop(value, None) is not None)
+
+        def eval(self, script, key_count, *args):
+            if script == upload_queue._CLAIM_SCRIPT:
+                queue_key, lease_key, now, lease_until = args
+                for value, expiry in list(self.leases.items()):
+                    if expiry <= float(now):
+                        del self.leases[value]
+                        self.lists.setdefault(queue_key, []).append(value)
+                values = self.lists.setdefault(queue_key, [])
+                if not values:
+                    return None
+                task = values.pop(0)
+                self.leases[task] = float(lease_until)
+                return task
+            if script == upload_queue._RENEW_SCRIPT:
+                lease_key, task, lease_until = args
+                if task not in self.leases:
+                    return 0
+                self.leases[task] = float(lease_until)
+                return 1
+            raise AssertionError("unexpected Redis script")
+
+    fake = FakeRedis()
+    monkeypatch.setattr(upload_queue, "client", lambda: fake)
+    upload_queue.enqueue("job-1", "user-1")
+    assert upload_queue.dequeue(timeout=0) == ("job-1", "user-1")
+    encoded = json.dumps({"job_id": "job-1", "user_id": "user-1"}, separators=(",", ":"))
+    assert encoded in fake.leases
+
+    fake.leases[encoded] = 0
+    assert upload_queue.dequeue(timeout=0) == ("job-1", "user-1")
+    assert encoded in fake.leases
+    upload_queue.acknowledge("job-1", "user-1")
+    assert encoded not in fake.leases
+    assert upload_queue.dequeue(timeout=0) is None
 
 
 def test_stream_relays_only_requested_range(env):
@@ -148,6 +310,91 @@ def test_stream_is_scoped_to_the_owner(env):
     track_id = upload(client, headers, make_wav()).json()["id"]
     other = TestClient(server.app)
     assert other.get(f"/api/tracks/{track_id}/stream").status_code == 401
+
+
+def test_authenticated_other_user_cannot_access_or_mutate_track(env):
+    server, owner, fake, owner_headers, _ = env
+    data = make_wav()
+    track_id = upload(owner, owner_headers, data).json()["id"]
+    owner_lyrics = owner.put(
+        f"/api/tracks/{track_id}/lyrics",
+        headers=owner_headers,
+        json={"lyrics": "private lyrics"},
+    )
+    assert owner_lyrics.status_code == 200
+    other, other_headers = register_another_user(server)
+
+    for path in (
+        f"/api/tracks/{track_id}/cover",
+        f"/api/tracks/{track_id}/stream",
+        f"/api/tracks/{track_id}/tag-head",
+    ):
+        assert other.get(path).status_code == 404
+
+    assert other.put(
+        f"/api/tracks/{track_id}/lyrics",
+        headers=other_headers,
+        json={"lyrics": "attacker text"},
+    ).status_code == 404
+    assert other.delete(
+        f"/api/tracks/{track_id}",
+        headers=other_headers,
+    ).status_code == 404
+    assert owner.get(f"/api/tracks/{track_id}/stream").content == data
+    assert owner.get("/api/tracks").json()["tracks"][0]["custom_lyrics"] == "private lyrics"
+
+
+def test_other_user_cannot_read_profile_photo_or_upload_job(env, monkeypatch):
+    server, owner, fake, owner_headers, _ = env
+    other, other_headers = register_another_user(server)
+    import upload_queue
+    from db import SessionLocal, UploadJob
+
+    queued = []
+    monkeypatch.setattr(server, "async_uploads", True)
+    monkeypatch.setattr(upload_queue, "enqueue", lambda job_id, user_id: queued.append((job_id, user_id)))
+    result = upload(owner, owner_headers, make_wav(level=4))
+    assert result.status_code == 200
+    job_id, owner_id = queued[0]
+    assert owner.get(f"/api/library/upload/{job_id}").status_code == 200
+    assert other.get(f"/api/library/upload/{job_id}").status_code == 404
+
+    from PIL import Image
+    import io
+
+    image_bytes = io.BytesIO()
+    Image.new("RGB", (4, 4), color="red").save(image_bytes, format="PNG")
+    photo = owner.post(
+        "/api/account/photo",
+        headers=owner_headers,
+        files={"file": ("photo.png", image_bytes.getvalue(), "image/png")},
+    )
+    assert photo.status_code == 200
+    assert owner.get("/api/account/photo").status_code == 200
+    assert other.get("/api/account/photo").status_code == 404
+
+    with SessionLocal() as session:
+        job = session.get(UploadJob, job_id)
+        assert job and job.user_id == owner_id and job.storage_path in fake.objects
+
+
+def test_library_state_never_attaches_another_users_track(env):
+    server, owner, _, owner_headers, _ = env
+    track_id = upload(owner, owner_headers, make_wav()).json()["id"]
+    other, other_headers = register_another_user(server)
+
+    result = other.put(
+        "/api/library/state",
+        headers=other_headers,
+        json={
+            "favorites": [track_id],
+            "playlists": [{"id": "foreign-track", "name": "Foreign", "trackIds": [track_id]}],
+        },
+    )
+    assert result.status_code == 200
+    assert result.json()["favorites"] == []
+    assert result.json()["playlists"][0]["trackIds"] == []
+    assert owner.get("/api/library/state").json()["favorites"] == []
 
 
 def test_tag_head_reads_only_the_tag(env):

@@ -132,6 +132,7 @@ class UploadJob(Base):
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(600), nullable=False, unique=True)
     track_id: Mapped[str | None] = mapped_column(String(64))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[float] = mapped_column(Float, nullable=False)

@@ -95,8 +95,6 @@ if is_production and not https_only:
     raise RuntimeError("VERVFY_HTTPS_ONLY=1 is required in production")
 if is_production and not os.environ.get("REDIS_URL"):
     raise RuntimeError("REDIS_URL is required in production for distributed rate limiting")
-if is_production and not async_uploads:
-    raise RuntimeError("VERVFY_ASYNC_UPLOADS=1 is required in production")
 # For same-origin app hosting, lax is sufficient; only use the stricter None
 # setting when explicitly needed.
 configured_same_site = (
@@ -1231,7 +1229,7 @@ async def upload_track(
                     created_at=time.time(),
                 ))
                 session.commit()
-            upload_queue.enqueue(job_id)
+            upload_queue.enqueue(job_id, user["id"])
         except Exception as exc:
             audio_store.delete_quietly(staging_path)
             log.exception("could not queue upload")
@@ -1281,7 +1279,12 @@ def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
         ))
         if not job:
             raise HTTPException(status_code=404, detail="Upload job not found")
-        payload = {"id": job.id, "status": job.status, "error": job.error}
+        payload = {
+            "id": job.id,
+            "status": job.status,
+            "error": job.error,
+            "attempts": job.attempts,
+        }
         if job.track_id:
             track = get_library(user["id"]).get(job.track_id)
             if track:

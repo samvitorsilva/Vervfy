@@ -78,6 +78,21 @@ def test_api_docs_disabled_by_default_and_enabled(tmp_path, monkeypatch):
         assert [client.get(path).status_code for path in ("/docs", "/redoc", "/openapi.json")] == [200] * 3
 
 
+def test_production_can_use_synchronous_uploads_without_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'production.db'}")
+    monkeypatch.setenv("VERVFY_SECRET_KEY", "production-test-secret")
+    monkeypatch.setenv("VERVFY_ENVIRONMENT", "production")
+    monkeypatch.setenv("VERVFY_HTTPS_ONLY", "1")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("VERVFY_ASYNC_UPLOADS", raising=False)
+    for name in ("server", "auth", "db", "database"):
+        sys.modules.pop(name, None)
+
+    server = importlib.import_module("server")
+    assert server.is_production
+    assert server.async_uploads is False
+
+
 def test_hsts_only_when_https_only(tmp_path, monkeypatch):
     server = _reload_server(tmp_path, monkeypatch, "VERVFY_HTTPS_ONLY", "1")
     with TestClient(server.app) as client:
