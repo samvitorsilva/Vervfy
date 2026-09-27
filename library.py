@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 import audio_store
-from db import SessionLocal, TrackRecord, User
+from db import TrackRecord, User, tenant_session
 
 Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "25000000"))
 try:
@@ -64,7 +64,7 @@ class Library:
         )
 
     def list_tracks(self):
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             selected = [
                 TrackRecord.id,
                 TrackRecord.filename,
@@ -79,7 +79,7 @@ class Library:
             return sorted((self._track(r) for r in rows), key=lambda t: (t.artist.lower(), t.title.lower()))
 
     def get(self, track_id: str, include_audio: bool = False, include_cover: bool = False):
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             selected = [
                 TrackRecord.id,
                 TrackRecord.filename,
@@ -98,17 +98,17 @@ class Library:
             return self._track(row, include_audio=include_audio, include_cover=include_cover) if row else None
 
     def count_tracks(self) -> int:
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             return s.scalar(select(func.count()).select_from(TrackRecord).where(TrackRecord.user_id == self.user_id)) or 0
 
     def total_bytes(self) -> int:
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             return s.scalar(
                 select(func.sum(TrackRecord.size_bytes)).where(TrackRecord.user_id == self.user_id)
             ) or 0
 
     def set_custom_lyrics(self, track_id: str, lyrics: str):
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
             if not row:
                 return None
@@ -128,7 +128,7 @@ class Library:
         safe=os.path.basename(filename.replace("\\","/")).replace("\x00","") or "upload.mp3"
         if os.path.splitext(safe)[1].lower() not in AUDIO_EXTENSIONS:return None
         track_id=track_id_for_bytes(data)
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             old=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
             if old:return self._track(old)
         meta=self._read_metadata(safe,data)
@@ -143,7 +143,7 @@ class Library:
             audio_store.upload(storage_path,data,audio_store.guess_content_type(safe))
         row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
         try:
-            with SessionLocal() as s:
+            with tenant_session(self.user_id) as s:
                 if s.bind.dialect.name == "postgresql":
                     # Serialize quota checks for this account across workers.
                     s.get(User, self.user_id, with_for_update=True)
@@ -171,14 +171,14 @@ class Library:
             # Don't leave an orphaned object behind — unless a concurrent upload of
             # the same file already owns it (or we can't tell).
             try:
-                with SessionLocal() as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
+                with tenant_session(self.user_id) as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
             except Exception:still_used=True
             if not still_used:audio_store.delete_quietly(storage_path)
             raise
 
     def remove(self, track_id: str):
         from db import Favorite, Playlist, PlaylistTrack
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             row=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
             if not row:return False
             storage_path=row.storage_path
@@ -195,7 +195,7 @@ class Library:
         return True
 
     def cover_bytes(self, track_id: str):
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             row = s.execute(
                 select(TrackRecord.cover_data).where(TrackRecord.id == track_id, TrackRecord.user_id == self.user_id)
             ).scalar_one_or_none()
@@ -209,7 +209,7 @@ class Library:
 
     def audio_info(self, track_id: str):
         """``(filename, size_bytes, storage_path)`` or None — never touches the audio itself."""
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             return s.execute(
                 select(TrackRecord.filename, TrackRecord.size_bytes, TrackRecord.storage_path).where(
                     TrackRecord.id == track_id,
@@ -219,7 +219,7 @@ class Library:
 
     def storage_paths(self) -> list[str]:
         """Every Storage object this user owns (used when deleting an account)."""
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             return list(s.scalars(select(TrackRecord.storage_path).where(
                 TrackRecord.user_id == self.user_id, TrackRecord.storage_path.is_not(None))).all())
 
@@ -234,7 +234,7 @@ class Library:
             return None
         if info.storage_path:
             return audio_store.read_range(info.storage_path, start, end)
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             data = s.scalar(
                 select(func.substr(TrackRecord.audio_data, start + 1, end - start + 1)).where(
                     TrackRecord.id == track_id,
@@ -258,7 +258,7 @@ class Library:
             return self.read_range(track_id, 0, end), filename
         if path:
             return audio_store.read_range(path, 0, max(size - 1, 0)), filename
-        with SessionLocal() as s:
+        with tenant_session(self.user_id) as s:
             data = s.scalar(select(TrackRecord.audio_data).where(
                 TrackRecord.id == track_id, TrackRecord.user_id == self.user_id))
         return (bytes(data) if data is not None else None), filename

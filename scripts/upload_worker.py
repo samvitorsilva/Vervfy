@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import audio_store
 import upload_queue
-from db import SessionLocal, UploadJob, current_tenant_id
+from db import SessionLocal, UploadJob
 from library import Library, UploadQuotaExceeded
 from sqlalchemy import select
 
@@ -24,7 +24,6 @@ MAX_ATTEMPTS = 3
 
 
 def process(job_id: str, user_id: str) -> None:
-    tenant_token = current_tenant_id.set(user_id)
     path: str | None = None
     try:
         with SessionLocal() as session:
@@ -79,8 +78,6 @@ def process(job_id: str, user_id: str) -> None:
         else:
             upload_queue.dead_letter(job_id, user_id, str(exc))
             audio_store.delete_quietly(path)
-    finally:
-        current_tenant_id.reset(tenant_token)
 
 
 def main() -> None:

@@ -92,6 +92,22 @@ are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1`
 enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE`
 controls the cookie SameSite policy (`lax` by default).
 
+Tenant-scoped database work uses an explicit SQLAlchemy session carrying the
+authenticated user ID; PostgreSQL applies it transaction-locally for row-level
+security. It does not depend on request context being copied across threadpool
+calls.
+
+To run the PostgreSQL RLS integration test, set `VERVFY_TEST_POSTGRES_URL` to
+a dedicated PostgreSQL test database URL using a role that is neither a
+superuser nor `BYPASSRLS`, then run:
+
+```sh
+pytest -q tests/test_tenant_isolation_postgres.py
+```
+
+The test creates and drops a uniquely named schema in that database. The rest
+of the suite does not require PostgreSQL.
+
 ---
 
 ## Keyboard shortcuts

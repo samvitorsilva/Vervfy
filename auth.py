@@ -14,7 +14,15 @@ from fastapi import HTTPException, Request
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, User
+from db import (
+    Favorite,
+    Playlist,
+    PlaylistTrack,
+    SessionLocal,
+    TrackRecord,
+    User,
+    tenant_session,
+)
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 
@@ -133,7 +141,7 @@ class UserStore:
         The explicit child deletes keep this reliable for local SQLite databases
         too, where foreign-key cascade support may not be enabled by the host.
         """
-        with SessionLocal() as session:
+        with tenant_session(user_id) as session:
             playlist_ids = select(Playlist.id).where(Playlist.user_id == user_id)
             session.query(PlaylistTrack).filter(PlaylistTrack.playlist_id.in_(playlist_ids)).delete(
                 synchronize_session=False

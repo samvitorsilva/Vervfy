@@ -35,7 +35,7 @@ from starlette.concurrency import run_in_threadpool
 
 import audio_store
 import auth
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, current_tenant_id
+from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, tenant_session
 from library import Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -689,12 +689,7 @@ def require_page_user(request: Request):
     row = current_user_row(request)
     if row is None:
         raise LoginRequired()
-    token = current_tenant_id.set(row["id"])
-    try:
-        yield row
-    finally:
-        del token
-        current_tenant_id.set(None)
+    return row
 
 
 def require_api_user(request: Request):
@@ -702,12 +697,7 @@ def require_api_user(request: Request):
     row = current_user_row(request)
     if row is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    token = current_tenant_id.set(row["id"])
-    try:
-        yield row
-    finally:
-        del token
-        current_tenant_id.set(None)
+    return row
 
 
 def _track_payload(track) -> dict:
@@ -1004,7 +994,7 @@ class LibraryStateRequest(BaseModel):
 
 
 def _library_state(user_id: str) -> dict:
-    with SessionLocal() as session:
+    with tenant_session(user_id) as session:
         favorites = session.scalars(select(Favorite.track_id).where(Favorite.user_id == user_id)).all()
         playlists = session.scalars(
             select(Playlist)
@@ -1143,7 +1133,7 @@ def save_library_state(
 ) -> dict:
     # Accept only tracks belonging to this account; this prevents cross-account
     # playlist references and cleans stale browser IndexedDB entries safely.
-    with SessionLocal() as session:
+    with tenant_session(user["id"]) as session:
         valid_ids = set(session.scalars(select(TrackRecord.id).where(TrackRecord.user_id == user["id"])).all())
         favorite_ids = list(dict.fromkeys(track_id for track_id in payload.favorites if track_id in valid_ids))
         session.query(Favorite).filter_by(user_id=user["id"]).delete()
@@ -1225,7 +1215,7 @@ async def upload_track(
         staging_path = f"{user['id']}/.staging/{job_id}{suffix}"
         try:
             audio_store.upload(staging_path, buffer, audio_store.guess_content_type(file.filename))
-            with SessionLocal() as session:
+            with tenant_session(user["id"]) as session:
                 session.add(UploadJob(
                     id=job_id,
                     user_id=user["id"],
@@ -1277,7 +1267,7 @@ async def upload_track(
 
 @app.get("/api/library/upload/{job_id}")
 def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
-    with SessionLocal() as session:
+    with tenant_session(user["id"]) as session:
         job = session.scalar(select(UploadJob).where(
             UploadJob.id == job_id,
             UploadJob.user_id == user["id"],

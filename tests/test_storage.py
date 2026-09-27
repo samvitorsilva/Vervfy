@@ -150,7 +150,7 @@ def test_upload_goes_to_storage_not_postgres(env):
 def test_async_upload_runs_under_the_job_tenant(env):
     server, client, fake, headers, monkeypatch = env
     import upload_queue
-    from db import SessionLocal, UploadJob, current_tenant_id
+    from db import SessionLocal, UploadJob
     from sqlalchemy import select
     upload_worker = importlib.import_module("scripts.upload_worker")
 
@@ -170,7 +170,6 @@ def test_async_upload_runs_under_the_job_tenant(env):
         assert job.storage_path in fake.objects
 
     upload_worker.process(*queued[0])
-    assert current_tenant_id.get() is None
     with SessionLocal() as session:
         job = session.scalar(select(UploadJob).where(UploadJob.id == payload["id"]))
         assert job and job.status == "completed" and job.track_id

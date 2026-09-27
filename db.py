@@ -7,7 +7,6 @@ URL in tests without changing application code.
 from __future__ import annotations
 
 import os
-from contextvars import ContextVar
 from sqlalchemy import (
     Boolean,
     Float,
@@ -21,9 +20,7 @@ from sqlalchemy import (
     create_engine,
 )
 from sqlalchemy import event, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
-
-current_tenant_id: ContextVar[str | None] = ContextVar("current_tenant_id", default=None)
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
 def database_url() -> str:
@@ -43,12 +40,19 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+def tenant_session(tenant_id: str) -> Session:
+    """Create a session whose PostgreSQL transactions are scoped to one tenant."""
+    if not tenant_id:
+        raise ValueError("tenant_id must not be empty")
+    return SessionLocal(info={"tenant_id": tenant_id})
+
+
 @event.listens_for(SessionLocal, "after_begin")
-def set_database_tenant(session, transaction, connection) -> None:
-    """Pass the authenticated tenant into PostgreSQL RLS policies."""
-    del session, transaction
-    tenant_id = current_tenant_id.get()
-    if tenant_id and connection.dialect.name == "postgresql":
+def set_database_tenant(session: Session, transaction, connection) -> None:
+    """Pass the session's explicit tenant into PostgreSQL RLS policies."""
+    del transaction
+    tenant_id = session.info.get("tenant_id")
+    if isinstance(tenant_id, str) and tenant_id and connection.dialect.name == "postgresql":
         connection.execute(
             text("SELECT set_config('app.current_user_id', :tenant_id, true)"),
             {"tenant_id": tenant_id},

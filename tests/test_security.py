@@ -1,12 +1,16 @@
 import base64
+from contextvars import ContextVar
 import importlib
 import json
 import re
 import sys
 
 import pytest
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -60,6 +64,40 @@ def _reload_server(tmp_path, monkeypatch, env_name, env_value):
     for name in ("server", "auth", "db", "database"):
         sys.modules.pop(name, None)
     return importlib.import_module("server")
+
+
+def test_sync_dependency_contextvar_is_not_visible_to_endpoint_or_sqlalchemy(tmp_path):
+    tenant_context = ContextVar("reproduction_tenant", default=None)
+    observed = {}
+    sessions = sessionmaker(bind=create_engine(f"sqlite:///{tmp_path / 'context.db'}"))
+
+    def dependency():
+        tenant_context.set("tenant-a")
+        observed["dependency"] = tenant_context.get()
+        yield
+
+    @event.listens_for(sessions, "after_begin")
+    def capture_sqlalchemy_context(session, transaction, connection):
+        del session, transaction, connection
+        observed["listener"] = tenant_context.get()
+
+    app = FastAPI()
+
+    @app.get("/", dependencies=[Depends(dependency)])
+    def endpoint():
+        observed["endpoint"] = tenant_context.get()
+        with sessions() as session:
+            session.execute(text("SELECT 1"))
+        return {"tenant": observed["endpoint"]}
+
+    with TestClient(app) as client:
+        assert client.get("/").json() == {"tenant": None}
+
+    assert observed == {
+        "dependency": "tenant-a",
+        "endpoint": None,
+        "listener": None,
+    }
 
 
 def test_api_docs_disabled_by_default_and_enabled(tmp_path, monkeypatch):
