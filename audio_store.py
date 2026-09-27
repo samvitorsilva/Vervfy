@@ -204,9 +204,6 @@ def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Res
             body = resp.read()[:200]
             resp.close()
             raise StorageError(f"read failed ({resp.status_code}): {body!r}")
-        if resp.status_code == 200 and start > 0:
-            resp.close()
-            raise StorageError("storage ignored the Range header")
     except Exception:
         client.close()
         raise

@@ -10,7 +10,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=23">
+<link rel="stylesheet" href="/static/styles.css?v=24">
 <script>
 /* Keep the app shell available so downloaded music can still be opened offline. */
 (function(){
@@ -276,6 +276,33 @@
     <div class="lyrics-bg" id="lyricsBg"></div>
     <button class="lyrics-close" id="lyricsClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
     <div class="lyrics-stage" id="lyricsStage"></div>
+    <div class="lyrics-player hidden" id="lyricsPlayer" role="region" aria-label="Playback controls">
+      <div class="lyrics-player-seek">
+        <span class="lyrics-player-time" id="lyricsTimeCur">0:00</span>
+        <div class="seek" id="lyricsSeek" role="slider" tabindex="0" aria-label="Track progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div class="seek-track"><div class="seek-fill" id="lyricsSeekFill"></div></div>
+          <div class="seek-thumb" id="lyricsSeekThumb"></div>
+        </div>
+        <span class="lyrics-player-time right" id="lyricsTimeDur">0:00</span>
+      </div>
+      <div class="lyrics-player-controls">
+        <button class="tbtn" id="lyricsShuffle" title="Shuffle" aria-label="Toggle shuffle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5h3.2l7.2 11H21"/><path d="M17.5 4.5 21 6.5l-3.5 2"/><path d="M3 17.5h3.2l3.2-4.9"/><path d="M17.5 19.5 21 17.5l-3.5-2"/></svg>
+        </button>
+        <button class="tbtn" id="lyricsPrev" title="Previous track" aria-label="Previous track">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 6.5h2.2v11H6.5zM19.5 6.8 9.8 12l9.7 5.2z"/></svg>
+        </button>
+        <button class="tbtn tbtn-play" id="lyricsPlay" title="Play or pause" aria-label="Play">
+          <svg id="lyricsIconPlay" viewBox="0 0 24 24" fill="currentColor"><path d="M9 6.8v10.4L18.2 12z"/></svg>
+        </button>
+        <button class="tbtn" id="lyricsNext" title="Next track" aria-label="Next track">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.3 6.5h2.2v11h-2.2zM4.5 6.8 14.2 12 4.5 17.2z"/></svg>
+        </button>
+        <button class="tbtn" id="lyricsRepeat" title="Repeat: off" aria-label="Cycle repeat mode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3.5l3.5 3.5L17 10.5"/><path d="M4 11.5V9.2A3.7 3.7 0 0 1 7.7 5.5H20.5"/><path d="M7 20.5 3.5 17 7 13.5"/><path d="M20 12.5v2.3a3.7 3.7 0 0 1-3.7 3.7H3.5"/></svg>
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- VISUALIZER OVERLAY -->
@@ -342,6 +369,6 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
-<script src="/static/app.js?v=26"></script>
+<script src="/static/app.js?v=28"></script>
 </body>
 </html>

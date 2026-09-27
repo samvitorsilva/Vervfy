@@ -1371,7 +1371,21 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
 
         def body():
             try:
-                yield from upstream.iter_bytes(64 * 1024)
+                remaining = end - start + 1
+                skip = start if upstream.status_code == 200 else 0
+                for chunk in upstream.iter_bytes(64 * 1024):
+                    if skip:
+                        skipped = min(skip, len(chunk))
+                        chunk = chunk[skipped:]
+                        skip -= skipped
+                    if not chunk:
+                        continue
+                    chunk = chunk[:remaining]
+                    if chunk:
+                        yield chunk
+                        remaining -= len(chunk)
+                    if remaining == 0:
+                        break
             finally:
                 upstream.close()
                 client.close()

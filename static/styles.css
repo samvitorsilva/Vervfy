@@ -880,8 +880,25 @@ body.mini-mode .mini-player{ display:block; }
 .lyrics-close{ z-index:5; }
 .lyrics-stage{
   position:relative; z-index:2; height:100%; display:flex; align-items:center; gap:64px;
-  padding:0 7vw; max-width:1280px; margin:0 auto;
+  padding:0 7vw 112px; max-width:1280px; margin:0 auto;
 }
+.lyrics-player{
+  position:absolute; z-index:4; left:50%; bottom:24px; transform:translateX(-50%);
+  width:min(460px, calc(100% - 40px)); padding:12px 18px 10px; border-radius:22px;
+  background:rgba(22,24,36,.62); border:1px solid rgba(255,255,255,.16);
+  backdrop-filter:blur(30px) saturate(1.65); -webkit-backdrop-filter:blur(30px) saturate(1.65);
+  box-shadow:0 18px 55px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.12);
+  transition:opacity var(--dur-med) var(--ease), transform var(--dur-med) var(--ease);
+}
+.lyrics-player.hidden{ opacity:0; transform:translate(-50%, 18px); pointer-events:none; }
+.lyrics-player-seek{ display:flex; align-items:center; gap:10px; }
+.lyrics-player-time{ flex:0 0 36px; color:var(--text-dim); font:10px var(--font-mono); }
+.lyrics-player-time.right{ text-align:right; }
+.lyrics-player-controls{ display:flex; align-items:center; justify-content:center; gap:10px; margin-top:4px; }
+.lyrics-player-controls .tbtn{ width:36px; height:36px; }
+.lyrics-player-controls .tbtn-play{ width:42px; height:42px; }
+.lyrics-player-controls .tbtn svg{ width:16px; height:16px; }
+.lyrics-player-controls .tbtn-play svg{ width:15px; height:15px; }
 .lyrics-meta .a .artist-link{ display:inline; color:inherit; }
 .lyrics-meta .a .artist-link:hover{ color:var(--cyan); }
 .lyrics-side{
@@ -1217,9 +1234,12 @@ body.mini-mode .mini-player{ display:block; }
   /* Full-screen karaoke like Spotify — lyrics fill the screen, not clipped by a collapsed % height */
   .lyrics-stage{
     flex-direction:column; align-items:stretch; justify-content:flex-start;
-    gap:0; padding:72px 22px max(28px, env(safe-area-inset-bottom, 0px));
+    gap:0; padding:72px 22px calc(126px + env(safe-area-inset-bottom, 0px));
     overflow:hidden; max-width:none; height:100%;
   }
+  .lyrics-player{ bottom:max(12px, env(safe-area-inset-bottom, 0px)); width:calc(100% - 28px); padding:9px 14px 7px; border-radius:20px; }
+  .lyrics-player-controls{ gap:8px; }
+  .lyrics-player-controls .tbtn{ width:34px; height:34px; }
   .lyrics-side{
     flex:0 0 auto; flex-direction:row; width:100%; gap:12px; align-items:center;
     justify-content:flex-start; padding:9px 10px; border-radius:18px;

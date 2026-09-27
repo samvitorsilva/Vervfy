@@ -24,6 +24,7 @@ class FakeSupabase:
         self.objects: dict[str, bytes] = {}
         self.bytes_served = 0
         self.fail_uploads = False
+        self.ignore_ranges = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.headers.get("authorization") != "Bearer service-key":
@@ -45,7 +46,7 @@ class FakeSupabase:
                 return httpx.Response(400, json={"error": "not_found"})
             data = self.objects[key]
             spec = request.headers.get("range")
-            if not spec:
+            if not spec or self.ignore_ranges:
                 self.bytes_served += len(data)
                 return httpx.Response(200, content=data)
             start, end = re.fullmatch(r"bytes=(\d+)-(\d+)", spec).groups()
@@ -302,6 +303,24 @@ def test_stream_relays_only_requested_range(env):
 
     r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": f"bytes={len(data) + 5}-"})
     assert r.status_code == 416
+
+
+def test_stream_slices_when_storage_ignores_range(env):
+    server, client, fake, headers, _ = env
+    data = make_wav(seconds=2)
+    track_id = upload(client, headers, data).json()["id"]
+    fake.ignore_ranges = True
+
+    response = client.get(
+        f"/api/tracks/{track_id}/stream",
+        headers={"Range": "bytes=100-199"},
+    )
+
+    assert response.status_code == 206
+    assert response.content == data[100:200]
+    assert response.headers["content-range"] == f"bytes 100-199/{len(data)}"
+    assert response.headers["content-length"] == "100"
+    assert fake.bytes_served == len(data)
 
 
 def test_stream_is_scoped_to_the_owner(env):

@@ -903,6 +903,18 @@ function offlineTrackFromRecord(record){
   };
 }
 
+function applyServerCustomLyrics(track, payload){
+  if(typeof payload?.custom_lyrics !== "string" || !payload.custom_lyrics.trim()) return track;
+  track.customLyrics = payload.custom_lyrics;
+  track.lyrics = normalizeSyncedLyrics(
+    LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics },
+    track.duration
+  );
+  track.lyricsResolved = true;
+  track.lyricsLoading = false;
+  return track;
+}
+
 async function loadOfflineTracks(){
   releaseOfflineObjectUrls();
   const records = await AuralisDB.getAll(OFFLINE_STORE);
@@ -1145,7 +1157,10 @@ async function loadServerLibrary(force = false){
       state.tracks = (data.tracks || []).map(trackFromServer);
       const offlineTracks = await loadOfflineTracks();
       const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
-      state.tracks = state.tracks.map(track => offlineById.get(track.id) || track);
+      const serverById = new Map((data.tracks || []).map(track => [track.id, track]));
+      state.tracks = state.tracks.map(track =>
+        applyServerCustomLyrics(offlineById.get(track.id) || track, serverById.get(track.id))
+      );
       offlineTracks.forEach(track => {
         if(!state.tracks.some(existing => existing.id === track.id)) state.tracks.push(track);
       });
@@ -1194,6 +1209,7 @@ async function syncServerLibrary(){
     const remoteById = new Map(remoteTracks.map(payload => {
       const track = trackFromServer(payload);
       const syncedTrack = offlineById.get(track.id) || track;
+      applyServerCustomLyrics(syncedTrack, payload);
       syncedTrack.favorite = previousById.get(track.id)?.favorite || false;
       return [track.id, syncedTrack];
     }));
@@ -1325,6 +1341,15 @@ async function saveTrackLyrics(track, lyrics){
   return await res.json();
 }
 
+async function persistOfflineLyrics(track){
+  if(!track.offline) return;
+  const record = await AuralisDB.get(track.id, OFFLINE_STORE);
+  if(!record) return;
+  record.customLyrics = track.customLyrics;
+  record.lyrics = track.lyrics;
+  await AuralisDB.putRecord(record, OFFLINE_STORE);
+}
+
 const FS_SUPPORTED = "showDirectoryPicker" in window;
 const AUDIO_EXT_RE = /\.(mp3|m4a|mp4|wav|flac|ogg|oga|aac|opus|weba)$/i;
 
@@ -1450,10 +1475,13 @@ function playTrackFromList(list, trackId){
 }
 
 let currentBlobUrl = null;
-let audioRetryPending = false;
+let playbackRequest = 0;
+let audioRetryPending = null;
 function playCurrent(){
   const t = currentTrack();
   if(!t) return;
+  const request = ++playbackRequest;
+  audioRetryPending = null;
   if(ensureAudioGraph() && audioCtx.state === "suspended") audioCtx.resume();
   if(currentBlobUrl){ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
   if(t.offlineUrl){
@@ -1469,17 +1497,21 @@ function playCurrent(){
   }
   audioEl.volume = state.muted ? 0 : state.volume;
   updateMediaSessionMetadata();
-  audioRetryPending = false;
-  audioEl.play().catch(()=>{
-    if(audioRetryPending) return;
-    audioRetryPending = true;
+  audioEl.play().catch(error=>{
+    if(request !== playbackRequest || currentTrack()?.id !== t.id || error?.name === "AbortError") return;
+    if(audioRetryPending === request) return;
+    audioRetryPending = request;
     toast("Waking the music server…");
     wait(2000).then(() => {
-      if(currentTrack()?.id !== t.id || !audioEl.paused) return;
-      audioRetryPending = false;
+      if(request !== playbackRequest || currentTrack()?.id !== t.id) return;
+      if(!audioEl.paused){
+        audioRetryPending = null;
+        return;
+      }
+      audioRetryPending = null;
       audioEl.load();
-      audioEl.play().catch(() => {
-        audioRetryPending = false;
+      audioEl.play().catch(retryError => {
+        if(request !== playbackRequest || currentTrack()?.id !== t.id || retryError?.name === "AbortError") return;
         toast("The track could not start. Please try again.");
       });
     });
@@ -1511,7 +1543,16 @@ function togglePlay(){
 
 function playNext(auto=false){
   if(state.queue.length === 0) return;
-  if(state.repeat === "one" && auto){ audioEl.currentTime = 0; audioEl.play(); return; }
+  if(state.repeat === "one" && auto){
+    audioEl.currentTime = 0;
+    const request = playbackRequest;
+    audioEl.play().catch(error => {
+      if(request === playbackRequest && error?.name !== "AbortError"){
+        toast("The track could not restart. Please try again.");
+      }
+    });
+    return;
+  }
   if(state.shuffle){
     let next;
     if(state.queue.length === 1) next = 0;
@@ -1565,7 +1606,9 @@ function installMediaSessionHandlers(){
 
 installMediaSessionHandlers();
 
-audioEl.addEventListener("ended", () => playNext(true));
+audioEl.addEventListener("ended", () => {
+  if(audioEl.ended) playNext(true);
+});
 audioEl.addEventListener("play", () => {
   syncPlayIcons(true);
   try{ if(mediaSession) mediaSession.playbackState = "playing"; }catch(_){}
@@ -1597,6 +1640,9 @@ function syncPlayIcons(playing){
   $("#iconPlay").innerHTML = `<path d="${playing?pathPause:pathPlay}"/>`;
   $("#miniIconPlay").innerHTML = `<path d="${playing?pathPause:pathPlay}"/>`;
   $("#mobileIconPlay").innerHTML = `<path d="${playing?pathPause:pathPlay}"/>`;
+  $("#lyricsIconPlay").innerHTML = `<path d="${playing?pathPause:pathPlay}"/>`;
+  $("#lyricsPlay").setAttribute("aria-label", playing ? "Pause" : "Play");
+  $("#lyricsPlay").title = playing ? "Pause" : "Play";
 }
 
 function updateSeekUI(){
@@ -1615,7 +1661,11 @@ function updateSeekUI(){
   $("#mobileTimeDur").textContent = fmtTime(dur);
   $("#mobileSeekFill").style.width = pct+"%";
   $("#mobileSeekThumb").style.left = pct+"%";
-  [$("#seek"), $("#miniSeek"), $("#mobileSeek")].forEach(el=>{
+  $("#lyricsTimeCur").textContent = fmtTime(cur);
+  $("#lyricsTimeDur").textContent = fmtTime(dur);
+  $("#lyricsSeekFill").style.width = pct+"%";
+  $("#lyricsSeekThumb").style.left = pct+"%";
+  [$("#seek"), $("#miniSeek"), $("#mobileSeek"), $("#lyricsSeek")].forEach(el=>{
     if(!el) return;
     el.setAttribute("aria-valuemax", String(Math.round(dur)));
     el.setAttribute("aria-valuenow", String(Math.round(cur)));
@@ -1676,40 +1726,40 @@ function ensureTrackLyrics(track){
     let result = track.customLyrics
       ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
       : null;
-    try{
-      const headRes = result || track.offline
-        ? null
-        : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
-      const blob = track.offline && track.file ? track.file : (headRes?.ok ? await headRes.blob() : null);
-      if(blob){
-        const file = track.offline && track.file ? track.file : new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
-        const meta = await parseID3(file);
-        result = LyricsEngine.fromID3(meta);
-        if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
-      }
-    }catch(e){
-      LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
-    }
     if(!result){
-      result = await LyricsEngine.fromOnline(track);
+      try{
+        const headRes = track.offline ? null : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
+        const blob = track.offline && track.file ? track.file : (headRes?.ok ? await headRes.blob() : null);
+        if(blob){
+          const file = track.offline && track.file ? track.file : new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
+          const meta = await parseID3(file);
+          result = LyricsEngine.fromID3(meta);
+          if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
+        }
+      }catch(e){
+        LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
+      }
+      if(!result){
+        result = await LyricsEngine.fromOnline(track);
+      }
     }
     return result;
   })().then(result => {
-    if(track.customLyrics){
-      track.lyricsLoading = false;
-      return;
-    }
-    track.lyrics = result;
+    track.lyrics = result || (track.customLyrics
+      ? { source:"custom", text:track.customLyrics }
+      : null);
     track.lyricsResolved = true;
     track.lyricsLoading = false;
+    track.lyricsPromise = null;
     LyricsDebug.log(`state: lyrics lookup finished for "${track.title}" →`, result ? result.source : "nothing found");
     if(currentTrack()?.id !== requestedTrackId) return;
     updateMobileLyricsPreview(track);
     if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
-    return result;
+    return track.lyrics;
   }).catch(e => {
     track.lyricsResolved = true;
     track.lyricsLoading = false;
+    track.lyricsPromise = null;
     LyricsDebug.warn("state: lyrics lookup threw —", e.message);
     if(currentTrack()?.id === requestedTrackId){
       updateMobileLyricsPreview(track);
@@ -1723,6 +1773,7 @@ function ensureTrackLyrics(track){
 function updateNowPlayingUI(){
   const t = currentTrack();
   const bar = $("#nowbar");
+  $("#lyricsPlayer").classList.toggle("hidden", !t);
   if(!t){
     bar.classList.add("hidden");
     document.body.classList.remove("now-playing");
@@ -1920,6 +1971,7 @@ function openLyricsSyncEditor(track){
       track.customLyrics = saved.custom_lyrics;
       track.lyrics = synced;
       track.lyricsResolved = true;
+      await persistOfflineLyrics(track);
       toast("Lyrics synced to the track");
       renderLyricsStage();
     }catch(e){
@@ -1970,6 +2022,7 @@ function openLyricsEditor(track){
         track.duration
       ) || { source:"custom", text:track.customLyrics };
       track.lyricsResolved = true;
+      await persistOfflineLyrics(track);
       toast(synced?.lines ? "Timestamped lyrics saved" : "Lyrics saved — use Sync to audio to add timing");
       renderLyricsStage();
     }catch(e){
@@ -2306,6 +2359,33 @@ function setVolume(v){
   state.muted = false;
   audioEl.volume = state.volume;
   updateVolUI(); saveSettings();
+}
+
+function updateTransportModeUI(){
+  ["#btnShuffle", "#lyricsShuffle"].forEach(selector =>
+    $(selector)?.classList.toggle("on", state.shuffle)
+  );
+  ["#btnRepeat", "#lyricsRepeat"].forEach(selector => {
+    const button = $(selector);
+    if(!button) return;
+    button.classList.toggle("on", state.repeat !== "off");
+    button.title = `Repeat: ${state.repeat}`;
+    button.setAttribute("aria-label", `Repeat: ${state.repeat}`);
+  });
+}
+
+function toggleShuffle(){
+  state.shuffle = !state.shuffle;
+  updateTransportModeUI();
+  saveSettings();
+  toast(state.shuffle ? "Shuffle on" : "Shuffle off");
+}
+
+function cycleRepeat(){
+  state.repeat = state.repeat === "off" ? "all" : state.repeat === "all" ? "one" : "off";
+  updateTransportModeUI();
+  saveSettings();
+  toast("Repeat: " + state.repeat);
 }
 
 /* ============================================================
@@ -3790,17 +3870,17 @@ on("#nowArtist", "click", (e)=>{
 
 on("#btnPlay", "click", togglePlay);
 on("#miniPlay", "click", togglePlay);
+on("#lyricsPlay", "click", togglePlay);
 on("#btnNext", "click", ()=>playNext(false));
 on("#miniNext", "click", ()=>playNext(false));
+on("#lyricsNext", "click", ()=>playNext(false));
 on("#btnPrev", "click", playPrev);
 on("#miniPrev", "click", playPrev);
-on("#btnShuffle", "click", ()=>{ state.shuffle=!state.shuffle; $("#btnShuffle").classList.toggle("on",state.shuffle); saveSettings(); toast(state.shuffle?"Shuffle on":"Shuffle off"); });
-on("#btnRepeat", "click", ()=>{
-  state.repeat = state.repeat==="off" ? "all" : state.repeat==="all" ? "one" : "off";
-  $("#btnRepeat").classList.toggle("on", state.repeat!=="off");
-  $("#btnRepeat").title = "Repeat: "+state.repeat;
-  saveSettings(); toast("Repeat: "+state.repeat);
-});
+on("#lyricsPrev", "click", playPrev);
+on("#btnShuffle", "click", toggleShuffle);
+on("#lyricsShuffle", "click", toggleShuffle);
+on("#btnRepeat", "click", cycleRepeat);
+on("#lyricsRepeat", "click", cycleRepeat);
 on("#nowFav", "click", ()=>{ const t=currentTrack(); if(t) toggleFavorite(t); });
 on("#btnOffline", "click", ()=>{
   const t = currentTrack();
@@ -3857,9 +3937,12 @@ function previewSeek(pct){
   $("#miniSeekThumb").style.left = percent;
   $("#mobileSeekFill").style.width = percent;
   $("#mobileSeekThumb").style.left = percent;
+  $("#lyricsSeekFill").style.width = percent;
+  $("#lyricsSeekThumb").style.left = percent;
   $("#timeCur").textContent = fmtTime(time);
   $("#miniCur").textContent = fmtTime(time);
   $("#mobileTimeCur").textContent = fmtTime(time);
+  $("#lyricsTimeCur").textContent = fmtTime(time);
 }
 function commitSeek(pct){
   if(!audioEl.duration) return;
@@ -3921,7 +4004,7 @@ function bindSeek(seekEl){
     }
   });
 }
-[$("#seek"), $("#miniSeek"), $("#mobileSeek")].forEach(bindSeek);
+[$("#seek"), $("#miniSeek"), $("#mobileSeek"), $("#lyricsSeek")].forEach(bindSeek);
 on("#volTrack", "click", (e)=>{
   const rect = e.currentTarget.getBoundingClientRect();
   setVolume((e.clientX-rect.left)/rect.width);
@@ -4101,8 +4184,7 @@ async function init(){
     await loadPersisted();
     audioEl.volume = state.muted ? 0 : state.volume;
     $$("#viewToggle button").forEach(b=>b.classList.toggle("active", b.dataset.mode===state.listMode));
-    state.shuffle && $("#btnShuffle")?.classList.add("on");
-    if(state.repeat!=="off") $("#btnRepeat")?.classList.add("on");
+    updateTransportModeUI();
     updateVolUI();
     ensureCsrfToken();
     render();
