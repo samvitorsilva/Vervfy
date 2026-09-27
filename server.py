@@ -749,11 +749,16 @@ def startup() -> None:
         if "storage_path" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
         if engine.dialect.name == "postgresql":
-            # Audio moved to Supabase Storage, so the blob column may now be empty.
-            connection.execute(text("ALTER TABLE tracks ALTER COLUMN audio_data DROP NOT NULL"))
-        connection.execute(text(
-            "UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0 AND audio_data IS NOT NULL"
-        ))
+            audio_data_col = next(
+                (c for c in inspect(engine).get_columns("tracks") if c["name"] == "audio_data"),
+                None,
+            )
+            if audio_data_col is not None and not audio_data_col.get("nullable", True):
+                # Audio moved to Supabase Storage, so the blob column may now be empty.
+                connection.execute(text("ALTER TABLE tracks ALTER COLUMN audio_data DROP NOT NULL"))
+            connection.execute(text(
+                "UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0 AND audio_data IS NOT NULL"
+            ))
     app.state.is_first_account = user_store.count() == 0
 
 
