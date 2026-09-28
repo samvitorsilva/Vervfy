@@ -1,8 +1,8 @@
-const CACHE_NAME = "vervfy-shell-v5";
+const CACHE_NAME = "vervfy-shell-v6";
 const SHELL = [
  "/static/index.html",
  "/static/app.js?v=26",
- "/static/styles.css?v=25",
+ "/static/styles.css?v=26",
  "/static/gemini-svg.svg",
 ];
 

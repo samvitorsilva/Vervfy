@@ -1237,11 +1237,11 @@ body.mini-mode .mini-player{ display:block; }
   .time{ width:32px; font-size:10px; }
   .now-extra{ flex:0 0 auto; gap:0; width:auto; }
   .now-artist{ display:none; }
-  /* Keep queue + mute; hide lyrics/viz/mini to save width.
+  /* Keep lyrics, queue, and mute reachable; hide viz/mini to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
-  .now-extra .icon-btn:not(#btnQueueToggle):not(#btnMute){ display:none; }
+  .now-extra .icon-btn:not(#btnLyrics):not(#btnQueueToggle):not(#btnMute){ display:none; }
   .now-extra #btnMute{ display:flex; width:28px; height:28px; }
   .toasts{ bottom:calc(var(--mobile-rail-clear) + 8px); }
   body.now-playing .toasts,
@@ -1295,8 +1295,8 @@ body.mini-mode .mini-player{ display:block; }
   body:has(#nowbar:not(.hidden)) .side-panel{ padding-bottom:var(--mobile-player-clear); }
 }
 @media (max-width:480px){
-  /* Still keep mute (volume) — do not collapse the whole .now-extra */
-  .now-extra .icon-btn:not(#btnMute){ display:none; }
+  /* Keep lyrics and mute available on narrow phones; hide queue to save width. */
+  .now-extra .icon-btn:not(#btnLyrics):not(#btnMute){ display:none; }
   .now-track{ width:min(44%, 150px); }
   .view-count{ display:none; }
   .artist-info, .artist-hero{ padding-inline:16px; }

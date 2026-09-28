@@ -490,8 +490,14 @@ def _matching_catalog_artist(results: list[dict], candidates: list[str], name_fi
 # The British rapper Dave (Santan Dave) shares his stage name with unrelated
 # artists. This Deezer portrait is tied to artist ID 11256100, whose catalog
 # includes Psychodrama, Split Decision, and The Boy Who Played the Harp.
+_DAVE_DEEZER_PHOTO = (
+    "https://cdn-images.dzcdn.net/images/artist/"
+    "eb2c8952b7328fdf32b3546d5ffab8c2/250x250-000000-80-0-0.jpg"
+)
 _VERIFIED_ARTIST_PHOTOS = {
-    "dave": "https://cdn-images.dzcdn.net/images/artist/eb2c8952b7328fdf32b3546d5ffab8c2/250x250-000000-80-0-0.jpg",
+    "dave": _DAVE_DEEZER_PHOTO,
+    "davesantan": _DAVE_DEEZER_PHOTO,
+    "santandave": _DAVE_DEEZER_PHOTO,
 }
 
 
