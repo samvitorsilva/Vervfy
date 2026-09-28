@@ -27,6 +27,7 @@ async function logoutAndRedirect() {
       redirect: "manual",
     });
   } catch (_) {}
+  await clearLocalAccountSession();
   window.location.assign(loginPageUrl());
 }
 
@@ -78,6 +79,7 @@ const state = {
   view: "library",       // library | playlists | artists | favorites | playlist:<id> | artist:<name>
   listMode: "grid",
   search: "",
+  artistsReturn: null,
   queue: [],             // array of track ids, the play order
   queueIndex: -1,
   playingContext: null,  // page/list that started the current queue
@@ -876,6 +878,8 @@ const OFFLINE_STORE = "offlineTracks";
 const offlineObjectUrls = new Set();
 const offlineArtistProfiles = new Map();
 const offlineArtistPhotos = new Map();
+let activeAccountId = null;
+let accountIdentityRequest = null;
 
 function releaseOfflineObjectUrls(){
   offlineObjectUrls.forEach(url => URL.revokeObjectURL(url));
@@ -885,6 +889,7 @@ function releaseOfflineObjectUrls(){
 }
 
 function offlineTrackFromRecord(record){
+  const trackId = record.trackId || record.id;
   const fallbackArt = generateAura(`${record.artist}|${record.album}|${record.title}`);
   const art = record.cover instanceof Blob
     ? URL.createObjectURL(record.cover)
@@ -905,12 +910,12 @@ function offlineTrackFromRecord(record){
     ? (record.lyrics.lines ? record.lyrics : {source:"offline", text:record.lyrics.text || ""})
     : null;
   return {
-    id: record.id, title: record.title, artist: record.artist, album: record.album,
+    id: trackId, title: record.title, artist: record.artist, album: record.album,
     year: "", duration: record.duration || 0, art, fallbackArt,
     streamUrl: null, file: record.audio, offlineUrl: audio, offline: true,
     favorite: false, dateAdded: record.dateAdded || Date.now(),
     lyrics, customLyrics: record.customLyrics || null,
-    lyricsResolved: !!record.lyrics, lyricsLoading: false, fingerprint: record.id,
+    lyricsResolved: !!record.lyrics, lyricsLoading: false, fingerprint: trackId,
   };
 }
 
@@ -925,10 +930,13 @@ function applyServerCustomLyrics(track, payload){
   return track;
 }
 
-async function loadOfflineTracks(){
+async function loadOfflineTracks(accountId = activeAccountId){
   releaseOfflineObjectUrls();
+  if(!accountId) return [];
   const records = await AuralisDB.getAll(OFFLINE_STORE);
-  return records.map(offlineTrackFromRecord);
+  return records
+    .filter(record => record.accountId === accountId)
+    .map(offlineTrackFromRecord);
 }
 
 async function fetchBlob(url){
@@ -939,7 +947,9 @@ async function fetchBlob(url){
 
 async function downloadTrackOffline(track){
   if(!track || track.offline) return;
+  const accountId = activeAccountId;
   try{
+    if(!accountId) throw new Error("Sign in before saving music for offline listening.");
     if(!track.lyricsResolved) await ensureTrackLyrics(track);
     const artistNames = artistsOf(track);
     const [audio, cover, profiles] = await Promise.all([
@@ -953,8 +963,10 @@ async function downloadTrackOffline(track){
       const photoUrl = await ArtistPhotoEngine.resolve(name);
       if(photoUrl) artistPhotos[name] = await fetchBlob(photoUrl);
     }));
+    if(activeAccountId !== accountId) throw new Error("Your account changed before the download finished.");
     const record = {
-      id: track.id, title: track.title, artist: track.artist, album: track.album,
+      id: `${accountId}:${track.id}`, trackId: track.id, accountId,
+      title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, customLyrics: track.customLyrics || null,
       lyrics: track.lyrics || null, audio, cover, artistProfiles, artistPhotos,
       dateAdded: Date.now(),
@@ -972,7 +984,8 @@ async function downloadTrackOffline(track){
 
 async function removeOfflineTrack(track){
   if(!track?.offline) return;
-  await AuralisDB.del(track.id, OFFLINE_STORE);
+  if(!activeAccountId) return;
+  await AuralisDB.del(`${activeAccountId}:${track.id}`, OFFLINE_STORE);
   track.offline = false;
   track.offlineUrl = null;
   track.streamUrl = apiUrl(`/api/tracks/${encodeURIComponent(track.id)}/stream`);
@@ -1158,21 +1171,26 @@ async function loadServerLibrary(force = false){
 
   serverLibraryRequest = (async () => {
     try{
-      const [tracksRes, stateRes] = await Promise.all([
+      const [tracksRes, stateRes, accountId] = await Promise.all([
         fetchWithRetry("/api/tracks", {}, 3),
         fetch("/api/library/state"),
+        ensureAccountIdentity(),
       ]);
       if(!tracksRes.ok) throw new Error("bad status "+tracksRes.status);
       const data = await tracksRes.json();
       state.tracks = (data.tracks || []).map(trackFromServer);
-      const offlineTracks = await loadOfflineTracks();
+      const offlineTracks = await loadOfflineTracks(accountId);
       const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
       const serverById = new Map((data.tracks || []).map(track => [track.id, track]));
       state.tracks = state.tracks.map(track =>
         applyServerCustomLyrics(offlineById.get(track.id) || track, serverById.get(track.id))
       );
+      const trackIds = new Set(state.tracks.map(track => track.id));
       offlineTracks.forEach(track => {
-        if(!state.tracks.some(existing => existing.id === track.id)) state.tracks.push(track);
+        if(!trackIds.has(track.id)){
+          state.tracks.push(track);
+          trackIds.add(track.id);
+        }
       });
       const legacy = window._persistedLibrary;
       if(stateRes.ok){
@@ -1214,8 +1232,7 @@ async function syncServerLibrary(){
     const remoteTracks = (await response.json()).tracks || [];
     const previousIds = new Set(state.tracks.map(track => track.id));
     const previousById = new Map(state.tracks.map(track => [track.id, track]));
-    const offlineTracks = await loadOfflineTracks();
-    const offlineById = new Map(offlineTracks.map(track => [track.id, track]));
+    const offlineById = new Map(state.tracks.filter(track => track.offline).map(track => [track.id, track]));
     const remoteById = new Map(remoteTracks.map(payload => {
       const track = trackFromServer(payload);
       const syncedTrack = offlineById.get(track.id) || track;
@@ -1226,9 +1243,28 @@ async function syncServerLibrary(){
     const localOnly = state.tracks.filter(track => track.offline && !remoteById.has(track.id));
     state.tracks = [...remoteById.values(), ...localOnly];
     const added = state.tracks.filter(track => !previousIds.has(track.id));
-    if(added.length){
+    const availableIds = new Set(state.tracks.map(track => track.id));
+    let currentTrackRemoved = false;
+    for(let index = state.queue.length - 1; index >= 0; index--){
+      if(availableIds.has(state.queue[index])) continue;
+      if(index === state.queueIndex) currentTrackRemoved = true;
+      else if(index < state.queueIndex) state.queueIndex--;
+      state.queue.splice(index, 1);
+    }
+    if(!state.queue.length){
+      state.queueIndex = -1;
+      if(currentTrackRemoved) stopPlayback();
+    }else if(currentTrackRemoved){
+      state.queueIndex = Math.min(state.queueIndex, state.queue.length - 1);
+      playCurrent();
+    }else{
+      updateNowPlayingUI();
+      renderQueuePanel();
+    }
+    const removed = [...previousIds].some(id => !availableIds.has(id));
+    if(added.length || removed){
       render();
-      toast(`${added.length} new song${added.length === 1 ? "" : "s"} synced.`);
+      if(added.length) toast(`${added.length} new song${added.length === 1 ? "" : "s"} synced.`);
     }
   }catch(error){
     console.warn("Background library sync failed", error);
@@ -1352,8 +1388,8 @@ async function saveTrackLyrics(track, lyrics){
 }
 
 async function persistOfflineLyrics(track){
-  if(!track.offline) return;
-  const record = await AuralisDB.get(track.id, OFFLINE_STORE);
+  if(!track.offline || !activeAccountId) return;
+  const record = await AuralisDB.get(`${activeAccountId}:${track.id}`, OFFLINE_STORE);
   if(!record) return;
   record.customLyrics = track.customLyrics;
   record.lyrics = track.lyrics;
@@ -2508,6 +2544,12 @@ function artistNameFromView(view){
 }
 function openArtist(name){
   if(!name) return;
+  if(state.view === "artists"){
+    state.artistsReturn = {
+      scrollTop: $("#content")?.scrollTop || 0,
+      search: state.search,
+    };
+  }
   state.view = artistViewKey(name);
   state.search = "";
   const input = $("#searchInput");
@@ -2853,10 +2895,10 @@ function openNowPlayingMenu(anchor, t){
   closeMenus();
   const menu = document.createElement("div");
   menu.className = "menu";
-  const rect = anchor.getBoundingClientRect();
-  menu.style.top = Math.min(window.innerHeight - 260, rect.bottom + 6) + "px";
-  menu.style.left = Math.max(8, Math.min(window.innerWidth - 212, rect.right - 196)) + "px";
-  const artist = artistsOf(t)[0] || artistNameOf(t);
+  const artists = artistsOf(t);
+  const artistMenuItem = artists.length > 1
+    ? `<button type="button" class="menu-item menu-item-submenu" data-act="artists" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.5"/><path d="M2 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17 15c2.6.3 4.3 1.9 5 5"/></svg><span>Artist pages</span><svg class="menu-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>`
+    : `<button type="button" class="menu-item" data-act="artist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/></svg>About ${escapeHtml(artists[0] || artistNameOf(t))}</button>`;
   menu.innerHTML = `
     <div class="menu-item" data-act="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="m16 15 4 3-4 3"/></svg>Play next</div>
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
@@ -2864,20 +2906,22 @@ function openNowPlayingMenu(anchor, t){
     <div class="menu-item" data-act="playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>Add to playlist</div>
     <div class="menu-item" data-act="offline"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v11"/><path d="m8 11 4 4 4-4"/><path d="M5 20h14"/></svg>${t.offline ? "Remove offline download" : "Download for offline"}</div>
     <div class="menu-sep"></div>
-    <div class="menu-item" data-act="artist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/></svg>About ${escapeHtml(artist)}</div>
+    ${artistMenuItem}
     <div class="menu-item" data-act="album"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M7.5 7.5h.01M16.5 16.5h.01"/></svg>Go to album</div>
     <div class="menu-item" data-act="share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4"/></svg>Share</div>
   `;
   document.body.appendChild(menu);
+  positionMenuBelowAnchor(anchor, menu);
   menu.querySelector('[data-act="play-next"]').addEventListener("click", ()=>{ playNextTrack(t); closeMenus(); });
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
   menu.querySelector('[data-act="playlist"]').addEventListener("click", ev=> openPlaylistSubmenu(ev, t, menu));
   menu.querySelector('[data-act="offline"]').addEventListener("click", ()=>{ closeMenus(); t.offline ? removeOfflineTrack(t) : downloadTrackOffline(t); });
-  menu.querySelector('[data-act="artist"]').addEventListener("click", ()=>{
+  menu.querySelector('[data-act="artists"]')?.addEventListener("click", ev => openArtistSubmenu(ev, artists));
+  menu.querySelector('[data-act="artist"]')?.addEventListener("click", ()=>{
     closeMenus();
     $("#mobilePlayer")?.classList.remove("open");
-    openArtist(artist);
+    openArtist(artists[0] || artistNameOf(t));
   });
   menu.querySelector('[data-act="album"]').addEventListener("click", ()=>{
     closeMenus();
@@ -2886,6 +2930,68 @@ function openNowPlayingMenu(anchor, t){
   });
   menu.querySelector('[data-act="share"]').addEventListener("click", ()=>{ closeMenus(); shareTrack(t); });
   setTimeout(armMenuOutsideClick, 0);
+}
+function positionMenuBelowAnchor(anchor, menu){
+  requestAnimationFrame(()=>{
+    const anchorRect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const padding = 8;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight;
+    const left = Math.max(padding, Math.min(
+      anchorRect.right - menuRect.width,
+      window.innerWidth - menuRect.width - padding
+    ));
+    const top = Math.max(padding, Math.min(
+      anchorRect.bottom + 6,
+      viewportHeight - menuRect.height - padding
+    ));
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  });
+}
+function positionMenuSubmenu(anchor, submenu){
+  requestAnimationFrame(()=>{
+    const anchorRect = anchor.getBoundingClientRect();
+    const submenuRect = submenu.getBoundingClientRect();
+    const viewportPadding = 8;
+    const nowbar = $("#nowbar");
+    const nowbarRect = nowbar?.classList.contains("hidden") ? null : nowbar?.getBoundingClientRect();
+    const bottomReserved = nowbarRect && nowbarRect.top > 0 && nowbarRect.top < window.innerHeight
+      ? window.innerHeight - nowbarRect.top
+      : 0;
+    const maxBottom = Math.max(viewportPadding, window.innerHeight - Math.max(viewportPadding, bottomReserved + viewportPadding));
+    const rightLeft = anchorRect.right + 6;
+    const leftLeft = anchorRect.left - submenuRect.width - 6;
+    const left = rightLeft + submenuRect.width <= window.innerWidth - viewportPadding
+      ? rightLeft
+      : Math.max(viewportPadding, leftLeft);
+    const top = Math.max(viewportPadding, Math.min(anchorRect.top, maxBottom - submenuRect.height));
+    submenu.style.left = `${Math.max(viewportPadding, Math.min(left, window.innerWidth - submenuRect.width - viewportPadding))}px`;
+    submenu.style.top = `${top}px`;
+  });
+}
+function openArtistSubmenu(event, artists){
+  event.stopPropagation();
+  document.querySelector(".menu-sub")?.remove();
+  const anchor = event.currentTarget;
+  const submenu = document.createElement("div");
+  submenu.className = "menu menu-sub";
+  submenu.setAttribute("role", "menu");
+  submenu.setAttribute("aria-label", "Artist pages");
+  submenu.innerHTML = artists.map(name =>
+    `<button type="button" class="menu-item" role="menuitem" data-artist="${escapeHtml(encodeURIComponent(name))}">${escapeHtml(name)}</button>`
+  ).join("");
+  document.body.appendChild(submenu);
+  anchor.setAttribute("aria-expanded", "true");
+  positionMenuSubmenu(anchor, submenu);
+  submenu.querySelectorAll("[data-artist]").forEach(item => {
+    item.addEventListener("click", ()=>{
+      const name = decodeURIComponent(item.dataset.artist);
+      closeMenus();
+      $("#mobilePlayer")?.classList.remove("open");
+      openArtist(name);
+    });
+  });
 }
 function albumViewKey(t){
   return "album:" + encodeURIComponent(JSON.stringify([t.album || "Unknown album", artistNameOf(t)]));
@@ -2927,27 +3033,7 @@ function openPlaylistSubmenu(e, t, parentMenu){
   const items = state.playlists.map(p=>`<div class="menu-item" data-pl="${escapeHtml(p.id)}">${escapeHtml(p.name)}</div>`).join("");
   sub.innerHTML = items + `<div class="menu-sep"></div><div class="menu-item" data-pl="new"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>New playlist…</div>`;
   document.body.appendChild(sub);
-  requestAnimationFrame(()=>{
-    const anchorRect = anchor.getBoundingClientRect();
-    const subRect = sub.getBoundingClientRect();
-    const viewportPadding = 8;
-    const bottomReserved = (() => {
-      const nowbar = $("#nowbar");
-      if(!nowbar || nowbar.classList.contains("hidden")) return 0;
-      const rect = nowbar.getBoundingClientRect();
-      return rect.top > 0 && rect.top < window.innerHeight ? window.innerHeight - rect.top : 0;
-    })();
-    const minTop = viewportPadding;
-    const maxBottom = Math.max(minTop, window.innerHeight - Math.max(viewportPadding, bottomReserved + viewportPadding));
-    const rightLeft = anchorRect.right + 6;
-    const leftLeft = anchorRect.left - subRect.width - 6;
-    const left = rightLeft + subRect.width <= window.innerWidth - viewportPadding
-      ? rightLeft
-      : Math.max(viewportPadding, leftLeft);
-    const top = Math.max(minTop, Math.min(anchorRect.top, maxBottom - subRect.height));
-    sub.style.left = `${Math.max(viewportPadding, Math.min(left, window.innerWidth - subRect.width - viewportPadding))}px`;
-    sub.style.top = `${top}px`;
-  });
+  positionMenuSubmenu(anchor, sub);
   sub.querySelectorAll("[data-pl]").forEach(item=>{
     item.addEventListener("click", ()=>{
       if(item.dataset.pl === "new"){
@@ -2978,6 +3064,19 @@ function stopPlayback(){
   if(currentBlobUrl){ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
   updateNowPlayingUI();
   syncPlayIcons(false);
+}
+
+async function clearLocalAccountSession(){
+  stopPlayback();
+  state.queue = [];
+  state.queueIndex = -1;
+  state.tracks = [];
+  activeAccountId = null;
+  accountInfo = null;
+  csrfToken = null;
+  serverLibraryLoaded = false;
+  releaseOfflineObjectUrls();
+  await AuralisDB.del("auralis:account-id");
 }
 
 // Drop one queue slot at `i`. If that slot was currently playing, advance
@@ -3304,6 +3403,44 @@ async function uploadProfilePhoto(file, filename){
 }
 
 let accountInfo = null;
+async function ensureAccountIdentity(){
+  if(accountInfo?.id){
+    activeAccountId = accountInfo.id;
+    return activeAccountId;
+  }
+  if(accountIdentityRequest) return accountIdentityRequest;
+  accountIdentityRequest = (async ()=>{
+    let response;
+    try{
+      response = await fetch("/api/me");
+    }catch(_){
+      const cachedId = await AuralisDB.get("auralis:account-id");
+      activeAccountId = typeof cachedId === "string" ? cachedId : null;
+      return activeAccountId;
+    }
+    if(response.status === 401){
+      accountInfo = null;
+      activeAccountId = null;
+      await AuralisDB.del("auralis:account-id");
+      return null;
+    }
+    if(!response.ok){
+      activeAccountId = null;
+      return null;
+    }
+    try{
+      accountInfo = await response.json();
+    }catch(_){
+      activeAccountId = null;
+      return null;
+    }
+    activeAccountId = typeof accountInfo?.id === "string" ? accountInfo.id : null;
+    if(!activeAccountId) return null;
+    await AuralisDB.set("auralis:account-id", activeAccountId);
+    return activeAccountId;
+  })().finally(()=>{ accountIdentityRequest = null; });
+  return accountIdentityRequest;
+}
 function renderHomeProfileAvatar(){
   const avatar = $("#homeProfileAvatar");
   if(!avatar) return;
@@ -3316,10 +3453,7 @@ function renderHomeProfileAvatar(){
     : escapeHtml(username.slice(0, 1).toUpperCase());
 }
 async function fetchAccountInfo(){
-  try{
-    const res = await fetch("/api/me");
-    if(res.ok) accountInfo = await res.json();
-  }catch(_){}
+  await ensureAccountIdentity();
   renderHomeProfileAvatar();
   return accountInfo;
 }
@@ -3449,9 +3583,8 @@ async function renderAccountView(){
         headers: { "X-CSRF-Token": await ensureCsrfToken() },
       });
       if(!res.ok) throw new Error("Could not sign out of all devices");
-      accountInfo = null;
-      csrfToken = null;
-      window.location.assign("/login");
+      await clearLocalAccountSession();
+      window.location.assign(loginPageUrl());
     }catch(err){
       acctLogoutAll.disabled = false;
       toast(err.message);
@@ -3543,8 +3676,7 @@ async function renderAccountView(){
       });
       const data = await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data.detail || "Could not delete account");
-      accountInfo = null;
-      csrfToken = null;
+      await clearLocalAccountSession();
       window.location.assign("/login?account_deleted=1");
     }catch(err){
       msg.textContent = err.message; msg.className = "acct-form-msg error";
@@ -3586,10 +3718,17 @@ function renderPlaylistsView(){
 
 function renderArtistsView(){
   const content = $("#content");
+  const returnState = state.artistsReturn;
+  const restoreScroll = () => {
+    if(!returnState) return;
+    content.scrollTop = returnState.scrollTop;
+    state.artistsReturn = null;
+  };
   if(state.tracks.length === 0){
     content.innerHTML = emptyStateMarkup();
     $("#emptyAddFiles")?.addEventListener("click", ()=> $("#fileInput").click());
     $("#emptyAddFolder")?.addEventListener("click", connectMusicFolder);
+    restoreScroll();
     return;
   }
   let artists = getArtists();
@@ -3599,6 +3738,7 @@ function renderArtistsView(){
   }
   if(artists.length === 0){
     content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>No matches</h3><p>Try a different search term, or browse your full library.</p></div>`;
+    restoreScroll();
     return;
   }
   content.innerHTML = `
@@ -3614,6 +3754,7 @@ function renderArtistsView(){
           </button>
         </div>`).join("")}
     </div>`;
+  restoreScroll();
   ArtistPhotoEngine.resolveAll(artists);
   $$(".artist-card").forEach(card=>{
     const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
@@ -3849,7 +3990,16 @@ on("#fileInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = 
 on("#folderInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = ""; });
 
 $$(".rail-btn[data-view]").forEach(btn=>{
-  btn.addEventListener("click", ()=>{ state.view = btn.dataset.view; state.search=""; $("#searchInput").value=""; render(); });
+  btn.addEventListener("click", ()=>{
+    const returningToArtists = btn.dataset.view === "artists"
+      && state.view.startsWith("artist:")
+      && state.artistsReturn;
+    if(!returningToArtists) state.artistsReturn = null;
+    state.view = btn.dataset.view;
+    state.search = returningToArtists ? state.artistsReturn.search : "";
+    $("#searchInput").value = state.search;
+    render();
+  });
 });
 $$("#viewToggle button").forEach(btn=>{
   btn.addEventListener("click", ()=>{

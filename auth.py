@@ -32,6 +32,13 @@ except ImportError:  # pragma: no cover - dependency is required in production
     redis = None
 
 
+_INCREMENT_WINDOW_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return count
+"""
+
+
 class RequestThrottle:
     """Fixed-window limiter with Redis sharing across workers and instances."""
 
@@ -49,8 +56,9 @@ class RequestThrottle:
         if self._redis is not None:
             redis_key = f"vervfy:ratelimit:{key}"
             try:
-                with self._redis.pipeline(transaction=True) as pipe:
-                    count, _ = pipe.incr(redis_key).expire(redis_key, window_seconds).execute()
+                count = self._redis.eval(
+                    _INCREMENT_WINDOW_SCRIPT, 1, redis_key, window_seconds
+                )
                 return int(count) <= limit
             except redis.RedisError as exc:
                 raise RuntimeError("rate-limit backend unavailable") from exc

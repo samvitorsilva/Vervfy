@@ -45,6 +45,17 @@ def _parse_filename(filename: str):
         if artist and title: return title, artist
     return stem, "Unknown Artist"
 
+def _tag_text(value, fallback: str, *, join_values: bool = False) -> str:
+    if value is None:
+        return fallback
+    values = value if isinstance(value, (list, tuple)) else [value]
+    normalized = list(dict.fromkeys(
+        text for item in values if (text := str(item).strip())
+    ))
+    if not normalized:
+        return fallback
+    return "; ".join(normalized) if join_values else normalized[0]
+
 class Library:
     def __init__(self, user_id: str): self.user_id = user_id
 
@@ -272,9 +283,9 @@ class Library:
                     audio=MutagenFile(path,easy=True)
                     if audio is None:return None
                     duration=float(getattr(getattr(audio,"info",None),"length",0) or 0);tags=getattr(audio,"tags",None) or {}
-                    if tags.get("title"):title=str(tags["title"][0])
-                    if tags.get("artist"):artist=str(tags["artist"][0])
-                    if tags.get("album"):album=str(tags["album"][0])
+                    title=_tag_text(tags.get("title"), title)
+                    artist=_tag_text(tags.get("artist"), artist, join_values=True)
+                    album=_tag_text(tags.get("album"), album)
                 except Exception:return None
                 if path.lower().endswith(".mp3"):
                     try:

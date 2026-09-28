@@ -492,7 +492,7 @@ def _matching_catalog_artist(results: list[dict], candidates: list[str], name_fi
 # includes Psychodrama, Split Decision, and The Boy Who Played the Harp.
 _DAVE_DEEZER_PHOTO = (
     "https://cdn-images.dzcdn.net/images/artist/"
-    "eb2c8952b7328fdf32b3546d5ffab8c2/250x250-000000-80-0-0.jpg"
+    "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg"
 )
 _VERIFIED_ARTIST_PHOTOS = {
     "dave": _DAVE_DEEZER_PHOTO,
@@ -958,18 +958,28 @@ async def upload_account_photo(
     photo_data = await file.read(MAX_PROFILE_PHOTO_BYTES + 1)
     if len(photo_data) > MAX_PROFILE_PHOTO_BYTES:
         raise HTTPException(status_code=413, detail="Profile photo must be 5 MB or smaller")
+    photo_mime = await run_in_threadpool(_validate_profile_photo, photo_data)
+    await run_in_threadpool(user_store.update_profile_photo, user["id"], photo_data, photo_mime)
+    return {"photo_url": "/api/account/photo"}
+
+
+def _validate_profile_photo(photo_data: bytes) -> str:
     try:
         with Image.open(BytesIO(photo_data)) as image:
             image.verify()
             image_format = (image.format or "").upper()
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
-        raise HTTPException(status_code=400, detail="That file is not a valid image")
-    allowed_formats = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif"}
+        raise HTTPException(status_code=400, detail="That file is not a valid image") from None
+    allowed_formats = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+        "GIF": "image/gif",
+    }
     photo_mime = allowed_formats.get(image_format)
     if not photo_mime:
         raise HTTPException(status_code=400, detail="Use a JPEG, PNG, WebP, or GIF image")
-    user_store.update_profile_photo(user["id"], photo_data, photo_mime)
-    return {"photo_url": "/api/account/photo"}
+    return photo_mime
 
 
 @app.delete("/api/account/photo")
@@ -1012,6 +1022,34 @@ class PlaylistState(BaseModel):
 class LibraryStateRequest(BaseModel):
     favorites: list[SafeId] = Field(default_factory=list, max_length=10_000)
     playlists: list[PlaylistState] = Field(default_factory=list, max_length=1_000)
+
+
+def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearray) -> None:
+    suffix = os.path.splitext(os.path.basename(filename))[1].lower()
+    staging_path = f"{user_id}/.staging/{job_id}{suffix}"
+    try:
+        audio_store.upload(staging_path, data, audio_store.guess_content_type(filename))
+        with tenant_session(user_id) as session:
+            session.add(UploadJob(
+                id=job_id,
+                user_id=user_id,
+                filename=filename,
+                storage_path=staging_path,
+                created_at=time.time(),
+            ))
+            session.commit()
+        upload_queue.enqueue(job_id, user_id)
+    except Exception as exc:
+        audio_store.delete_quietly(staging_path)
+        log.exception("could not queue upload")
+        raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
+
+
+def _upload_preflight(library: Library, data: bytearray) -> tuple[str, int, int, bool]:
+    track_id = track_id_for_bytes(data)
+    if library.get(track_id) is not None:
+        return track_id, 0, 0, True
+    return track_id, library.total_bytes(), library.count_tracks(), False
 
 
 def _library_state(user_id: str) -> dict:
@@ -1232,29 +1270,12 @@ async def upload_track(
     library = get_library(user["id"])
     if async_uploads:
         job_id = uuid.uuid4().hex
-        suffix = os.path.splitext(os.path.basename(file.filename))[1].lower()
-        staging_path = f"{user['id']}/.staging/{job_id}{suffix}"
-        try:
-            audio_store.upload(staging_path, buffer, audio_store.guess_content_type(file.filename))
-            with tenant_session(user["id"]) as session:
-                session.add(UploadJob(
-                    id=job_id,
-                    user_id=user["id"],
-                    filename=file.filename,
-                    storage_path=staging_path,
-                    created_at=time.time(),
-                ))
-                session.commit()
-            upload_queue.enqueue(job_id, user["id"])
-        except Exception as exc:
-            audio_store.delete_quietly(staging_path)
-            log.exception("could not queue upload")
-            raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
+        await run_in_threadpool(_queue_staged_upload, job_id, user["id"], file.filename, buffer)
         return {"id": job_id, "status": "processing"}
-    track_id = track_id_for_bytes(buffer)
-    if library.get(track_id) is None:
-        used_bytes = library.total_bytes()
-        track_count = library.count_tracks()
+    track_id, used_bytes, track_count, existing = await run_in_threadpool(
+        _upload_preflight, library, buffer
+    )
+    if not existing:
         if used_bytes + len(buffer) > USER_QUOTA_BYTES or track_count >= MAX_TRACKS_PER_USER:
             used_mb = used_bytes / (1024 * 1024)
             quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
@@ -1271,7 +1292,7 @@ async def upload_track(
             max_tracks=MAX_TRACKS_PER_USER,
         )
     except UploadQuotaExceeded:
-        used_bytes = library.total_bytes()
+        used_bytes = await run_in_threadpool(library.total_bytes)
         used_mb = used_bytes / (1024 * 1024)
         quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
         raise HTTPException(

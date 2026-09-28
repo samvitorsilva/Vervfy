@@ -148,6 +148,25 @@ def test_upload_goes_to_storage_not_postgres(env):
     assert fake.objects[row.storage_path] == data
 
 
+def test_upload_preserves_multiple_artist_tags(env, monkeypatch):
+    server, _, _, _, _ = env
+    import library
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        library,
+        "MutagenFile",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            info=SimpleNamespace(length=1),
+            tags={"title": ["Song"], "artist": ["Singer One", "Singer Two"], "album": ["Album"]},
+        ),
+    )
+
+    metadata = library.Library("user")._read_metadata("song.wav", b"audio")
+
+    assert metadata[0:3] == ("Song", "Singer One; Singer Two", "Album")
+
+
 def test_async_upload_runs_under_the_job_tenant(env):
     server, client, fake, headers, monkeypatch = env
     import upload_queue

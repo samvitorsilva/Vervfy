@@ -588,6 +588,7 @@ input{ background:none; border:none; }
 /* menus */
 .menu{
   position:fixed; z-index:200; min-width:196px;
+  max-height:calc(100vh - 16px); max-height:calc(100dvh - 16px); overflow-y:auto;
   background:rgba(28,30,42,0.88); border:1px solid var(--border-hi);
   border-radius:16px; padding:6px; backdrop-filter:blur(28px) saturate(1.4);
   box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.1);
@@ -600,12 +601,19 @@ input{ background:none; border:none; }
 }
 .menu-item:hover{ background:var(--glass-hi); color:var(--text); }
 .menu-item svg{ width:14px; height:14px; }
+.menu-item-submenu{
+  width:100%; justify-content:flex-start; text-align:left;
+  border:0; background:transparent; font-family:inherit;
+}
+.menu-item-submenu span{ flex:1; }
+.menu-item-submenu .menu-chevron{ width:12px; height:12px; color:var(--text-dim); }
 .menu-sep{ height:1px; background:var(--border); margin:5px 6px; }
 .menu-sub{
   position:fixed; left:auto; right:auto; top:auto;
-  max-width:calc(100vw - 16px); max-height:calc(100vh - 16px);
+  max-width:calc(100vw - 16px); max-height:calc(100dvh - 16px);
   overflow-y:auto;
 }
+.menu-sub .menu-item{ width:100%; text-align:left; white-space:normal; overflow-wrap:anywhere; }
 
 /* now playing — persistent bottom player */
 .nowbar{
@@ -953,9 +961,7 @@ body.mini-mode .mini-player{ display:block; }
   font-size:clamp(19px, 1.45vw + 15px, 32px);
   font-weight:700;
   transform:none;
-  background:var(--grad-aura);
-  -webkit-background-clip:text; background-clip:text; color:transparent;
-  filter:drop-shadow(0 0 22px rgba(139,127,255,0.38));
+  color:#d4d0ff;
 }
 .lyrics-line.past{ color:rgba(242,243,247,0.17); }
 .lyrics-plain{

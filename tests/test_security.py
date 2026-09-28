@@ -57,6 +57,34 @@ def _login(client, username="alice", passphrase="old-password"):
     )
 
 
+def test_redis_throttle_keeps_first_hit_window(app_module):
+    server, _ = app_module
+    auth = server.auth
+
+    class FakeRedisCounter:
+        def __init__(self):
+            self.count = 0
+            self.expirations = []
+
+        def eval(self, script, key_count, key, window):
+            assert script == auth._INCREMENT_WINDOW_SCRIPT
+            assert key_count == 1
+            self.count += 1
+            if self.count == 1:
+                self.expirations.append((key, window))
+            return self.count
+
+    limiter = auth.RequestThrottle()
+    fake = FakeRedisCounter()
+    limiter._redis = fake
+
+    assert limiter.allow("login:ip:user", 2, 60)
+    assert limiter.allow("login:ip:user", 2, 60)
+    assert not limiter.allow("login:ip:user", 2, 60)
+    assert not limiter.allow("login:ip:user", 2, 60)
+    assert fake.expirations == [("vervfy:ratelimit:login:ip:user", 60)]
+
+
 def _reload_server(tmp_path, monkeypatch, env_name, env_value):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / (env_name + '.db')}")
     monkeypatch.setenv("VERVFY_SECRET_KEY", env_name + "-secret")
@@ -333,7 +361,8 @@ def test_artist_profile_uses_wikipedia_when_audiodb_is_unavailable(app_module, m
     assert profile["source"] == "Wikipedia"
 
 
-def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch):
+@pytest.mark.parametrize("name", ["Dave", "Dave Santan", "Santan Dave"])
+def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch, name):
     server, _ = app_module
     server._artist_photo_cache.clear()
 
@@ -342,7 +371,7 @@ def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monk
 
     monkeypatch.setattr(server, "urlopen", unexpected_lookup)
 
-    assert server._lookup_artist_photo("Dave") == (
+    assert server._lookup_artist_photo(name) == (
         "https://cdn-images.dzcdn.net/images/artist/"
-        "eb2c8952b7328fdf32b3546d5ffab8c2/250x250-000000-80-0-0.jpg"
+        "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg"
     )
