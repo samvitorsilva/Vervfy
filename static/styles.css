@@ -919,7 +919,8 @@ body.mini-mode .mini-player{ display:block; }
   width:46px; height:46px; color:#10121b;
   background:var(--grad-aura); box-shadow:0 7px 22px rgba(139,127,255,.28), inset 0 1px 0 rgba(255,255,255,.48);
 }
-.lyrics-player-controls .tbtn-play:hover{ color:#10121b; filter:brightness(1.08); }
+.lyrics-player-controls .tbtn-play:hover,
+.lyrics-player-controls .tbtn-play:active{ color:#10121b; background:var(--grad-aura); filter:brightness(1.08); transform:scale(1.05); }
 .lyrics-player-controls .tbtn svg{ width:16px; height:16px; }
 .lyrics-player-controls .tbtn-play svg{ width:16px; height:16px; }
 .lyrics-meta .a .artist-link{ display:inline; color:inherit; }
@@ -948,11 +949,11 @@ body.mini-mode .mini-player{ display:block; }
   mask-image:linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
   -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
 }
-.lyrics-track{ position:absolute; left:0; right:0; top:50%; transition:transform .14s var(--ease); will-change:transform; }
+.lyrics-track{ position:absolute; left:0; right:0; top:50%; transition:transform .06s var(--ease); will-change:transform; }
 .lyrics-line{
   font-size:clamp(17px, 1.15vw + 14px, 27px); font-weight:600; line-height:1.35; letter-spacing:-0.025em;
   color:rgba(242,243,247,0.3); padding:8px 4px; cursor:pointer;
-  transition:color .14s var(--ease), transform .14s var(--ease);
+  transition:color .06s var(--ease), transform .06s var(--ease);
   transform-origin:left center; max-width:100%;
   white-space:normal; overflow-wrap:anywhere; word-break:break-word;
 }

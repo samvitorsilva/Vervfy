@@ -1659,11 +1659,15 @@ audioEl.addEventListener("play", () => {
   syncPlayIcons(true);
   try{ if(mediaSession) mediaSession.playbackState = "playing"; }catch(_){}
   updateMediaSessionPosition();
+  updateMobileLyricsPreview(currentTrack());
+  if($("#lyricsOverlay").classList.contains("open")) updateLyricsHighlight(true);
 });
 audioEl.addEventListener("pause", () => {
   syncPlayIcons(false);
   try{ if(mediaSession) mediaSession.playbackState = "paused"; }catch(_){}
   updateMediaSessionPosition();
+  updateMobileLyricsPreview(currentTrack());
+  if($("#lyricsOverlay").classList.contains("open")) updateLyricsHighlight(true);
 });
 audioEl.addEventListener("timeupdate", () => {
   updateSeekUI();
