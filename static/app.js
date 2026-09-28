@@ -505,6 +505,10 @@ const LyricsEngine = (() => {
   // the track's duration), then fall back to fuzzy search and pick whichever
   // candidate's duration is closest to ours.
   const LRCLIB_BASE = "https://lrclib.net/api";
+  function normalizeSearchText(value){
+    return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
   function lrclibResultToLyrics(data){
     if(!data || data.instrumental) return null;
     if(data.syncedLyrics && data.syncedLyrics.trim()){
@@ -554,9 +558,28 @@ const LyricsEngine = (() => {
       const results = await res.json();
       LyricsDebug.log(`online: search returned ${Array.isArray(results)?results.length:0} candidate(s)`);
       if(!Array.isArray(results) || results.length === 0) return null;
-      const best = durationSec > 0
-        ? results.reduce((a,b) => Math.abs((a.duration||0)-durationSec) <= Math.abs((b.duration||0)-durationSec) ? a : b)
-        : results[0];
+      const titleKey = normalizeSearchText(track.title);
+      const artistKey = normalizeSearchText(artist);
+      const best = results.slice().sort((a,b) => {
+        const score = candidate => {
+          const titleMatch = normalizeSearchText(candidate.trackName) === titleKey;
+          const artistMatch = normalizeSearchText(candidate.artistName) === artistKey;
+          const durationDifference = durationSec > 0 && Number.isFinite(candidate.duration)
+            ? Math.abs(candidate.duration - durationSec)
+            : Number.POSITIVE_INFINITY;
+          return [
+            titleMatch ? 1 : 0,
+            artistMatch ? 1 : 0,
+            durationDifference,
+            candidate.syncedLyrics ? 0 : 1,
+          ];
+        };
+        const left = score(a), right = score(b);
+        for(let i=0;i<left.length;i++){
+          if(left[i] !== right[i]) return i < 2 ? right[i] - left[i] : left[i] - right[i];
+        }
+        return 0;
+      })[0];
       const parsed = lrclibResultToLyrics(best);
       LyricsDebug.log("online: best candidate", `"${best.trackName}" by ${best.artistName}`, "→", parsed ? parsed.source : "no usable lyrics (instrumental or empty)");
       return parsed;
@@ -566,29 +589,17 @@ const LyricsEngine = (() => {
   async function resolve(track, idMeta){
     let result = fromID3(idMeta);
     if(!result) result = await fromOnline(track);
-    return normalizeSyncedLyrics(result, track?.duration) || null;
+    return normalizeSyncedLyrics(result) || null;
   }
   return { fromID3, fromLRC, fromOnline, resolve };
 })();
 
-function normalizeSyncedLyrics(lyrics, duration){
-  if(!lyrics?.lines?.length || !Number.isFinite(duration) || duration <= 0) return lyrics;
+function normalizeSyncedLyrics(lyrics){
+  if(!lyrics?.lines?.length) return lyrics;
   const lines = lyrics.lines
     .filter(line => Number.isFinite(line.time) && line.time >= 0)
     .sort((a,b)=>a.time-b.time);
   if(!lines.length) return null;
-  const lastTime = lines[lines.length - 1].time;
-  const durationMs = duration * 1000;
-  // Some lyric providers return a version whose timestamps run past the
-  // actual audio. Compress only that clearly invalid tail; normal outro
-  // silence and early final lines are left untouched.
-  if(lastTime > durationMs + 1500){
-    const scale = Math.max(0.85, (durationMs - 500) / lastTime);
-    return {
-      ...lyrics,
-      lines: lines.map(line => ({...line, time: Math.max(0, line.time * scale)})),
-    };
-  }
   return {...lyrics, lines};
 }
 
@@ -907,8 +918,7 @@ function applyServerCustomLyrics(track, payload){
   if(typeof payload?.custom_lyrics !== "string" || !payload.custom_lyrics.trim()) return track;
   track.customLyrics = payload.custom_lyrics;
   track.lyrics = normalizeSyncedLyrics(
-    LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics },
-    track.duration
+    LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics }
   );
   track.lyricsResolved = true;
   track.lyricsLoading = false;
@@ -2018,8 +2028,7 @@ function openLyricsEditor(track){
       // assuming the browser's request succeeded.
       track.customLyrics = saved.custom_lyrics;
       track.lyrics = normalizeSyncedLyrics(
-        LyricsEngine.fromLRC(track.customLyrics) || synced,
-        track.duration
+        LyricsEngine.fromLRC(track.customLyrics) || synced
       ) || { source:"custom", text:track.customLyrics };
       track.lyricsResolved = true;
       await persistOfflineLyrics(track);
