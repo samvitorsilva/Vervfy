@@ -331,3 +331,18 @@ def test_artist_profile_uses_wikipedia_when_audiodb_is_unavailable(app_module, m
 
     assert profile["bio"] == "Example Artist is a musician known for influential recordings."
     assert profile["source"] == "Wikipedia"
+
+
+def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch):
+    server, _ = app_module
+    server._artist_photo_cache.clear()
+
+    def unexpected_lookup(*args, **kwargs):
+        pytest.fail("Dave's ambiguous name must not trigger a catalog search")
+
+    monkeypatch.setattr(server, "urlopen", unexpected_lookup)
+
+    assert server._lookup_artist_photo("Dave") == (
+        "https://cdn-images.dzcdn.net/images/artist/"
+        "eb2c8952b7328fdf32b3546d5ffab8c2/250x250-000000-80-0-0.jpg"
+    )
