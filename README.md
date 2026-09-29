@@ -31,7 +31,7 @@ A Web Audio API–based visualizer that reacts to whatever's currently playing.
 Its own auth system — registration, login/logout, verified-email password recovery, account email management, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Every user gets their own isolated library.
 
 **Artist info**
-Artist biographies and portraits are shown only for names with manually verified artist-specific sources. Vervfy does not guess from name-only catalog searches; when an identity cannot be verified, it keeps the library artwork and shows no artist claims. Artist details never block music playback or library browsing.
+Artist profiles prefer manually checked entries, then fetch exact-name results from TheAudioDB with Wikipedia as a fallback. Portraits use exact-name Deezer results, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable. Set `VERVFY_AUDIODB_API_KEY` to a personal TheAudioDB key if needed; the public key is used by default.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.

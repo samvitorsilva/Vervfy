@@ -652,16 +652,38 @@ def test_library_state_etag_rejects_stale_and_missing_preconditions(app_module):
     assert client.get("/api/library/state").json()["playlists"][0]["id"] == "new-list"
 
 
-def test_artist_lookup_never_guesses_catalog_matches(app_module, monkeypatch):
+def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypatch):
     server, _ = app_module
-    def unexpected_lookup(*args, **kwargs):
-        pytest.fail("Unverified artist names must not trigger external catalog searches")
+    calls = []
 
-    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
-    assert server._lookup_artist_photo("Tate McRae") is None
-    assert server._lookup_artist_photo("Sleeping with Sirens") is None
-    assert server._lookup_artist_profile("Tate McRae") is None
-    assert server._lookup_artist_profile("Unknown Artist") is None
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "data": [
+                    {"name": "Tate McRae tribute", "picture_medium": "https://cdn.dzcdn.net/wrong.jpg"},
+                    {"name": "Tate McRae", "picture_medium": "https://cdn.dzcdn.net/tate.jpg"},
+                ]
+            }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+    server._artist_photo_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    assert server._lookup_artist_photo("Tate McRae") == "https://cdn.dzcdn.net/tate.jpg"
+    assert server._lookup_artist_photo("Tate McRae") == "https://cdn.dzcdn.net/tate.jpg"
+    assert len(calls) == 1
 
 
 def test_postgres_psycopg_disables_prepared_statements(app_module):
@@ -882,16 +904,79 @@ def test_authenticated_user_cannot_access_another_users_library(app_module):
     }).status_code == 404
 
 
-def test_artist_profile_only_returns_preverified_details(app_module, monkeypatch):
+def test_artist_profile_fetches_theaudiodb_result(app_module, monkeypatch):
     server, _ = app_module
 
-    def unexpected_lookup(*args, **kwargs):
-        pytest.fail("Artist profile lookup must not call an external catalog")
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
 
-    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
-    verified = server._lookup_artist_profile("MORADA")
-    assert verified["source"] == "MORADA artist biography"
-    assert server._lookup_artist_profile("Example Artist") is None
+        def json(self):
+            return {
+                "artists": [
+                    {
+                        "strArtist": "Example Artist",
+                        "strBiographyEN": "Example Artist is a musician known for influential recordings. More details.",
+                        "strGenre": "Pop",
+                        "strWebsite": "example.com",
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            return FakeResponse()
+
+    server._artist_profile_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    profile = server._lookup_artist_profile("Example Artist")
+    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
+    assert profile["genre"] == "Pop"
+    assert profile["website"] == "https://example.com"
+    assert profile["source"] == "TheAudioDB"
+
+
+def test_artist_profile_falls_back_to_wikipedia(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            if "theaudiodb.com" in url:
+                return FakeResponse({"artists": None})
+            if url.endswith("/w/api.php"):
+                return FakeResponse({"query": {"search": [{"title": "Example Artist"}]}})
+            return FakeResponse({
+                "extract": "Example Artist is a musician known for influential recordings.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist"}},
+            })
+
+    server._artist_profile_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    profile = server._lookup_artist_profile("Example Artist")
+    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
+    assert profile["source"] == "Wikipedia"
 
 
 @pytest.mark.parametrize("name", ["Dave", "Dave Santan", "Santan Dave"])
