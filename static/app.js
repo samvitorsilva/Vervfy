@@ -503,9 +503,8 @@ const LyricsEngine = (() => {
   // public database purpose-built for synced (LRC) lyrics. Called straight from
   // the browser: this app has no server of its own, so a backend that could
   // hold a private API key isn't an option here, and LRCLIB needs none anyway.
-  // Strategy: try the exact-match endpoint first (fast, precise when we know
-  // the track's duration), then fall back to fuzzy search and pick whichever
-  // candidate's duration is closest to ours.
+  // Strategy: try the exact-match endpoint first, then accept only fuzzy
+  // candidates whose duration is close enough to avoid mismatched lyrics.
   const LRCLIB_BASE = "https://lrclib.net/api";
   function normalizeSearchText(value){
     return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -521,6 +520,15 @@ const LyricsEngine = (() => {
       return { source:"online-plain", text: data.plainLyrics };
     }
     return null;
+  }
+  async function fetchLyrics(url){
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 6000) : null;
+    try{
+      return await fetch(url, controller ? {signal:controller.signal} : {});
+    }finally{
+      if(timeout) clearTimeout(timeout);
+    }
   }
   async function fromOnline(track){
     if(!track || !track.title){ LyricsDebug.log("online: skipped, no title to search with"); return null; }
@@ -539,11 +547,13 @@ const LyricsEngine = (() => {
       try{
         const url = `${LRCLIB_BASE}/get?` + new URLSearchParams({ ...baseParams, duration:durationSec });
         LyricsDebug.log("online: exact-match query →", url);
-        const res = await fetch(url);
+        const res = await fetchLyrics(url);
         LyricsDebug.log("online: exact-match response status", res.status);
         if(res.ok){
           const data = await res.json();
-          const parsed = lrclibResultToLyrics(data);
+          const durationMatches = durationSec <= 0 ||
+            (Number.isFinite(data.duration) && Math.abs(data.duration - durationSec) <= 3);
+          const parsed = durationMatches ? lrclibResultToLyrics(data) : null;
           LyricsDebug.log("online: exact-match parsed result →", parsed ? `${parsed.source}, ${parsed.lines?parsed.lines.length+" lines":parsed.text.length+" chars"}` : "none usable");
           if(parsed) return parsed;
         }
@@ -554,7 +564,7 @@ const LyricsEngine = (() => {
     try{
       const url = `${LRCLIB_BASE}/search?` + new URLSearchParams(baseParams);
       LyricsDebug.log("online: search query →", url);
-      const res = await fetch(url);
+      const res = await fetchLyrics(url);
       LyricsDebug.log("online: search response status", res.status);
       if(!res.ok) return null;
       const results = await res.json();
@@ -562,7 +572,11 @@ const LyricsEngine = (() => {
       if(!Array.isArray(results) || results.length === 0) return null;
       const titleKey = normalizeSearchText(track.title);
       const artistKey = normalizeSearchText(artist);
-      const best = results.slice().sort((a,b) => {
+      const candidates = results.filter(candidate =>
+        durationSec <= 0 ||
+        (Number.isFinite(candidate.duration) && Math.abs(candidate.duration - durationSec) <= 3)
+      );
+      const best = candidates.slice().sort((a,b) => {
         const score = candidate => {
           const titleMatch = normalizeSearchText(candidate.trackName) === titleKey;
           const artistMatch = normalizeSearchText(candidate.artistName) === artistKey;
@@ -582,7 +596,8 @@ const LyricsEngine = (() => {
         }
         return 0;
       })[0];
-      const parsed = lrclibResultToLyrics(best);
+      const parsed = best ? lrclibResultToLyrics(best) : null;
+      if(!best) return null;
       LyricsDebug.log("online: best candidate", `"${best.trackName}" by ${best.artistName}`, "→", parsed ? parsed.source : "no usable lyrics (instrumental or empty)");
       return parsed;
     }catch(e){ LyricsDebug.warn("online: search request failed —", e.message); return null; }
@@ -920,14 +935,47 @@ function offlineTrackFromRecord(record){
 }
 
 function applyServerCustomLyrics(track, payload){
-  if(typeof payload?.custom_lyrics !== "string" || !payload.custom_lyrics.trim()) return track;
-  track.customLyrics = payload.custom_lyrics;
-  track.lyrics = normalizeSyncedLyrics(
-    LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics }
-  );
-  track.lyricsResolved = true;
+  const customLyrics = typeof payload?.custom_lyrics === "string" && payload.custom_lyrics.trim()
+    ? payload.custom_lyrics
+    : null;
+  if(track.customLyrics === customLyrics) return track;
+  track.customLyrics = customLyrics;
+  track.lyrics = customLyrics
+    ? normalizeSyncedLyrics(LyricsEngine.fromLRC(customLyrics) || { source:"custom", text:customLyrics })
+    : null;
+  track.lyricsResolved = !!customLyrics;
   track.lyricsLoading = false;
+  track.lyricsPromise = null;
   return track;
+}
+
+function mergeServerTrack(existing, payload){
+  const incoming = trackFromServer(payload);
+  if(!existing) return incoming;
+  const previousLyrics = existing.lyrics;
+  const previousCustomLyrics = existing.customLyrics;
+  const previousResolved = existing.lyricsResolved;
+  const previousLoading = existing.lyricsLoading;
+  const previousPromise = existing.lyricsPromise;
+  const previousTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
+  Object.assign(existing, incoming);
+  const customLyrics = typeof payload?.custom_lyrics === "string" && payload.custom_lyrics.trim()
+    ? payload.custom_lyrics
+    : null;
+  if(previousCustomLyrics === customLyrics){
+    existing.lyrics = previousLyrics;
+    existing.lyricsResolved = previousResolved;
+    existing.lyricsLoading = previousLoading;
+    existing.lyricsPromise = previousPromise;
+  }else{
+    applyServerCustomLyrics(existing, payload);
+  }
+  const currentTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
+  return {
+    track: existing,
+    changed: previousTrackData.some((value, index) => value !== currentTrackData[index]) ||
+      previousCustomLyrics !== customLyrics || previousLyrics !== existing.lyrics,
+  };
 }
 
 async function loadOfflineTracks(accountId = activeAccountId){
@@ -1002,40 +1050,125 @@ async function saveSettings(){
   }));
 }
 let libraryMetaSaveQueue = Promise.resolve();
+let libraryStateLoaded = false;
+let libraryStateEtag = null;
+let libraryStateBaseline = null;
+let libraryMetaDirty = false;
+
+function normalizeLibraryMeta(meta){
+  const favorites = [...new Set((meta?.favorites || []).filter(id => typeof id === "string"))].sort();
+  const playlists = (meta?.playlists || []).map(playlist => ({
+    id: playlist.id,
+    name: playlist.name,
+    trackIds: [...new Set(playlist.trackIds || [])],
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  return {favorites, playlists};
+}
+
+function sameLibraryMeta(left, right){
+  return JSON.stringify(normalizeLibraryMeta(left)) === JSON.stringify(normalizeLibraryMeta(right));
+}
+
+function mergeUnsavedLibraryMeta(remote, baseline, local){
+  const base = normalizeLibraryMeta(baseline || {favorites:[], playlists:[]});
+  const latest = normalizeLibraryMeta(remote);
+  const edits = normalizeLibraryMeta(local);
+  const baseFavorites = new Set(base.favorites);
+  const localFavorites = new Set(edits.favorites);
+  const mergedFavorites = new Set(latest.favorites);
+  for(const id of new Set([...baseFavorites, ...localFavorites])){
+    if(baseFavorites.has(id) !== localFavorites.has(id)){
+      if(localFavorites.has(id)) mergedFavorites.add(id);
+      else mergedFavorites.delete(id);
+    }
+  }
+  const basePlaylists = new Map(base.playlists.map(item => [item.id, item]));
+  const localPlaylists = new Map(edits.playlists.map(item => [item.id, item]));
+  const mergedPlaylists = new Map(latest.playlists.map(item => [item.id, item]));
+  for(const id of new Set([...basePlaylists.keys(), ...localPlaylists.keys()])){
+    const before = basePlaylists.get(id);
+    const current = localPlaylists.get(id);
+    if(JSON.stringify(before) === JSON.stringify(current)) continue;
+    if(current) mergedPlaylists.set(id, current);
+    else mergedPlaylists.delete(id);
+  }
+  return normalizeLibraryMeta({
+    favorites:[...mergedFavorites],
+    playlists:[...mergedPlaylists.values()],
+  });
+}
+
+function currentLibraryMeta(){
+  return normalizeLibraryMeta({
+    favorites: state.tracks.filter(track => track.favorite).map(track => track.id),
+    playlists: state.playlists.map(playlist => ({
+      id:playlist.id, name:playlist.name, trackIds:[...playlist.trackIds],
+    })),
+  });
+}
+
+function applyLibraryMeta(meta){
+  const normalized = normalizeLibraryMeta(meta);
+  const favorites = new Set(normalized.favorites);
+  state.tracks.forEach(track => { track.favorite = favorites.has(track.id); });
+  const tracksById = new Set(state.tracks.map(track => track.id));
+  state.playlists = normalized.playlists.map(playlist => ({
+    ...playlist,
+    trackIds:playlist.trackIds.filter(id => tracksById.has(id)),
+  }));
+  window._persistedLibrary = normalized;
+}
 
 async function persistLibraryMeta(snapshot){
-  let lastError;
-  for(let attempt = 0; attempt < 3; attempt++){
-    try{
-      const token = await ensureCsrfToken(attempt > 0);
-      const res = await fetch("/api/library/state", {
-        method:"PUT", credentials:"same-origin",
-        headers:{"Content-Type":"application/json", "X-CSRF-Token":token || ""},
-        body:JSON.stringify(snapshot)
-      });
-      if(res.status === 403 && attempt < 2) continue;
-      if(res.ok) return;
+  if(!libraryStateLoaded || !libraryStateEtag){
+    libraryMetaDirty = true;
+    return;
+  }
+  let csrfRefreshUsed = false;
+  let staleRetries = 0;
+  while(true){
+    const token = await ensureCsrfToken(csrfRefreshUsed);
+    const res = await fetch("/api/library/state", {
+      method:"PUT", credentials:"same-origin",
+      headers:{
+        "Content-Type":"application/json",
+        "X-CSRF-Token":token || "",
+        "If-Match":libraryStateEtag,
+      },
+      body:JSON.stringify(snapshot),
+    });
+    if(res.status === 403 && !csrfRefreshUsed){
+      csrfRefreshUsed = true;
+      continue;
+    }
+    if(res.status === 409 && staleRetries < 2){
+      const latest = await fetch("/api/library/state", {cache:"no-store"});
+      if(!latest.ok) throw new Error("Could not refresh library state after a conflict");
+      const remote = normalizeLibraryMeta(await latest.json());
+      const local = currentLibraryMeta();
+      const merged = mergeUnsavedLibraryMeta(remote, libraryStateBaseline, local);
+      libraryStateEtag = latest.headers.get("ETag");
+      libraryStateBaseline = remote;
+      applyLibraryMeta(merged);
+      snapshot = merged;
+      staleRetries++;
+      continue;
+    }
+    if(!res.ok){
       const error = new Error(`Could not save library state (${res.status})`);
       error.status = res.status;
-      if(res.status < 500 && res.status !== 429) throw error;
-      lastError = error;
-    }catch(error){
-      lastError = error;
-      if(error?.status && error.status < 500 && error.status !== 429) throw error;
+      throw error;
     }
-    if(attempt < 2) await wait(250 * (2 ** attempt));
+    libraryStateEtag = res.headers.get("ETag") || libraryStateEtag;
+    libraryStateBaseline = normalizeLibraryMeta(await res.json());
+    libraryMetaDirty = !sameLibraryMeta(currentLibraryMeta(), snapshot);
+    return;
   }
-  throw lastError || new Error("Could not save library state");
 }
 
 function saveLibraryMeta(){
-  const snapshot = {
-    favorites: state.tracks.filter(t=>t.favorite).map(t=>t.id),
-    playlists: state.playlists.map(p => ({
-      id:p.id, name:p.name,
-      trackIds: [...p.trackIds]
-    }))
-  };
+  const snapshot = currentLibraryMeta();
+  libraryMetaDirty = true;
   const save = () => persistLibraryMeta(snapshot);
   libraryMetaSaveQueue = libraryMetaSaveQueue.then(save, save);
   return libraryMetaSaveQueue.catch(error => {
@@ -1063,6 +1196,9 @@ async function loadPersisted(){
   try{
     if(library) window._persistedLibrary = JSON.parse(library);
   }catch(e){}
+  if(libraryStateBaseline === null && window._persistedLibrary){
+    libraryStateBaseline = normalizeLibraryMeta(window._persistedLibrary);
+  }
 }
 
 function relinkPersistedLibrary(){
@@ -1194,14 +1330,17 @@ async function loadServerLibrary(force = false){
       });
       const legacy = window._persistedLibrary;
       if(stateRes.ok){
-        const remote = await stateRes.json();
+        const remote = normalizeLibraryMeta(await stateRes.json());
+        libraryStateEtag = stateRes.headers.get("ETag");
+        libraryStateLoaded = !!libraryStateEtag;
+        libraryStateBaseline = remote;
         if(!(remote.favorites||[]).length && !(remote.playlists||[]).length && legacy &&
            ((legacy.favorites||[]).length || (legacy.playlists||[]).length)){
+          window._persistedLibrary = legacy;
           relinkPersistedLibrary();
           await saveLibraryMeta();
         } else {
-          window._persistedLibrary = remote;
-          relinkPersistedLibrary();
+          applyLibraryMeta(remote);
         }
       } else relinkPersistedLibrary();
       serverLibraryLoaded = true;
@@ -1227,21 +1366,41 @@ async function syncServerLibrary(){
   if(librarySyncInFlight || document.hidden || !serverLibraryLoaded) return;
   librarySyncInFlight = true;
   try{
-    const response = await fetch("/api/tracks", {cache:"no-store"});
+    const [response, stateResponse] = await Promise.all([
+      fetch("/api/tracks", {cache:"no-store"}),
+      fetch("/api/library/state", {cache:"no-store"}),
+    ]);
     if(!response.ok) return;
     const remoteTracks = (await response.json()).tracks || [];
     const previousIds = new Set(state.tracks.map(track => track.id));
     const previousById = new Map(state.tracks.map(track => [track.id, track]));
     const offlineById = new Map(state.tracks.filter(track => track.offline).map(track => [track.id, track]));
+    const currentTrackId = currentTrack()?.id;
+    let currentTrackChanged = false;
     const remoteById = new Map(remoteTracks.map(payload => {
-      const track = trackFromServer(payload);
-      const syncedTrack = offlineById.get(track.id) || track;
-      applyServerCustomLyrics(syncedTrack, payload);
-      syncedTrack.favorite = previousById.get(track.id)?.favorite || false;
-      return [track.id, syncedTrack];
+      const existing = offlineById.get(payload.id) || previousById.get(payload.id);
+      const merged = mergeServerTrack(existing, payload);
+      const syncedTrack = merged.track;
+      if(payload.id === currentTrackId && merged.changed) currentTrackChanged = true;
+      syncedTrack.favorite = previousById.get(syncedTrack.id)?.favorite || false;
+      return [syncedTrack.id, syncedTrack];
     }));
     const localOnly = state.tracks.filter(track => track.offline && !remoteById.has(track.id));
     state.tracks = [...remoteById.values(), ...localOnly];
+    let libraryStateChanged = false;
+    if(stateResponse.ok){
+      const remoteState = normalizeLibraryMeta(await stateResponse.json());
+      const localState = currentLibraryMeta();
+      const mergedState = libraryMetaDirty
+        ? mergeUnsavedLibraryMeta(remoteState, libraryStateBaseline, localState)
+        : remoteState;
+      libraryStateChanged = !sameLibraryMeta(localState, mergedState);
+      libraryStateEtag = stateResponse.headers.get("ETag");
+      libraryStateLoaded = !!libraryStateEtag;
+      libraryStateBaseline = remoteState;
+      libraryMetaDirty = !sameLibraryMeta(mergedState, remoteState);
+      applyLibraryMeta(mergedState);
+    }
     const added = state.tracks.filter(track => !previousIds.has(track.id));
     const availableIds = new Set(state.tracks.map(track => track.id));
     let currentTrackRemoved = false;
@@ -1258,11 +1417,12 @@ async function syncServerLibrary(){
       state.queueIndex = Math.min(state.queueIndex, state.queue.length - 1);
       playCurrent();
     }else{
-      updateNowPlayingUI();
+      updateNowPlayingUI(false);
+      if(currentTrackChanged && $("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
       renderQueuePanel();
     }
     const removed = [...previousIds].some(id => !availableIds.has(id));
-    if(added.length || removed){
+    if(added.length || removed || libraryStateChanged){
       render();
       if(added.length) toast(`${added.length} new song${added.length === 1 ? "" : "s"} synced.`);
     }
@@ -1298,10 +1458,25 @@ async function uploadFileToServer(file){
     headers: { "X-CSRF-Token": await ensureCsrfToken(refreshCsrf) },
     body,
   });
-  let res = await upload();
-  // A page can keep an old token after the session changes in another tab.
-  // Refresh it once before reporting the upload as failed.
-  if(res.status === 403) res = await upload(true);
+  let res, csrfRefreshUsed = false, rateLimitRetries = 0;
+  while(true){
+    res = await upload();
+    // A page can keep an old token after the session changes in another tab.
+    // Refresh it once before reporting the upload as failed.
+    if(res.status === 403 && !csrfRefreshUsed){
+      csrfRefreshUsed = true;
+      res = await upload(true);
+    }
+    if(res.status !== 429) break;
+    if(rateLimitRetries >= 3){
+      const error = new Error("Upload is still rate limited. Wait a few minutes and try again.");
+      error.status = 429;
+      throw error;
+    }
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    await wait(Math.min(30000, Math.max(1000, Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000)));
+    rateLimitRetries++;
+  }
   if(!res.ok){
     let detail = "Upload failed";
     try{ const err = await res.json(); detail = err.detail || detail; }catch(_){}
@@ -1773,6 +1948,11 @@ function ensureTrackLyrics(track){
   const requestedTrackId = track.id;
   LyricsDebug.log(`state: lyrics lookup started for "${track.title}" by ${track.artist}`);
   track.lyricsPromise = (async () => {
+    const lyricsCacheKey = `lyrics:${activeAccountId || "anonymous"}:${track.id}`;
+    const cached = await AuralisDB.get(lyricsCacheKey);
+    if(cached && cached.customLyrics === (track.customLyrics || null)){
+      return cached.lyrics || null;
+    }
     let result = track.customLyrics
       ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
       : null;
@@ -1793,6 +1973,10 @@ function ensureTrackLyrics(track){
         result = await LyricsEngine.fromOnline(track);
       }
     }
+    await AuralisDB.set(lyricsCacheKey, {
+      customLyrics: track.customLyrics || null,
+      lyrics: result || null,
+    });
     return result;
   })().then(result => {
     track.lyrics = result || (track.customLyrics
@@ -1820,7 +2004,7 @@ function ensureTrackLyrics(track){
   return track.lyricsPromise;
 }
 
-function updateNowPlayingUI(){
+function updateNowPlayingUI(renderLyrics = true){
   const t = currentTrack();
   const bar = $("#nowbar");
   $("#lyricsPlayer").classList.toggle("hidden", !t);
@@ -1857,7 +2041,7 @@ function updateNowPlayingUI(){
   updateMobileLyricsPreview(t);
   updateVolUI();
   resetVizTrack(t);
-  if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
+  if(renderLyrics && $("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
 }
 
 function renderLibraryHighlight(){

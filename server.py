@@ -8,6 +8,7 @@ from database import Base, engine
 from io import BytesIO
 from html import escape as html_escape
 import json
+import hashlib
 import logging
 import mimetypes
 import os
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
@@ -35,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 
 import audio_store
 import auth
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, tenant_session
+from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -58,6 +59,8 @@ def _load_or_create_secret_key() -> str:
     env_key = os.environ.get("VERVFY_SECRET_KEY") or os.environ.get("AURALIS_SECRET_KEY")
     if env_key:
         return env_key
+    if is_production:
+        raise RuntimeError("VERVFY_SECRET_KEY is required in production")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if SECRET_KEY_PATH.is_file():
         return SECRET_KEY_PATH.read_text(encoding="utf-8").strip()
@@ -78,6 +81,13 @@ app = FastAPI(
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
 )
+
+
+@app.on_event("shutdown")
+def close_audio_store() -> None:
+    audio_store.close_client()
+
+
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
@@ -106,15 +116,6 @@ if configured_same_site not in {"lax", "strict", "none"}:
 if is_production and configured_same_site == "none" and not https_only:
     raise RuntimeError("SameSite=None requires HTTPS in production")
 app.add_middleware(
-    SessionMiddleware,
-    secret_key=_load_or_create_secret_key(),
-    session_cookie="auralis_session",
-    same_site=configured_same_site,
-    https_only=https_only,
-    max_age=60 * 60 * 24 * 30,  # 30 days
-)
-
-app.add_middleware(
     CORSMiddleware,
     # CORS only — never use this value as an auth redirect Location (open
     # redirect / broken static hosts caused post-login 404s).
@@ -124,20 +125,28 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
+UPLOADS_PER_10MIN = int(os.environ.get("VERVFY_UPLOADS_PER_10MIN", "60"))
+
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
         path = request.url.path
         if path.startswith("/api/"):
-            limit, window = (10, 10 * 60) if path == "/api/library/upload" else (120, 60)
-            key = f"api:{auth.client_ip(request)}:{path if limit == 10 else 'mutations'}"
+            is_upload = path == "/api/library/upload"
+            limit, window = (UPLOADS_PER_10MIN, 10 * 60) if is_upload else (120, 60)
+            identity = request.session.get("user_id") or auth.client_ip(request)
+            key = f"api:{identity}:{path if is_upload else 'mutations'}"
             try:
                 allowed = request_throttle.allow(key, limit, window)
             except RuntimeError:
-                return Response("Rate-limit service unavailable", status_code=503)
+                return JSONResponse({"detail": "Rate-limit service unavailable"}, status_code=503)
             if not allowed:
-                return Response("Too many requests", status_code=429, headers={"Retry-After": str(window)})
+                return JSONResponse(
+                    {"detail": "Too many requests"},
+                    status_code=429,
+                    headers={"Retry-After": str(window)},
+                )
         elif path in {"/login", "/register"}:
             try:
                 allowed = request_throttle.allow(
@@ -157,6 +166,16 @@ async def add_security_headers(request: Request, call_next):
     if https_only:
         response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
     return response
+
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_load_or_create_secret_key(),
+    session_cookie="auralis_session",
+    same_site=configured_same_site,
+    https_only=https_only,
+    max_age=60 * 60 * 24 * 30,  # 30 days
+)
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
@@ -213,34 +232,16 @@ def _concise_artist_bio(value: object) -> str:
 def _artist_name_candidates(name: str) -> list[str]:
     """Return catalog lookup candidates for an artist credit.
 
-    Downloaded music commonly stores collaborations in one tag
-    (``Kendrick Lamar, SZA``, ``Tommy Bueno/Snail Lake``,
-    ``… feat. Celeste Sanazi``). Catalogs store those performers separately,
-    so try each individual credit. Duo/band names that only use ``&`` /
-    ``and`` (e.g. ``Strings & Heart``) are kept intact.
+    Always try the exact name first. Split only common ``with``, ``&``, and
+    ``and`` collaborations as fallbacks; slashes can be part of artist names.
     """
     full_name = name.strip()
     if not full_name:
         return []
 
-    has_list_sep = re.search(
-        r"[,;/]|\bfeat(?:uring)?\.?\b|\bft\.?\b|\bwith\b",
-        full_name,
-        flags=re.IGNORECASE,
-    )
-    if has_list_sep:
-        parts = re.split(
-            r"\s*(?:,|;|/|\bfeat(?:uring)?\.?\b|\bft\.?\b|\bwith\b)\s*",
-            full_name,
-            flags=re.IGNORECASE,
-        )
-        parts = [
-            piece
-            for part in parts
-            for piece in re.split(r"\s+(?:&|and)\s+", part, flags=re.IGNORECASE)
-        ]
-    else:
-        parts = [full_name]
+    parts = [full_name]
+    if re.search(r"\bwith\b|&|\band\b", full_name, flags=re.IGNORECASE):
+        parts.extend(re.split(r"\s+(?:with|&|and)\s+", full_name, flags=re.IGNORECASE))
 
     candidates: list[str] = []
     seen: set[str] = set()
@@ -525,6 +526,7 @@ def _lookup_artist_photo(name: str) -> str | None:
         return cached[1]
 
     photo: str | None = None
+    catalog_succeeded = False
     try:
         for candidate_name in _artist_name_candidates(name):
             query = urlencode({"q": candidate_name, "limit": 5})
@@ -534,6 +536,7 @@ def _lookup_artist_photo(name: str) -> str | None:
             )
             with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
                 results = json.load(response).get("data", [])
+            catalog_succeeded = True
             result, _ = _matching_catalog_artist(results, [candidate_name], "name")
             if result:
                 # Artist cards are small; the medium CDN variant avoids
@@ -546,7 +549,8 @@ def _lookup_artist_photo(name: str) -> str | None:
         # Being offline must leave the local library fully usable.
         pass
 
-    _cache_artist_result(_artist_photo_cache, key, photo, now + 60 * 60 * 24)
+    ttl = 60 * 60 * 24 if catalog_succeeded else 2 * 60
+    _cache_artist_result(_artist_photo_cache, key, photo, now + ttl)
     return photo
 
 
@@ -738,6 +742,10 @@ def _track_payload(track) -> dict:
 @app.on_event("startup")
 def startup() -> None:
     if is_production:
+        if "VERVFY_TRUSTED_PROXY_HOPS" not in os.environ:
+            log.warning(
+                "VERVFY_TRUSTED_PROXY_HOPS is unset in production; rate limits may use the proxy IP"
+            )
         app.state.is_first_account = user_store.count() == 0
         return
     # create_all does not add columns to an existing deployment. Keep older
@@ -930,18 +938,23 @@ def api_me(user=Depends(require_api_user)) -> dict:
         "username": user["username"],
         "email": user["email"],
         "created_at": user["created_at"],
-        "photo_url": f"/api/account/photo?v={int(user['created_at'])}" if user["photo_data"] else None,
+        "photo_url": (
+            f"/api/account/photo?v={int(user['created_at'])}"
+            if user_store.has_profile_photo(user["id"])
+            else None
+        ),
         "track_count": get_library(user["id"]).count_tracks(),
     }
 
 
 @app.get("/api/account/photo")
 def account_photo(user=Depends(require_api_user)) -> Response:
-    if not user["photo_data"] or not user["photo_mime"]:
+    photo_data, photo_mime = user_store.get_profile_photo(user["id"])
+    if not photo_data or not photo_mime:
         raise HTTPException(status_code=404, detail="No profile photo")
     return Response(
-        content=user["photo_data"],
-        media_type=user["photo_mime"],
+        content=photo_data,
+        media_type=photo_mime,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -1040,6 +1053,15 @@ def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearr
             session.commit()
         upload_queue.enqueue(job_id, user_id)
     except Exception as exc:
+        try:
+            with tenant_session(user_id) as session:
+                job = session.get(UploadJob, job_id)
+                if job:
+                    job.status = "failed"
+                    job.error = "Upload could not be added to the processing queue."
+                    session.commit()
+        except Exception:
+            log.exception("could not mark staged upload as failed")
         audio_store.delete_quietly(staging_path)
         log.exception("could not queue upload")
         raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
@@ -1052,19 +1074,37 @@ def _upload_preflight(library: Library, data: bytearray) -> tuple[str, int, int,
     return track_id, library.total_bytes(), library.count_tracks(), False
 
 
+def _library_state_from_session(user_id: str, session) -> dict:
+    favorites = session.scalars(select(Favorite.track_id).where(Favorite.user_id == user_id)).all()
+    playlists = session.scalars(
+        select(Playlist)
+        .options(selectinload(Playlist.tracks))
+        .where(Playlist.user_id == user_id)
+    ).all()
+    return {"favorites": favorites, "playlists": [
+        {"id": playlist.id, "name": playlist.name,
+         "trackIds": [item.track_id for item in playlist.tracks]}
+        for playlist in playlists
+    ]}
+
+
 def _library_state(user_id: str) -> dict:
     with tenant_session(user_id) as session:
-        favorites = session.scalars(select(Favorite.track_id).where(Favorite.user_id == user_id)).all()
-        playlists = session.scalars(
-            select(Playlist)
-            .options(selectinload(Playlist.tracks))
-            .where(Playlist.user_id == user_id)
-        ).all()
-        return {"favorites": favorites, "playlists": [
-            {"id": playlist.id, "name": playlist.name,
-             "trackIds": [item.track_id for item in playlist.tracks]}
-            for playlist in playlists
-        ]}
+        return _library_state_from_session(user_id, session)
+
+
+def _library_state_etag(state: dict) -> str:
+    canonical = {
+        "favorites": sorted(state["favorites"]),
+        "playlists": sorted(
+            state["playlists"],
+            key=lambda item: item["id"],
+        ),
+    }
+    digest = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f'"{digest}"'
 
 
 def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
@@ -1097,7 +1137,8 @@ def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
 
 def _content_disposition_filename(filename: str) -> str:
     """Keep uploaded names safe when placed in a response header."""
-    return re.sub(r'[\r\n"\\]', "_", os.path.basename(filename)) or "audio"
+    ascii_name = os.path.basename(filename).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r'[\r\n"\\]', "_", ascii_name) or "audio"
 
 
 @app.post("/api/account/password")
@@ -1168,9 +1209,11 @@ def health(user=Depends(require_api_user)) -> dict:
 
 
 @app.get("/api/library/state")
-def get_library_state(user=Depends(require_api_user)) -> dict:
+def get_library_state(response: Response, user=Depends(require_api_user)) -> dict:
     """Server-backed favorites and playlists, shared across browsers/redeploys."""
-    return _library_state(user["id"])
+    state = _library_state(user["id"])
+    response.headers["ETag"] = _library_state_etag(state)
+    return state
 
 
 @app.get("/api/library/usage")
@@ -1187,12 +1230,27 @@ def get_library_usage(user=Depends(require_api_user)) -> dict:
 @app.put("/api/library/state")
 def save_library_state(
     payload: LibraryStateRequest,
+    request: Request,
+    response: Response,
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
+    if_match = request.headers.get("if-match")
+    if not if_match:
+        raise HTTPException(status_code=428, detail="If-Match is required")
     # Accept only tracks belonging to this account; this prevents cross-account
     # playlist references and cleans stale browser IndexedDB entries safely.
     with tenant_session(user["id"]) as session:
+        session.scalar(
+            select(User.id).where(User.id == user["id"]).with_for_update()
+        )
+        current_etag = _library_state_etag(_library_state_from_session(user["id"], session))
+        if if_match != current_etag:
+            raise HTTPException(
+                status_code=409,
+                detail="Library state changed; reload before saving",
+                headers={"ETag": current_etag},
+            )
         valid_ids = set(session.scalars(select(TrackRecord.id).where(TrackRecord.user_id == user["id"])).all())
         favorite_ids = list(dict.fromkeys(track_id for track_id in payload.favorites if track_id in valid_ids))
         session.query(Favorite).filter_by(user_id=user["id"]).delete()
@@ -1218,7 +1276,9 @@ def save_library_state(
         for playlist in existing.values():
             session.delete(playlist)
         session.commit()
-    return _library_state(user["id"])
+        state = _library_state_from_session(user["id"], session)
+    response.headers["ETag"] = _library_state_etag(state)
+    return state
 
 
 @app.get("/api/artists/photo")
@@ -1388,7 +1448,10 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
     media_type = mimetypes.guess_type(filename)[0] or "audio/mpeg"
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'inline; filename="{_content_disposition_filename(filename)}"',
+        "Content-Disposition": (
+            f'inline; filename="{_content_disposition_filename(filename)}"; '
+            f"filename*=UTF-8''{quote(os.path.basename(filename), safe='')}"
+        ),
         "Cache-Control": "private, max-age=3600",
     }
     range_header = request.headers.get("range")
@@ -1406,7 +1469,7 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
     if storage_path:
         # Relay only the requested byte range from Supabase Storage.
         try:
-            client, upstream = audio_store.open_range(storage_path, start, end)
+            _, upstream = audio_store.open_range(storage_path, start, end)
         except audio_store.StorageError:
             log.exception("audio storage read failed for %s", track_id)
             raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
@@ -1430,7 +1493,6 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
                         break
             finally:
                 upstream.close()
-                client.close()
 
         return StreamingResponse(body(), status_code=status_code, media_type=media_type, headers=headers)
 
@@ -1448,23 +1510,28 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
     reuse its existing ID3 parser without downloading the whole track.
     """
     library = get_library(user["id"])
-    if library.get(track_id) is None:
+    info = library.audio_info(track_id)
+    if info is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    # Do not guess a prefix length: a large embedded cover can place USLT or
-    # SYLT frames well beyond the old fixed 2 MiB cutoff. Read the ID3 header
-    # first, then return the complete tag so the browser can parse every frame.
+    initial_bytes = min(info.size_bytes, 256 * 1024) if info.storage_path else 256 * 1024
     try:
-        header, _ = library.audio_bytes(track_id, max_bytes=10)
-        if not header:
-            return Response(content=b"", media_type="application/octet-stream")
-        if len(header) < 10 or header[:3] != b"ID3":
-            data = header
-        else:
-            tag_size = sum((header[index] & 0x7F) << shift for index, shift in zip(range(6, 10), (21, 14, 7, 0)))
+        data = library.read_range(track_id, 0, initial_bytes - 1, info=info) if initial_bytes else b""
+        if data and len(data) >= 10 and data[:3] == b"ID3":
+            tag_size = sum(
+                (data[index] & 0x7F) << shift
+                for index, shift in zip(range(6, 10), (21, 14, 7, 0))
+            )
             tag_bytes = 10 + tag_size
             if tag_bytes > 32 * 1024 * 1024:
                 raise HTTPException(status_code=413, detail="Embedded metadata tag is too large")
-            data, _ = library.audio_bytes(track_id, max_bytes=tag_bytes)
+            if tag_bytes > len(data):
+                end = min(tag_bytes, info.size_bytes) - 1 if info.storage_path else tag_bytes - 1
+                remainder = library.read_range(track_id, len(data), end, info=info)
+                data += remainder or b""
+            else:
+                data = data[:tag_bytes]
+        elif data:
+            data = data[:10]
     except audio_store.StorageError:
         log.exception("audio storage read failed for %s", track_id)
         raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None

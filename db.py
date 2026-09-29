@@ -36,7 +36,17 @@ def database_url() -> str:
 
 
 DATABASE_URL = database_url()
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+
+def engine_connect_args(url: str) -> dict:
+    return {"prepare_threshold": None} if url.startswith("postgresql+psycopg://") else {}
+
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    connect_args=engine_connect_args(DATABASE_URL),
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
@@ -71,7 +81,7 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
-    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     photo_mime: Mapped[str | None] = mapped_column(String(64))
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 

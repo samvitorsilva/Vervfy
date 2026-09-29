@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import audio_store
 import upload_queue
-from db import SessionLocal, UploadJob
+from db import UploadJob, tenant_session
 from library import Library, UploadQuotaExceeded
 from sqlalchemy import select
 
@@ -26,7 +26,7 @@ MAX_ATTEMPTS = 3
 def process(job_id: str, user_id: str) -> None:
     path: str | None = None
     try:
-        with SessionLocal() as session:
+        with tenant_session(user_id) as session:
             job = session.scalar(select(UploadJob).where(
                 UploadJob.id == job_id,
                 UploadJob.user_id == user_id,
@@ -53,8 +53,11 @@ def process(job_id: str, user_id: str) -> None:
         stored_info = Library(user_id).audio_info(track.id)
         if stored_info and stored_info.storage_path != path:
             audio_store.delete_quietly(path)
-        with SessionLocal() as session:
-            job = session.get(UploadJob, job_id)
+        with tenant_session(user_id) as session:
+            job = session.scalar(select(UploadJob).where(
+                UploadJob.id == job_id,
+                UploadJob.user_id == user_id,
+            ))
             if job:
                 job.status = "completed"
                 job.track_id = track.id
@@ -62,8 +65,11 @@ def process(job_id: str, user_id: str) -> None:
     except Exception as exc:
         log.exception("upload job %s failed", job_id)
         retry = False
-        with SessionLocal() as session:
-            job = session.get(UploadJob, job_id)
+        with tenant_session(user_id) as session:
+            job = session.scalar(select(UploadJob).where(
+                UploadJob.id == job_id,
+                UploadJob.user_id == user_id,
+            ))
             if job:
                 retry = job.attempts < MAX_ATTEMPTS
                 job.status = "pending" if retry else "failed"

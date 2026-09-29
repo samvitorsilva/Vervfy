@@ -14,7 +14,7 @@ from urllib.parse import unquote
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,6 +23,7 @@ class FakeSupabase:
     def __init__(self):
         self.objects: dict[str, bytes] = {}
         self.bytes_served = 0
+        self.range_requests = []
         self.fail_uploads = False
         self.ignore_ranges = False
 
@@ -49,6 +50,7 @@ class FakeSupabase:
             if not spec or self.ignore_ranges:
                 self.bytes_served += len(data)
                 return httpx.Response(200, content=data)
+            self.range_requests.append(spec)
             start, end = re.fullmatch(r"bytes=(\d+)-(\d+)", spec).groups()
             start, end = int(start), min(int(end), len(data) - 1)
             chunk = data[start : end + 1]
@@ -133,6 +135,13 @@ def register_another_user(server, username="bob"):
     return client, headers
 
 
+def library_state_headers(client, csrf_headers):
+    return {
+        **csrf_headers,
+        "If-Match": client.get("/api/library/state").headers["etag"],
+    }
+
+
 def test_upload_goes_to_storage_not_postgres(env):
     server, client, fake, headers, _ = env
     data = make_wav()
@@ -146,6 +155,166 @@ def test_upload_goes_to_storage_not_postgres(env):
         assert row.storage_path == f"{row.user_id}/{track_id}.wav"
         assert row.size_bytes == len(data)
     assert fake.objects[row.storage_path] == data
+
+
+@pytest.mark.parametrize("filename", ["Trust…Fall.mp3", "東京.mp3", "😀.mp3"])
+def test_stream_supports_unicode_filenames(env, filename):
+    server, client, fake, _, _ = env
+    from db import TrackRecord
+    from urllib.parse import quote
+
+    user = server.user_store.get_by_username("alice")
+    track_id = f"unicode-{len(filename.encode('utf-8'))}"
+    storage_path = f"{user['id']}/{track_id}.mp3"
+    payload = make_wav()
+    fake.objects[storage_path] = payload
+    with server.SessionLocal() as session:
+        session.add(TrackRecord(
+            id=track_id,
+            user_id=user["id"],
+            filename=filename,
+            title="Unicode title",
+            artist="Artist",
+            album="Album",
+            duration=1,
+            has_cover=False,
+            size_bytes=len(payload),
+            cover_data=b"",
+            storage_path=storage_path,
+        ))
+        session.commit()
+
+    response = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": "bytes=0-3"})
+
+    assert response.status_code == 206
+    assert response.content == payload[:4]
+    assert f"filename*=UTF-8''{quote(filename, safe='')}" in response.headers["content-disposition"]
+
+
+def test_profile_photo_blob_is_not_loaded_for_library_requests(env):
+    server, client, fake, _, _ = env
+    from db import TrackRecord
+
+    user = server.user_store.get_by_username("alice")
+    track_id = "photo-query-track"
+    storage_path = f"{user['id']}/{track_id}.wav"
+    payload = make_wav()
+    fake.objects[storage_path] = payload
+    with server.SessionLocal() as session:
+        session.add(TrackRecord(
+            id=track_id,
+            user_id=user["id"],
+            filename="song.wav",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            duration=1,
+            has_cover=False,
+            size_bytes=len(payload),
+            cover_data=b"",
+            storage_path=storage_path,
+        ))
+        session.commit()
+
+    statements = []
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement.lower())
+
+    event.listen(server.engine, "before_cursor_execute", capture_sql)
+    try:
+        assert client.get("/api/library/state").status_code == 200
+        assert client.get(f"/api/tracks/{track_id}/stream").status_code == 200
+        assert client.get("/api/me").status_code == 200
+    finally:
+        event.remove(server.engine, "before_cursor_execute", capture_sql)
+
+    assert statements
+    assert all("photo_data" not in statement for statement in statements)
+
+
+@pytest.mark.parametrize("id3_tag_size, expected_ranges", [(0, 1), (300_000, 2)])
+def test_tag_head_reads_metadata_with_one_or_two_bounded_ranges(env, id3_tag_size, expected_ranges):
+    server, client, fake, _, _ = env
+    from db import TrackRecord
+
+    user = server.user_store.get_by_username("alice")
+    track_id = f"tag-head-{id3_tag_size}"
+    storage_path = f"{user['id']}/{track_id}.mp3"
+    if id3_tag_size:
+        synchsafe_size = bytes([
+            (id3_tag_size >> 21) & 0x7F,
+            (id3_tag_size >> 14) & 0x7F,
+            (id3_tag_size >> 7) & 0x7F,
+            id3_tag_size & 0x7F,
+        ])
+        payload = b"ID3\x04\x00\x00" + synchsafe_size + b"\0" * id3_tag_size + b"audio-data"
+    else:
+        payload = make_wav()
+    fake.objects[storage_path] = payload
+    with server.SessionLocal() as session:
+        session.add(TrackRecord(
+            id=track_id,
+            user_id=user["id"],
+            filename="song.mp3",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            duration=1,
+            has_cover=False,
+            size_bytes=len(payload),
+            cover_data=b"",
+            storage_path=storage_path,
+        ))
+        session.commit()
+
+    statements = []
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement.lower())
+
+    event.listen(server.engine, "before_cursor_execute", capture_sql)
+    requests_before = len(fake.range_requests)
+    bytes_before = fake.bytes_served
+    try:
+        response = client.get(f"/api/tracks/{track_id}/tag-head")
+    finally:
+        event.remove(server.engine, "before_cursor_execute", capture_sql)
+
+    assert response.status_code == 200
+    assert sum("from tracks" in statement for statement in statements) == 1
+    assert len(fake.range_requests) - requests_before == expected_ranges
+    assert fake.bytes_served - bytes_before == (10 + id3_tag_size if id3_tag_size else len(payload))
+    if id3_tag_size:
+        assert response.content == payload[:10 + id3_tag_size]
+        assert fake.range_requests[requests_before:] == ["bytes=0-262143", "bytes=262144-300009"]
+    else:
+        assert response.content == payload[:10]
+
+
+def test_audio_storage_http_client_is_pooled_and_closed(env):
+    server, _, _, _, _ = env
+    audio_store = server.audio_store
+
+    first = audio_store._client()
+    assert audio_store._client() is first
+    audio_store.close_client()
+    assert first.is_closed
+    assert audio_store._client() is not first
+
+
+def test_upload_limit_is_per_user_and_returns_json(env, monkeypatch):
+    server, client, _, headers, _ = env
+    monkeypatch.setattr(server, "UPLOADS_PER_10MIN", 1)
+
+    first = upload(client, headers, make_wav(level=1))
+    blocked = upload(client, headers, make_wav(level=2))
+    assert first.status_code == 200
+    assert blocked.status_code == 429
+    assert blocked.json() == {"detail": "Too many requests"}
+    assert blocked.headers["retry-after"] == "600"
+
+    other, other_headers = register_another_user(server)
+    other_response = upload(other, other_headers, make_wav(level=3))
+    assert other_response.status_code == 200, other_response.text
 
 
 def test_upload_preserves_multiple_artist_tags(env, monkeypatch):
@@ -189,7 +358,16 @@ def test_async_upload_runs_under_the_job_tenant(env):
         assert job and job.user_id == queued[0][1] and job.status == "pending"
         assert job.storage_path in fake.objects
 
+    tenant_ids = []
+    original_tenant_session = upload_worker.tenant_session
+
+    def recording_tenant_session(user_id):
+        tenant_ids.append(user_id)
+        return original_tenant_session(user_id)
+
+    monkeypatch.setattr(upload_worker, "tenant_session", recording_tenant_session)
     upload_worker.process(*queued[0])
+    assert tenant_ids and set(tenant_ids) == {queued[0][1]}
     with SessionLocal() as session:
         job = session.scalar(select(UploadJob).where(UploadJob.id == payload["id"]))
         assert job and job.status == "completed" and job.track_id
@@ -244,6 +422,51 @@ def test_async_upload_retries_then_dead_letters_and_cleans_staging(env, monkeypa
         assert job.error == "Upload processing failed after repeated attempts."
     assert dead_letters and dead_letters[0][0:2] == (job_id, user_id)
     assert staging_path not in fake.objects
+
+
+def test_staged_object_survives_upload_commit_error(env):
+    server, client, fake, headers, monkeypatch = env
+    monkeypatch.setattr(server, "async_uploads", True)
+    import upload_queue
+    monkeypatch.setattr(upload_queue, "enqueue", lambda *_args: None)
+    response = upload(client, headers, make_wav(level=11))
+    assert response.status_code == 200
+
+    from db import UploadJob, SessionLocal
+    from library import Library, UploadQuotaExceeded
+    with SessionLocal() as session:
+        job = session.get(UploadJob, response.json()["id"])
+        staging_path = job.storage_path
+    with pytest.raises(UploadQuotaExceeded):
+        Library(job.user_id).add_upload(
+            job.filename,
+            make_wav(level=11),
+            quota_bytes=0,
+            storage_path_override=staging_path,
+        )
+    assert staging_path in fake.objects
+
+
+def test_enqueue_failure_marks_job_failed_and_cleans_staging(env, monkeypatch):
+    server, client, fake, headers, _ = env
+    import upload_queue
+    from db import SessionLocal, UploadJob
+    from sqlalchemy import select
+
+    monkeypatch.setattr(server, "async_uploads", True)
+    monkeypatch.setattr(
+        upload_queue,
+        "enqueue",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+    response = upload(client, headers, make_wav(level=13))
+    assert response.status_code == 503
+
+    with SessionLocal() as session:
+        job = session.scalar(select(UploadJob))
+        assert job and job.status == "failed"
+        assert job.error == "Upload could not be added to the processing queue."
+        assert job.storage_path not in fake.objects
 
 
 def test_redis_queue_reclaims_jobs_after_worker_crash(monkeypatch):
@@ -422,7 +645,7 @@ def test_library_state_never_attaches_another_users_track(env):
 
     result = other.put(
         "/api/library/state",
-        headers=other_headers,
+        headers=library_state_headers(other, other_headers),
         json={
             "favorites": [track_id],
             "playlists": [{"id": "foreign-track", "name": "Foreign", "trackIds": [track_id]}],
@@ -441,7 +664,7 @@ def test_tag_head_reads_only_the_tag(env):
     fake.bytes_served = 0
     r = client.get(f"/api/tracks/{track_id}/tag-head")
     assert r.status_code == 200 and r.content == data[:10]  # no ID3 tag: just the first bytes
-    assert fake.bytes_served == 10
+    assert fake.bytes_served == min(len(data), 256 * 1024)
 
     # A real ID3v2 tag: 10-byte header + 20 bytes of frames, then audio.
     from db import SessionLocal, TrackRecord, User
@@ -455,7 +678,7 @@ def test_tag_head_reads_only_the_tag(env):
     fake.bytes_served = 0
     r = client.get("/api/tracks/idtag/tag-head")
     assert r.content == blob[:30]
-    assert fake.bytes_served == 10 + 30
+    assert fake.bytes_served == len(blob)
 
 
 def test_delete_track_removes_storage_object(env):

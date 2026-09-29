@@ -51,15 +51,29 @@ class RequestThrottle:
                 raise RuntimeError("redis is required when REDIS_URL is configured")
             self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
 
-    def allow(self, key: str, limit: int, window_seconds: int) -> bool:
+    def peek(self, key: str, window_seconds: int) -> int:
+        now = time.time()
+        if self._redis is not None:
+            try:
+                return int(self._redis.get(f"vervfy:ratelimit:{key}") or 0)
+            except redis.RedisError as exc:
+                raise RuntimeError("rate-limit backend unavailable") from exc
+
+        with self._lock:
+            count, expires_at = self._local.get(key, (0, now))
+            if now >= expires_at:
+                self._local.pop(key, None)
+                return 0
+            return count
+
+    def increment(self, key: str, window_seconds: int) -> int:
         now = time.time()
         if self._redis is not None:
             redis_key = f"vervfy:ratelimit:{key}"
             try:
-                count = self._redis.eval(
+                return int(self._redis.eval(
                     _INCREMENT_WINDOW_SCRIPT, 1, redis_key, window_seconds
-                )
-                return int(count) <= limit
+                ))
             except redis.RedisError as exc:
                 raise RuntimeError("rate-limit backend unavailable") from exc
 
@@ -75,7 +89,10 @@ class RequestThrottle:
                     for item_key, item in self._local.items()
                     if item[1] > now
                 }
-            return count <= limit
+            return count
+
+    def allow(self, key: str, limit: int, window_seconds: int) -> bool:
+        return self.increment(key, window_seconds) <= limit
 
     def discard(self, key: str) -> None:
         if self._redis is not None:
@@ -142,6 +159,17 @@ class UserStore:
                 row.photo_data = photo_data
                 row.photo_mime = photo_mime
                 session.commit()
+
+    def has_profile_photo(self, user_id: str) -> bool:
+        with SessionLocal() as session:
+            return session.scalar(select(User.photo_mime).where(User.id == user_id)) is not None
+
+    def get_profile_photo(self, user_id: str) -> tuple[bytes | None, str | None]:
+        with SessionLocal() as session:
+            row = session.execute(
+                select(User.photo_data, User.photo_mime).where(User.id == user_id)
+            ).one_or_none()
+            return (row.photo_data, row.photo_mime) if row else (None, None)
 
     def delete_user(self, user_id: str) -> None:
         """Permanently remove an account and every piece of account-owned data.
@@ -222,9 +250,9 @@ class LoginThrottle:
 
     def is_locked(self, ip: str, username: str) -> bool:
         if self._limiter is not None:
-            return not self._limiter.allow(
-                f"login:{ip}:{username.lower()}", self.MAX_ATTEMPTS, self.WINDOW_SECONDS
-            )
+            return self._limiter.peek(
+                f"login:{ip}:{username.lower()}", self.WINDOW_SECONDS
+            ) >= self.MAX_ATTEMPTS
         key = self._key(ip, username)
         now = time.time()
         attempts = [t for t in self._failures.get(key, []) if now - t < self.WINDOW_SECONDS]
@@ -233,6 +261,9 @@ class LoginThrottle:
 
     def record_failure(self, ip: str, username: str) -> None:
         if self._limiter is not None:
+            self._limiter.increment(
+                f"login:{ip}:{username.lower()}", self.WINDOW_SECONDS
+            )
             return
         key = self._key(ip, username)
         self._failures.setdefault(key, []).append(time.time())
@@ -264,11 +295,12 @@ class SignupThrottle:
 
     def is_limited(self, ip: str) -> bool:
         if self._limiter is not None:
-            return not self._limiter.allow(f"signup:{ip}", self.max_signups, self.WINDOW_SECONDS)
+            return self._limiter.peek(f"signup:{ip}", self.WINDOW_SECONDS) >= self.max_signups
         return len(self._recent(ip)) >= self.max_signups
 
     def record_success(self, ip: str) -> None:
         if self._limiter is not None:
+            self._limiter.increment(f"signup:{ip}", self.WINDOW_SECONDS)
             return
         self._recent(ip).append(time.time())
 

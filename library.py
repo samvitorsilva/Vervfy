@@ -184,7 +184,8 @@ class Library:
             try:
                 with tenant_session(self.user_id) as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
             except Exception:still_used=True
-            if not still_used:audio_store.delete_quietly(storage_path)
+            if not still_used and not storage_path_override:
+                audio_store.delete_quietly(storage_path)
             raise
 
     def remove(self, track_id: str):
@@ -234,13 +235,14 @@ class Library:
             return list(s.scalars(select(TrackRecord.storage_path).where(
                 TrackRecord.user_id == self.user_id, TrackRecord.storage_path.is_not(None))).all())
 
-    def read_range(self, track_id: str, start: int, end: int):
+    def read_range(self, track_id: str, start: int, end: int, info=None):
         """Bytes ``start..end`` (inclusive) of a track, fetching only that slice.
 
         Storage-backed tracks do a ranged request; legacy tracks whose audio is
         still in Postgres use ``substr`` so the database sends just the slice.
         """
-        info = self.audio_info(track_id)
+        if info is None:
+            info = self.audio_info(track_id)
         if info is None:
             return None
         if info.storage_path:

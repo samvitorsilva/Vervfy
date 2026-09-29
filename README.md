@@ -91,6 +91,13 @@ photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. Session cookies
 are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1`
 enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE`
 controls the cookie SameSite policy (`lax` by default).
+Set `VERVFY_TRUSTED_PROXY_HOPS=1` on Render so rate limits use each visitor's
+forwarded IP instead of the shared proxy address. Uploads are limited to 60
+per user per 10-minute window by default; adjust this with
+`VERVFY_UPLOADS_PER_10MIN`.
+For Supabase, use the PostgreSQL transaction-pooler connection URL when
+connecting through PgBouncer; Vervfy disables psycopg prepared statements for
+PostgreSQL URLs to remain compatible with transaction pooling.
 
 Tenant-scoped database work uses an explicit SQLAlchemy session carrying the
 authenticated user ID; PostgreSQL applies it transaction-locally for row-level

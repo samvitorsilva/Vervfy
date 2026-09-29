@@ -26,6 +26,8 @@ log = logging.getLogger("vervfy.audio_store")
 
 # Tests can inject an ``httpx.MockTransport`` here.
 _transport: httpx.BaseTransport | None = None
+_shared_client: httpx.Client | None = None
+_shared_client_key: tuple[str, str, str, int] | None = None
 
 
 class StorageError(RuntimeError):
@@ -94,7 +96,7 @@ def enabled() -> bool:
     return bool(url and key)
 
 
-def _client() -> httpx.Client:
+def _new_client() -> httpx.Client:
     url, key, _ = _settings()
     if not (url and key):
         raise StorageError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
@@ -107,6 +109,26 @@ def _client() -> httpx.Client:
     )
     client.headers["Authorization"] = "Bearer " + key
     return client
+
+
+def _client() -> httpx.Client:
+    global _shared_client, _shared_client_key
+    url, key, bucket = _settings()
+    client_key = (url, key, bucket, id(_transport))
+    if _shared_client is None or _shared_client_key != client_key:
+        close_client()
+        _shared_client = _new_client()
+        _shared_client_key = client_key
+    return _shared_client
+
+
+def close_client() -> None:
+    """Close pooled Storage connections when the application shuts down."""
+    global _shared_client, _shared_client_key
+    if _shared_client is not None:
+        _shared_client.close()
+        _shared_client = None
+        _shared_client_key = None
 
 
 def _object_url(path: str, *, authenticated: bool = False) -> str:
@@ -129,20 +151,20 @@ def guess_content_type(filename: str) -> str:
 
 @_wrap_errors
 def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = "audio/mpeg") -> None:
-    with _client() as client:
-        resp = client.post(
-            _object_url(path),
-            content=bytes(data),  # httpx would iterate a bytearray as ints
-            headers={"Content-Type": content_type, "x-upsert": "true"},
-        )
+    client = _client()
+    resp = client.post(
+        _object_url(path),
+        content=bytes(data),  # httpx would iterate a bytearray as ints
+        headers={"Content-Type": content_type, "x-upsert": "true"},
+    )
     if resp.status_code >= 300:
         raise StorageError(f"upload failed ({resp.status_code}): {resp.text[:200]}")
 
 
 @_wrap_errors
 def delete(path: str) -> None:
-    with _client() as client:
-        resp = client.delete(_object_url(path))
+    client = _client()
+    resp = client.delete(_object_url(path))
     if resp.status_code >= 300 and resp.status_code != 404:
         raise StorageError(f"delete failed ({resp.status_code}): {resp.text[:200]}")
 
@@ -164,8 +186,8 @@ def delete_many_quietly(paths: list[str]) -> None:
         chunk = paths[i : i + 100]
         try:
             _, _, bucket = _settings()
-            with _client() as client:
-                resp = client.request("DELETE", f"/object/{quote(bucket, safe='')}", json={"prefixes": chunk})
+            client = _client()
+            resp = client.request("DELETE", f"/object/{quote(bucket, safe='')}", json={"prefixes": chunk})
             if resp.status_code >= 300:
                 log.warning("bulk storage delete failed (%s): %s", resp.status_code, resp.text[:200])
         except Exception:  # noqa: BLE001
@@ -175,8 +197,8 @@ def delete_many_quietly(paths: list[str]) -> None:
 @_wrap_errors
 def read_range(path: str, start: int, end: int) -> bytes:
     """Return bytes ``start..end`` (inclusive) of an object."""
-    with _client() as client:
-        resp = client.get(_object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"})
+    client = _client()
+    resp = client.get(_object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"})
     if resp.status_code == 206:
         return resp.content
     if resp.status_code == 200:  # server ignored Range; slice locally
@@ -205,7 +227,6 @@ def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Res
             resp.close()
             raise StorageError(f"read failed ({resp.status_code}): {body!r}")
     except Exception:
-        client.close()
         raise
     return client, resp
 
@@ -213,8 +234,8 @@ def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Res
 @_wrap_errors
 def object_size(path: str) -> int | None:
     """Size in bytes of a stored object, or None if it does not exist."""
-    with _client() as client:
-        resp = client.get(_object_url(path, authenticated=True), headers={"Range": "bytes=0-0"})
+    client = _client()
+    resp = client.get(_object_url(path, authenticated=True), headers={"Range": "bytes=0-0"})
     if resp.status_code == 404 or resp.status_code == 400:
         return None
     if resp.status_code == 206:
@@ -228,6 +249,6 @@ def object_size(path: str) -> int | None:
 @_wrap_errors
 def bucket_exists() -> bool:
     _, _, bucket = _settings()
-    with _client() as client:
-        resp = client.get(f"/bucket/{quote(bucket, safe='')}")
+    client = _client()
+    resp = client.get(f"/bucket/{quote(bucket, safe='')}")
     return resp.status_code == 200

@@ -140,7 +140,10 @@ def test_tracks_are_isolated_by_postgres_rls_for_each_logged_in_user(postgres_ap
         assert tracks_b == expected_ids[user_b["id"]]
 
         track_a = sorted(tracks_a)[0]
-        headers_a = {"X-CSRF-Token": client_a.get("/api/csrf").json()["csrf_token"]}
+        headers_a = {
+            "X-CSRF-Token": client_a.get("/api/csrf").json()["csrf_token"],
+            "If-Match": client_a.get("/api/library/state").headers["etag"],
+        }
         saved_state = client_a.put(
             "/api/library/state",
             headers=headers_a,

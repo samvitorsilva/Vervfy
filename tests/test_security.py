@@ -3,7 +3,10 @@ from contextvars import ContextVar
 import importlib
 import json
 import re
+import shutil
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -57,32 +60,340 @@ def _login(client, username="alice", passphrase="old-password"):
     )
 
 
+def _library_state_headers(client):
+    return {
+        "X-CSRF-Token": client.get("/api/csrf").json()["csrf_token"],
+        "If-Match": client.get("/api/library/state").headers["etag"],
+    }
+
+
 def test_redis_throttle_keeps_first_hit_window(app_module):
     server, _ = app_module
     auth = server.auth
 
     class FakeRedisCounter:
         def __init__(self):
-            self.count = 0
+            self.counts = {}
             self.expirations = []
 
         def eval(self, script, key_count, key, window):
             assert script == auth._INCREMENT_WINDOW_SCRIPT
             assert key_count == 1
-            self.count += 1
-            if self.count == 1:
+            count = self.counts.get(key, 0) + 1
+            self.counts[key] = count
+            if count == 1:
                 self.expirations.append((key, window))
-            return self.count
+            return count
+
+        def get(self, key):
+            return self.counts.get(key)
+
+        def delete(self, key):
+            self.counts.pop(key, None)
 
     limiter = auth.RequestThrottle()
     fake = FakeRedisCounter()
     limiter._redis = fake
 
-    assert limiter.allow("login:ip:user", 2, 60)
-    assert limiter.allow("login:ip:user", 2, 60)
-    assert not limiter.allow("login:ip:user", 2, 60)
-    assert not limiter.allow("login:ip:user", 2, 60)
+    key = "login:ip:user"
+    assert limiter.peek(key, 60) == 0
+    assert limiter.increment(key, 60) == 1
+    assert limiter.peek(key, 60) == 1
+    assert limiter.allow(key, 2, 60)
+    assert not limiter.allow(key, 2, 60)
     assert fake.expirations == [("vervfy:ratelimit:login:ip:user", 60)]
+
+
+@pytest.mark.parametrize("backend", ["memory", "redis"])
+def test_auth_throttles_count_only_successes_and_failures(app_module, backend):
+    server, client = app_module
+    limiter = server.auth.RequestThrottle()
+    if backend == "redis":
+        class FakeRedisCounter:
+            def __init__(self):
+                self.counts = {}
+
+            def eval(self, _script, _key_count, key, _window):
+                self.counts[key] = self.counts.get(key, 0) + 1
+                return self.counts[key]
+
+            def get(self, key):
+                return self.counts.get(key)
+
+            def delete(self, key):
+                self.counts.pop(key, None)
+
+        limiter._redis = FakeRedisCounter()
+    server.request_throttle._redis = limiter._redis
+
+    signup = server.auth.SignupThrottle(max_signups=5, limiter=limiter)
+    for _ in range(5):
+        assert not signup.is_limited("signup-ip")
+    assert not signup.is_limited("signup-ip")
+    for _ in range(5):
+        signup.record_success("signup-ip")
+    assert signup.is_limited("signup-ip")
+
+    login = server.auth.LoginThrottle(limiter=limiter)
+    for _ in range(5):
+        assert not login.is_locked("login-ip", "alice")
+    for _ in range(4):
+        login.record_failure("login-ip", "alice")
+        assert not login.is_locked("login-ip", "alice")
+    login.record_failure("login-ip", "alice")
+    assert login.is_locked("login-ip", "alice")
+
+    _register(client)
+    signup_client = TestClient(server.app)
+    for _ in range(5):
+        response = signup_client.post(
+            "/register",
+            data={
+                "username": "alice",
+                "password": "old-password",
+                "email": "",
+                "csrf_token": _csrf(signup_client),
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+    response = signup_client.post(
+        "/register",
+        data={
+            "username": "bob",
+            "password": "old-password",
+            "email": "",
+            "csrf_token": _csrf(signup_client),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_production_requires_stable_session_secret(app_module, monkeypatch):
+    server, _ = app_module
+    monkeypatch.setattr(server, "is_production", True)
+    monkeypatch.delenv("VERVFY_SECRET_KEY", raising=False)
+    monkeypatch.delenv("AURALIS_SECRET_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="VERVFY_SECRET_KEY is required"):
+        server._load_or_create_secret_key()
+
+
+def test_browser_upload_retries_429_and_caps_retry_wait():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the browser upload helper")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("async function uploadFileToServer(file){")
+    end = app_js.index("\nasync function deleteTrackOnServer", start)
+    upload_function = app_js[start:end]
+    script = upload_function + """
+const assert = require("node:assert/strict");
+const waits = [];
+let responses = [];
+let calls = 0;
+globalThis.FormData = class { append() {} };
+globalThis.ensureCsrfToken = async () => "csrf";
+globalThis.wait = async ms => waits.push(ms);
+globalThis.trackFromServer = value => value;
+globalThis.fetch = async () => { calls++; return responses.shift(); };
+const response = (status, retryAfter = null) => ({
+  status,
+  ok: status >= 200 && status < 300,
+  headers: { get: name => name === "Retry-After" ? retryAfter : null },
+  json: async () => ({ id: "track" }),
+});
+(async () => {
+  responses = [response(429, "2"), response(429, "60"), response(200)];
+  assert.equal((await uploadFileToServer({ name: "song.mp3" })).id, "track");
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [2000, 30000]);
+
+  calls = 0;
+  waits.length = 0;
+  responses = [response(429), response(429), response(429), response(429)];
+  await assert.rejects(
+    uploadFileToServer({ name: "song.mp3" }),
+    error => error.status === 429 && error.message.includes("rate limited"),
+  );
+  assert.equal(calls, 4);
+  assert.deepEqual(waits, [1000, 1000, 1000]);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_server_track_sync_preserves_resolved_lyrics_state():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the browser lyrics sync helper")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("function applyServerCustomLyrics(track, payload){")
+    end = app_js.index("\nasync function loadOfflineTracks", start)
+    helpers = app_js[start:end]
+    script = """
+const LyricsEngine = {fromLRC: value => ({source:"custom", text:value})};
+const normalizeSyncedLyrics = value => value;
+function trackFromServer(payload){
+  return {
+    id: payload.id, title: payload.title, artist: payload.artist,
+    album: payload.album, duration: payload.duration, art: payload.art,
+    fallbackArt: payload.art, streamUrl: payload.stream_url,
+    customLyrics: payload.custom_lyrics || null,
+    lyrics: payload.custom_lyrics ? {source:"custom", text:payload.custom_lyrics} : null,
+    lyricsResolved: !!payload.custom_lyrics, lyricsLoading: false,
+    lyricsPromise: null, fingerprint: payload.id,
+  };
+}
+""" + helpers + """
+const assert = require("node:assert/strict");
+const pending = Promise.resolve("pending");
+const existing = {
+  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
+  customLyrics:null, lyrics:{source:"online-synced", lines:[{time:0,text:"line"}]},
+  lyricsResolved:true, lyricsLoading:true, lyricsPromise:pending, favorite:true,
+};
+const merged = mergeServerTrack(existing, {
+  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
+  custom_lyrics:null,
+});
+assert.equal(merged.track, existing);
+assert.equal(existing.lyricsResolved, true);
+assert.equal(existing.lyricsLoading, true);
+assert.equal(existing.lyricsPromise, pending);
+assert.equal(existing.lyrics.source, "online-synced");
+assert.equal(merged.changed, false);
+const changed = mergeServerTrack(existing, {
+  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
+  custom_lyrics:"new lyrics",
+});
+assert.equal(changed.track, existing);
+assert.equal(changed.changed, true);
+assert.equal(existing.lyricsResolved, true);
+assert.equal(existing.lyricsLoading, false);
+assert.equal(existing.lyricsPromise, null);
+assert.equal(existing.lyrics.text, "new lyrics");
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_library_state_refresh_keeps_local_edits_and_remote_changes():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser library-state merging")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("let libraryMetaSaveQueue = Promise.resolve();")
+    end = app_js.index("\nasync function persistLibraryMeta", start)
+    helpers = app_js[start:end]
+    script = """
+const state = {tracks:[], playlists:[]};
+const window = {};
+""" + helpers + """
+const assert = require("node:assert/strict");
+const baseline = {
+  favorites:["favorite-before"],
+  playlists:[{id:"local-list", name:"Original", trackIds:["one"]}],
+};
+const remote = {
+  favorites:["favorite-before", "favorite-remote"],
+  playlists:[
+    {id:"local-list", name:"Original", trackIds:["one"]},
+    {id:"remote-list", name:"Remote", trackIds:["two"]},
+  ],
+};
+const local = {
+  favorites:[],
+  playlists:[{id:"local-list", name:"Edited locally", trackIds:["one","three"]}],
+};
+const merged = mergeUnsavedLibraryMeta(remote, baseline, local);
+assert.deepEqual(merged.favorites, ["favorite-remote"]);
+assert.deepEqual(merged.playlists, [
+  {id:"local-list", name:"Edited locally", trackIds:["one","three"]},
+  {id:"remote-list", name:"Remote", trackIds:["two"]},
+]);
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_lrclib_rejects_distant_duration_candidates():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise LRCLIB lookup")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("const LyricsEngine = (() => {")
+    end = app_js.index("\nfunction normalizeSyncedLyrics", start)
+    engine = app_js[start:end]
+    script = """
+const LyricsDebug = {log(){}, warn(){}};
+let candidates = [];
+let calls = 0;
+globalThis.fetch = async (url, options) => {
+  calls++;
+  assert.ok(options.signal instanceof AbortSignal);
+  if(url.includes("/get?")) return {status:404, ok:false};
+  return {status:200, ok:true, json:async () => candidates};
+};
+""" + engine + """
+const assert = require("node:assert/strict");
+(async () => {
+  const track = {title:"Song", artist:"Artist", album:"Album", duration:180};
+  candidates = [{trackName:"Song", artistName:"Artist", duration:190, plainLyrics:"wrong"}];
+  assert.equal(await LyricsEngine.fromOnline(track), null);
+  assert.equal(calls, 2);
+  candidates = [{trackName:"Song", artistName:"Artist", duration:183, plainLyrics:"right"}];
+  calls = 0;
+  assert.deepEqual(await LyricsEngine.fromOnline(track), {source:"online-plain", text:"right"});
+  assert.equal(calls, 2);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_lyrics_cache_includes_not_found_results():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser lyrics caching")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("function ensureTrackLyrics(track){")
+    end = app_js.index("\nfunction updateNowPlayingUI", start)
+    resolver = app_js[start:end]
+    script = """
+const LyricsDebug = {log(){}, warn(){}};
+const activeAccountId = "account";
+const entries = new Map();
+const AuralisDB = {
+  get: async key => entries.get(key) || null,
+  set: async (key, value) => { entries.set(key, value); return true; },
+};
+const LyricsEngine = {fromID3(){return null;}, fromOnline:async () => {onlineLookups++; return null;}};
+let onlineLookups = 0, headRequests = 0;
+globalThis.fetch = async () => {headRequests++; return {ok:false};};
+let track;
+const currentTrack = () => track;
+const updateMobileLyricsPreview = () => {};
+const $ = () => ({classList:{contains:()=>false}});
+""" + resolver + """
+const assert = require("node:assert/strict");
+(async () => {
+  track = {id:"track", title:"Song", artist:"Artist", album:"Album", duration:10,
+    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
+  await ensureTrackLyrics(track);
+  track = {id:"track", title:"Song", artist:"Artist", album:"Album", duration:10,
+    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
+  await ensureTrackLyrics(track);
+  assert.equal(headRequests, 1);
+  assert.equal(onlineLookups, 1);
+  assert.equal(track.lyricsResolved, true);
+  assert.equal(entries.get("lyrics:account:track").lyrics, null);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def _reload_server(tmp_path, monkeypatch, env_name, env_value):
@@ -193,21 +504,20 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
 def test_library_ids_are_validated(app_module):
     _, client = app_module
     _register(client)
-    headers = {"X-CSRF-Token": client.get("/api/csrf").json()["csrf_token"]}
     bad = '\"><img src=x onerror=alert(1)>'
     assert client.put(
         "/api/library/state",
-        headers=headers,
+        headers=_library_state_headers(client),
         json={"favorites": [bad], "playlists": [{"id": "ok", "name": "x", "trackIds": []}]},
     ).status_code == 422
     assert client.put(
         "/api/library/state",
-        headers=headers,
+        headers=_library_state_headers(client),
         json={"favorites": [], "playlists": [{"id": "abc_01-Z", "name": "x", "trackIds": ["abc_01-Z"]}]},
     ).status_code == 200
     assert client.put(
         "/api/library/state",
-        headers=headers,
+        headers=_library_state_headers(client),
         json={"favorites": [], "playlists": [{"id": bad, "name": "x", "trackIds": []}]},
     ).status_code == 422
 
@@ -231,7 +541,7 @@ def test_favorites_persist_for_owned_tracks(app_module):
         ))
         session.commit()
 
-    headers = {"X-CSRF-Token": client.get("/api/csrf").json()["csrf_token"]}
+    headers = _library_state_headers(client)
     saved = client.put(
         "/api/library/state",
         headers=headers,
@@ -240,6 +550,84 @@ def test_favorites_persist_for_owned_tracks(app_module):
     assert saved.status_code == 200
     assert saved.json()["favorites"] == ["track-one"]
     assert client.get("/api/library/state").json()["favorites"] == ["track-one"]
+
+
+def test_library_state_etag_rejects_stale_and_missing_preconditions(app_module):
+    _, client = app_module
+    _register(client)
+    state = client.get("/api/library/state")
+    etag = state.headers["etag"]
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    assert client.put(
+        "/api/library/state",
+        headers={"X-CSRF-Token": csrf},
+        json={"favorites": [], "playlists": []},
+    ).status_code == 428
+
+    first = client.put(
+        "/api/library/state",
+        headers={"X-CSRF-Token": csrf, "If-Match": etag},
+        json={"favorites": [], "playlists": [{"id": "new-list", "name": "New", "trackIds": []}]},
+    )
+    assert first.status_code == 200
+    assert first.headers["etag"] != etag
+    stale = client.put(
+        "/api/library/state",
+        headers={"X-CSRF-Token": csrf, "If-Match": etag},
+        json={"favorites": [], "playlists": []},
+    )
+    assert stale.status_code == 409
+    assert stale.headers["etag"] == first.headers["etag"]
+    assert client.get("/api/library/state").json()["playlists"][0]["id"] == "new-list"
+
+
+def test_artist_lookup_preserves_full_names_and_short_caches_failures(app_module, monkeypatch):
+    server, _ = app_module
+    assert server._artist_name_candidates("AC/DC") == ["AC/DC"]
+    assert server._artist_name_candidates("Sleeping with Sirens") == [
+        "Sleeping with Sirens", "Sleeping", "Sirens"
+    ]
+
+    queried = []
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def read(self):
+            return json.dumps({"data": [{"name": "Sleeping with Sirens"}]}).encode()
+
+    def successful_lookup(request, timeout):
+        queried.append(request.full_url)
+        return FakeResponse()
+
+    now = 1000.0
+    monkeypatch.setattr(server.time, "monotonic", lambda: now)
+    monkeypatch.setattr(server, "urlopen", successful_lookup)
+    server._artist_photo_cache.clear()
+    server._lookup_artist_photo("Sleeping with Sirens")
+    assert len(queried) == 1
+    assert "Sleeping+with+Sirens" in queried[0]
+    key = server._artist_search_key("Sleeping with Sirens")
+    assert server._artist_photo_cache[key][0] == now + 60 * 60 * 24
+
+    server._artist_photo_cache.clear()
+    monkeypatch.setattr(server, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")))
+    server._lookup_artist_photo("Network Failure Test")
+    key = server._artist_search_key("Network Failure Test")
+    assert server._artist_photo_cache[key][0] == now + 120
+
+
+def test_postgres_psycopg_disables_prepared_statements(app_module):
+    server, _ = app_module
+    import db
+    assert server.engine.dialect.name == "sqlite"
+    assert db.engine_connect_args("postgresql+psycopg://host/database") == {
+        "prepare_threshold": None
+    }
+    assert db.engine_connect_args("sqlite:///database.db") == {}
 
 
 def test_session_revocation_and_logout_all(app_module):
@@ -308,10 +696,9 @@ def test_authenticated_user_cannot_access_another_users_library(app_module):
     client_b = TestClient(server.app)
     _register(client_b, username="bob")
 
-    csrf_a = client_a.get("/api/csrf").json()["csrf_token"]
     response = client_a.put(
         "/api/library/state",
-        headers={"X-CSRF-Token": csrf_a},
+        headers=_library_state_headers(client_a),
         json={"favorites": [], "playlists": [{"id": "private", "name": "Private", "trackIds": []}]},
     )
     assert response.status_code == 200
