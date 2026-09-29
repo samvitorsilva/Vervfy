@@ -1357,3 +1357,130 @@ body.mini-mode .mini-player{ display:block; }
     filter:blur(24px) saturate(1.1) brightness(.38);
   }
 }
+
+/* Album artwork gives the translucent player surfaces a changing color field. */
+.artwork-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:0;
+  overflow:hidden;
+  pointer-events:none;
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(80,72,130,.24), transparent 55%),
+    linear-gradient(145deg, #11131d, #080a10 68%);
+}
+.artwork-backdrop img{
+  position:absolute;
+  inset:-20%;
+  width:140%;
+  height:140%;
+  object-fit:cover;
+  filter:blur(60px) saturate(1.25);
+  transform:scale(1.3);
+  opacity:0;
+  transition:opacity .5s ease;
+}
+.artwork-backdrop.has-art img{ opacity:.62; }
+.field{ z-index:1; }
+#app{ z-index:2; }
+.glass-filters{
+  position:fixed;
+  width:0;
+  height:0;
+  overflow:hidden;
+  pointer-events:none;
+}
+
+/* The helper assigns .glass to no more than four visible surfaces. */
+.glass{
+  position:relative;
+  isolation:isolate;
+  border:1px solid rgba(255,255,255,.19);
+  border-radius:28px;
+  background:rgba(255,255,255,.10);
+  backdrop-filter:blur(18px) saturate(180%);
+  -webkit-backdrop-filter:blur(18px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.34),
+    inset 0 -1px 0 rgba(255,255,255,.06),
+    0 16px 44px rgba(0,0,0,.22);
+}
+.glass::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:-1;
+  border-radius:inherit;
+  pointer-events:none;
+  background:linear-gradient(
+    135deg,
+    rgba(255,255,255,.25) 0%,
+    rgba(255,255,255,.08) 18%,
+    transparent 44%,
+    rgba(255,255,255,.035) 100%
+  );
+}
+.glass.refract{
+  backdrop-filter:blur(3px) var(--glass-filter-url, url(#lg)) saturate(170%);
+  -webkit-backdrop-filter:blur(3px) var(--glass-filter-url, url(#lg)) saturate(170%);
+}
+.rail.glass{
+  position:relative;
+  border-radius:0 26px 26px 0;
+  border-left:0;
+}
+.nowbar.glass{
+  position:fixed;
+  border-radius:26px 26px 0 0;
+  background:rgba(255,255,255,.10);
+}
+.mini-player.glass{ position:fixed; }
+.lyrics-player.glass{ position:absolute; }
+.mobile-player-scroll.glass{
+  margin:0 12px 12px;
+  border-radius:30px;
+}
+.glass .now-title,
+.glass .mobile-player-context,
+.glass .mobile-player-context strong,
+.glass .mobile-player-info h2,
+.glass .queue-picker-head h3,
+.glass.shortcuts-card h3,
+.glass .photo-editor-head h3{
+  text-shadow:0 1px 5px rgba(0,0,0,.65);
+}
+.glass .now-artist,
+.glass .mobile-player-info p,
+.glass .photo-editor-head p{
+  color:rgba(255,255,255,.82);
+  text-shadow:0 1px 4px rgba(0,0,0,.7);
+}
+button:focus-visible{
+  outline:2px solid #bdb5ff !important;
+  outline-offset:3px !important;
+  box-shadow:0 0 0 4px rgba(12,14,20,.72);
+}
+
+/* Non-glass blur surfaces stay opaque so at most four backdrops are sampled. */
+body :not(.glass){
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+
+@media (max-width:640px){
+  .rail.glass{ border-radius:24px 24px 0 0; }
+  .nowbar.glass{ border-radius:20px; }
+  .mobile-player-scroll.glass{ margin:0 10px 10px; }
+}
+@media (prefers-reduced-transparency:reduce){
+  .glass,
+  .glass.refract{
+    background:rgba(22,24,34,.97);
+    backdrop-filter:none !important;
+    -webkit-backdrop-filter:none !important;
+  }
+  .glass::before{ display:none; }
+}
+@media (prefers-reduced-motion:reduce){
+  .artwork-backdrop img{ transition:none; }
+}

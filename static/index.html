@@ -10,7 +10,7 @@
 <link rel="icon" type="image/svg+xml" href="/static/gemini-svg.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=30">
+<link rel="stylesheet" href="/static/styles.css?v=31">
 <script>
 /* Keep the app shell available so downloaded music can still be opened offline. */
 (function(){
@@ -25,15 +25,26 @@
 </head>
 <body>
 
+<div class="artwork-backdrop" id="artworkBackdrop" aria-hidden="true">
+  <img id="artworkBackdropImage" alt="">
+</div>
 <div class="field" aria-hidden="true">
   <div class="field-blob field-blob-a"></div>
   <div class="field-blob field-blob-b"></div>
 </div>
+<svg class="glass-filters" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="lg" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">
+      <feImage id="lgMap" x="0%" y="0%" width="100%" height="100%" preserveAspectRatio="none" result="displacementMap"></feImage>
+      <feDisplacementMap in="SourceGraphic" in2="displacementMap" scale="12" xChannelSelector="R" yChannelSelector="B"></feDisplacementMap>
+    </filter>
+  </defs>
+</svg>
 
 <div id="app">
   <div class="shell">
     <!-- SIDEBAR -->
-    <nav class="rail">
+    <nav class="rail glass-surface" data-glass-priority="1">
       <div class="logo-mark" title="Vervfy">
         <div class="logo-squircle">
           <img class="brand-logo" src="/static/gemini-svg.svg" alt="Vervfy logo" width="54" height="54">
@@ -102,7 +113,7 @@
   </div>
 
   <!-- NOW PLAYING BAR -->
-  <div class="nowbar hidden" id="nowbar" role="region" aria-label="Now playing">
+  <div class="nowbar glass-surface hidden" id="nowbar" data-glass-priority="2" role="region" aria-label="Now playing">
     <div class="now-track">
       <div class="now-art-wrap">
         <div class="now-art"><img id="nowArt" src="" alt=""></div>
@@ -181,7 +192,7 @@
         <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
       </button>
     </div>
-    <div class="mobile-player-scroll">
+    <div class="mobile-player-scroll glass-surface" data-glass-priority="3">
       <div class="mobile-player-art"><img id="mobilePlayerArt" src="" alt=""></div>
       <div class="mobile-player-info">
         <div class="mobile-player-title-row">
@@ -214,7 +225,7 @@
   </div>
 
   <!-- MINI PLAYER -->
-  <div class="mini-player" id="miniPlayer">
+  <div class="mini-player glass-surface" id="miniPlayer" data-glass-priority="2">
     <div class="mini-drag" id="miniDrag"></div>
     <button class="mini-exit" id="btnMiniExit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
     <div class="mini-body">
@@ -256,7 +267,7 @@
 
   <!-- ADD TO QUEUE FROM LIBRARY -->
   <div class="queue-picker-overlay" id="queuePicker" role="dialog" aria-modal="true" aria-label="Add from library">
-    <div class="queue-picker-card">
+    <div class="queue-picker-card glass-surface" data-glass-priority="4">
       <div class="queue-picker-head">
         <h3>Add from library</h3>
         <button class="icon-btn" id="btnCloseQueuePicker" title="Close">
@@ -273,7 +284,7 @@
 
   <!-- SLEEP TIMER -->
   <div class="sleep-timer-overlay" id="sleepTimerOverlay" role="dialog" aria-modal="true" aria-labelledby="sleepTimerTitle">
-    <div class="sleep-timer-card">
+    <div class="sleep-timer-card glass-surface" data-glass-priority="4">
       <div class="queue-picker-head">
         <h3 id="sleepTimerTitle">Sleep timer</h3>
         <button class="icon-btn" id="btnCloseSleepTimer" title="Close" aria-label="Close sleep timer">
@@ -299,7 +310,7 @@
     <div class="lyrics-bg" id="lyricsBg"></div>
     <button class="lyrics-close" id="lyricsClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
     <div class="lyrics-stage" id="lyricsStage"></div>
-    <div class="lyrics-player hidden" id="lyricsPlayer" role="region" aria-label="Playback controls">
+    <div class="lyrics-player glass-surface hidden" id="lyricsPlayer" data-glass-priority="4" role="region" aria-label="Playback controls">
       <div class="lyrics-player-seek">
         <span class="lyrics-player-time" id="lyricsTimeCur">0:00</span>
         <div class="seek" id="lyricsSeek" role="slider" tabindex="0" aria-label="Track progress" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
@@ -340,7 +351,7 @@
 
   <!-- SHORTCUTS OVERLAY -->
   <div class="shortcuts-overlay" id="shortcutsOverlay">
-    <div class="shortcuts-card">
+    <div class="shortcuts-card glass-surface" data-glass-priority="4">
       <h3>Keyboard shortcuts</h3>
       <div class="sc-row"><span>Play / pause</span><span class="kbd">Space</span></div>
       <div class="sc-row"><span>Seek back / forward 5s</span><span class="kbd">← →</span></div>
@@ -359,7 +370,7 @@
 
   <!-- PROFILE PHOTO EDITOR -->
   <div class="photo-editor-overlay" id="photoEditorOverlay" role="dialog" aria-modal="true" aria-labelledby="photoEditorTitle">
-    <div class="photo-editor-card">
+    <div class="photo-editor-card glass-surface" data-glass-priority="4">
       <div class="photo-editor-head">
         <div><h3 id="photoEditorTitle">Adjust profile photo</h3><p>Drag to reposition, then use the slider to zoom.</p></div>
         <button type="button" class="icon-btn" id="btnClosePhotoEditor" title="Close" aria-label="Close photo editor">
@@ -392,6 +403,7 @@
   <input type="file" id="folderInput" class="hidden-input" accept="audio/*,.mp3,.m4a,.flac,.ogg,.wav,.aac,.opus" multiple webkitdirectory>
 </div>
 
+<script src="/static/liquid-glass.js?v=1"></script>
 <script src="/static/app.js?v=35"></script>
 </body>
 </html>
