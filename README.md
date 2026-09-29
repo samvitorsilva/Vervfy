@@ -28,10 +28,10 @@ This ended up being one of the more involved parts. Vervfy checks embedded ID3 l
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
 
 **Accounts**
-Its own auth system — registration, login/logout, bcrypt-hashed passwords, session-based auth, CSRF protection, and basic login throttling so it's not trivial to brute-force. Every user gets their own isolated library.
+Its own auth system — registration, login/logout, verified-email password recovery, account email management, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Every user gets their own isolated library.
 
 **Artist info**
-When available, Vervfy pulls in extra context about the artist you're listening to — bio, genre, mood, formation year, followers, label, that sort of thing — from public catalogs, and caches it so it's not hitting external APIs on every page load. Artists have a dedicated detail view with photos and profile links when verified data is available.
+Artist biographies and portraits are shown only for names with manually verified artist-specific sources. Vervfy does not guess from name-only catalog searches; when an identity cannot be verified, it keeps the library artwork and shows no artist claims. Artist details never block music playback or library browsing.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
@@ -91,6 +91,15 @@ photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. Session cookies
 are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1`
 enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE`
 controls the cookie SameSite policy (`lax` by default).
+Password recovery and email verification require SMTP settings:
+`VERVFY_PUBLIC_URL` (the canonical HTTPS app origin),
+`VERVFY_SMTP_HOST`, `VERVFY_SMTP_PORT` (587 with STARTTLS, or 465 with
+implicit TLS), `VERVFY_EMAIL_FROM`, and, when required by your provider,
+`VERVFY_SMTP_USERNAME` and `VERVFY_SMTP_PASSWORD`. Password reset is available
+only after the account email has been verified. Existing and registration-time
+email addresses must be verified from the account profile before they can be
+used for recovery.
+Apply database changes before deploying with `alembic upgrade head`.
 Set `VERVFY_TRUSTED_PROXY_HOPS=1` on Render so rate limits use each visitor's
 forwarded IP instead of the shared proxy address. Uploads are limited to 60
 per user per 10-minute window by default; adjust this with

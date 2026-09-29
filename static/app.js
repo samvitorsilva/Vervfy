@@ -620,13 +620,21 @@ function normalizeSyncedLyrics(lyrics){
   return {...lyrics, lines};
 }
 
+async function fetchArtistCatalog(url){
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try{
+    return await fetch(url, {signal:controller.signal});
+  }finally{
+    clearTimeout(timeout);
+  }
+}
+
 /* ============================================================
-   ARTIST PHOTOS — resolved on demand, just like online lyrics.
-   Album art remains visible immediately; a verified portrait replaces it only
-   when the local server finds an exact artist-name match in its public catalog.
+   ARTIST PHOTOS — only explicitly verified portraits replace album art.
    ============================================================ */
 const ArtistPhotoEngine = (() => {
-  const resolved = new Map(); // artist name -> URL or null (a confirmed miss)
+  const resolved = new Map();
   const pending = new Map();
 
   function apply(name, url){
@@ -641,14 +649,14 @@ const ArtistPhotoEngine = (() => {
 
   async function lookup(name){
     try{
-      const res = await fetch("/api/artists/photo?" + new URLSearchParams({name}));
-      const data = res.ok ? await res.json() : null;
+      const res = await fetchArtistCatalog("/api/artists/photo?" + new URLSearchParams({name}));
+      if(!res.ok) throw new Error(`Artist photo lookup failed (${res.status})`);
+      const data = await res.json();
       const url = data && typeof data.url === "string" ? data.url : null;
       resolved.set(name, url);
       apply(name, url);
     }catch(_){
-      // Offline or unavailable catalogs leave the existing album art in place.
-      resolved.set(name, null);
+      // Unverified and unavailable portraits leave the artist's album art in place.
       return null;
     }finally{
       pending.delete(name);
@@ -657,12 +665,6 @@ const ArtistPhotoEngine = (() => {
 
   function resolve(name){
     if(!name) return Promise.resolve(null);
-    if(offlineArtistPhotos.has(name)){
-      const url = offlineArtistPhotos.get(name);
-      resolved.set(name, url);
-      apply(name, url);
-      return Promise.resolve(url);
-    }
     if(resolved.has(name)){
       apply(name, resolved.get(name));
       return Promise.resolve(resolved.get(name));
@@ -673,8 +675,7 @@ const ArtistPhotoEngine = (() => {
     return request;
   }
 
-  function resolveAll(artists){ artists.forEach(artist => resolve(artist.name)); }
-  return { resolve, resolveAll };
+  return { resolve };
 })();
 
 const ArtistProfileEngine = (() => {
@@ -705,7 +706,7 @@ const ArtistProfileEngine = (() => {
       const socials = section.querySelector("[data-artist-socials]");
       const website = section.querySelector("[data-artist-website]");
       const source = section.querySelector("[data-artist-source]");
-      bio.textContent = profile?.bio || "No artist biography is available from the public catalog.";
+      bio.textContent = profile?.bio || "No verified artist information is available yet.";
 
       const facts = [
         ["Genre", profile?.genre],
@@ -783,24 +784,18 @@ const ArtistProfileEngine = (() => {
 
   async function resolve(name){
     if(!name) return null;
-    if(offlineArtistProfiles.has(name)){
-      const profile = offlineArtistProfiles.get(name);
-      resolved.set(name, profile);
-      apply(name, profile);
-      return profile;
-    }
     if(resolved.has(name)){ apply(name, resolved.get(name)); return resolved.get(name); }
     if(pending.has(name)) return pending.get(name);
     const request = (async () => {
       try{
-      const res = await fetch("/api/artists/profile?" + new URLSearchParams({name}));
-      const data = res.ok ? await res.json() : null;
+      const res = await fetchArtistCatalog("/api/artists/profile?" + new URLSearchParams({name}));
+      if(!res.ok) throw new Error(`Artist profile lookup failed (${res.status})`);
+      const data = await res.json();
       const profile = data && data.profile && typeof data.profile === "object" ? data.profile : null;
       resolved.set(name, profile);
       apply(name, profile);
       return profile;
     }catch(_){
-      resolved.set(name, null);
       apply(name, null);
       return null;
     }finally{
@@ -891,16 +886,12 @@ const AuralisDB = (() => {
 
 const OFFLINE_STORE = "offlineTracks";
 const offlineObjectUrls = new Set();
-const offlineArtistProfiles = new Map();
-const offlineArtistPhotos = new Map();
 let activeAccountId = null;
 let accountIdentityRequest = null;
 
 function releaseOfflineObjectUrls(){
   offlineObjectUrls.forEach(url => URL.revokeObjectURL(url));
   offlineObjectUrls.clear();
-  offlineArtistProfiles.clear();
-  offlineArtistPhotos.clear();
 }
 
 function offlineTrackFromRecord(record){
@@ -912,15 +903,6 @@ function offlineTrackFromRecord(record){
   if(art !== fallbackArt) offlineObjectUrls.add(art);
   const audio = record.audio instanceof Blob ? URL.createObjectURL(record.audio) : null;
   if(audio) offlineObjectUrls.add(audio);
-  const profiles = record.artistProfiles || (record.artistProfile ? {[record.artist]: record.artistProfile} : {});
-  Object.entries(profiles).forEach(([name, profile]) => offlineArtistProfiles.set(name, profile));
-  const photos = record.artistPhotos || (record.artistPhoto instanceof Blob ? {[record.artist]: record.artistPhoto} : {});
-  Object.entries(photos).forEach(([name, blob]) => {
-    if(!(blob instanceof Blob)) return;
-    const photo = URL.createObjectURL(blob);
-    offlineObjectUrls.add(photo);
-    offlineArtistPhotos.set(name, photo);
-  });
   const lyrics = record.lyrics
     ? (record.lyrics.lines ? record.lyrics : {source:"offline", text:record.lyrics.text || ""})
     : null;
@@ -953,27 +935,29 @@ function mergeServerTrack(existing, payload){
   const incoming = trackFromServer(payload);
   if(!existing) return incoming;
   const previousLyrics = existing.lyrics;
-  const previousCustomLyrics = existing.customLyrics;
+  const previousCustomLyrics = existing.customLyrics || null;
   const previousResolved = existing.lyricsResolved;
   const previousLoading = existing.lyricsLoading;
   const previousPromise = existing.lyricsPromise;
   const previousTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
-  Object.assign(existing, incoming);
   const customLyrics = typeof payload?.custom_lyrics === "string" && payload.custom_lyrics.trim()
     ? payload.custom_lyrics
     : null;
+  Object.assign(existing, incoming);
   if(previousCustomLyrics === customLyrics){
     existing.lyrics = previousLyrics;
+    existing.customLyrics = previousCustomLyrics;
     existing.lyricsResolved = previousResolved;
     existing.lyricsLoading = previousLoading;
     existing.lyricsPromise = previousPromise;
   }else{
+    existing.customLyrics = previousCustomLyrics;
     applyServerCustomLyrics(existing, payload);
   }
   const currentTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
   return {
     track: existing,
-    changed: previousTrackData.some((value, index) => value !== currentTrackData[index]) ||
+    changed: previousTrackData.slice(0, 4).some((value, index) => value !== currentTrackData[index]) ||
       previousCustomLyrics !== customLyrics || previousLyrics !== existing.lyrics,
   };
 }
@@ -999,24 +983,16 @@ async function downloadTrackOffline(track){
   try{
     if(!accountId) throw new Error("Sign in before saving music for offline listening.");
     if(!track.lyricsResolved) await ensureTrackLyrics(track);
-    const artistNames = artistsOf(track);
-    const [audio, cover, profiles] = await Promise.all([
+    const [audio, cover] = await Promise.all([
       fetchBlob(track.streamUrl),
       track.has_cover === false || !track.art.includes("/cover") ? Promise.resolve(null) : fetchBlob(trackArtUrl(track, 512)),
-      Promise.all(artistNames.map(async name => [name, await ArtistProfileEngine.resolve(name)])),
     ]);
-    const artistProfiles = Object.fromEntries(profiles.filter(([, profile]) => profile));
-    const artistPhotos = {};
-    await Promise.all(artistNames.map(async name => {
-      const photoUrl = await ArtistPhotoEngine.resolve(name);
-      if(photoUrl) artistPhotos[name] = await fetchBlob(photoUrl);
-    }));
     if(activeAccountId !== accountId) throw new Error("Your account changed before the download finished.");
     const record = {
       id: `${accountId}:${track.id}`, trackId: track.id, accountId,
       title: track.title, artist: track.artist, album: track.album,
       duration: track.duration, customLyrics: track.customLyrics || null,
-      lyrics: track.lyrics || null, audio, cover, artistProfiles, artistPhotos,
+      lyrics: track.lyrics || null, audio, cover,
       dateAdded: Date.now(),
     };
     if(!await AuralisDB.putRecord(record, OFFLINE_STORE)) throw new Error("This browser could not save the offline track.");
@@ -1698,6 +1674,67 @@ function playTrackFromList(list, trackId){
 let currentBlobUrl = null;
 let playbackRequest = 0;
 let audioRetryPending = null;
+let sleepTimer = null;
+
+function clearSleepTimer(){
+  if(sleepTimer?.timeoutId) clearTimeout(sleepTimer.timeoutId);
+  sleepTimer = null;
+}
+
+function startSleepTimer(minutes){
+  clearSleepTimer();
+  const duration = minutes * 60 * 1000;
+  const timer = {type:"duration", deadline:Date.now() + duration, timeoutId:null};
+  sleepTimer = timer;
+  timer.timeoutId = setTimeout(()=>{
+    if(sleepTimer !== timer) return;
+    sleepTimer = null;
+    audioEl.pause();
+    syncPlayIcons(false);
+    toast("Sleep timer ended. Playback stopped.");
+  }, duration);
+  $("#sleepTimerOverlay").classList.remove("open");
+  toast(`Playback will stop in ${minutes === 60 ? "1 hour" : `${minutes} minutes`}.`);
+}
+
+function setSleepTimerForTrackEnd(){
+  clearSleepTimer();
+  sleepTimer = {type:"track", timeoutId:null};
+  $("#sleepTimerOverlay").classList.remove("open");
+  toast("Playback will stop at the end of this track.");
+}
+
+function stopAtTrackEnd(){
+  if(sleepTimer?.type !== "track") return false;
+  clearSleepTimer();
+  audioEl.pause();
+  syncPlayIcons(false);
+  toast("Sleep timer ended. Playback stopped.");
+  return true;
+}
+
+function openSleepTimer(){
+  if(!currentTrack()){
+    toast("Play a track before setting a sleep timer.");
+    return;
+  }
+  const status = $("#sleepTimerStatus");
+  const cancel = $("#btnCancelSleepTimer");
+  if(sleepTimer?.type === "duration"){
+    const remainingSeconds = Math.max(0, Math.ceil((sleepTimer.deadline - Date.now()) / 1000));
+    status.textContent = `Timer active · ${fmtTime(remainingSeconds)} remaining`;
+    cancel.hidden = false;
+  }else if(sleepTimer?.type === "track"){
+    status.textContent = "Timer active · playback will stop at the end of this track";
+    cancel.hidden = false;
+  }else{
+    status.textContent = "Stop playback after";
+    cancel.hidden = true;
+  }
+  $("#sleepTimerOverlay").classList.add("open");
+  $("#sleepTimerOverlay [data-sleep-minutes]")?.focus();
+}
+
 function playCurrent(){
   const t = currentTrack();
   if(!t) return;
@@ -1828,6 +1865,7 @@ function installMediaSessionHandlers(){
 installMediaSessionHandlers();
 
 audioEl.addEventListener("ended", () => {
+  if(stopAtTrackEnd()) return;
   if(audioEl.ended) playNext(true);
 });
 audioEl.addEventListener("play", () => {
@@ -3088,6 +3126,7 @@ function openNowPlayingMenu(anchor, t){
     ? `<button type="button" class="menu-item menu-item-submenu" data-act="artists" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.5"/><path d="M2 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/><path d="M16 5.2a3.5 3.5 0 0 1 0 6.6M17 15c2.6.3 4.3 1.9 5 5"/></svg><span>Artist pages</span><svg class="menu-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></button>`
     : `<button type="button" class="menu-item" data-act="artist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.7 3.1-5.5 7-5.5s6.2 1.8 7 5.5"/></svg>About ${escapeHtml(artists[0] || artistNameOf(t))}</button>`;
   menu.innerHTML = `
+    <button type="button" class="menu-item" data-act="sleep-timer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8.5"/><path d="M12 8v5l3 2M9 2h6"/></svg>${sleepTimer ? "Sleep timer · active" : "Sleep timer"}</button>
     <div class="menu-item" data-act="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="m16 15 4 3-4 3"/></svg>Play next</div>
     <div class="menu-item" data-act="queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h10M4 18h10"/></svg>Add to queue</div>
     <div class="menu-item" data-act="favorite"><svg viewBox="0 0 24 24" fill="${t.favorite ? "currentColor" : "none"}" stroke="currentColor" stroke-width="1.8"><path d="M12 20s-7-4.3-9.5-9C0.8 7.4 3 4 6.5 4c2 0 3.4 1.1 4.5 2.6C12.1 5.1 13.5 4 15.5 4 19 4 21.2 7.4 19.5 11 17 15.7 12 20 12 20Z"/></svg>${t.favorite ? "Remove from liked songs" : "Save to liked songs"}</div>
@@ -3100,6 +3139,11 @@ function openNowPlayingMenu(anchor, t){
   `;
   document.body.appendChild(menu);
   positionMenuBelowAnchor(anchor, menu);
+  menu.querySelector('[data-act="sleep-timer"]').addEventListener("click", ()=>{
+    closeMenus();
+    $("#mobilePlayer")?.classList.remove("open");
+    openSleepTimer();
+  });
   menu.querySelector('[data-act="play-next"]').addEventListener("click", ()=>{ playNextTrack(t); closeMenus(); });
   menu.querySelector('[data-act="queue"]').addEventListener("click", ()=>{ addToQueue(t); closeMenus(); });
   menu.querySelector('[data-act="favorite"]').addEventListener("click", ()=>{ toggleFavorite(t); closeMenus(); });
@@ -3707,6 +3751,21 @@ async function renderAccountView(){
       </div>
 
       <section class="acct-settings">
+        <div class="acct-settings-title">Email address</div>
+        <form id="emailForm" class="acct-form">
+          <input type="email" id="accountEmail" placeholder="you@example.com" autocomplete="email" maxlength="320" value="${escapeHtml(info?.pending_email || info?.email || "")}">
+          <input type="password" id="emailCurrentPassword" placeholder="Current password" autocomplete="current-password" required>
+          <button type="submit" class="btn btn-primary">Save email</button>
+          ${info?.email || info?.pending_email ? '<button type="button" class="btn" id="btnRemoveEmail">Remove email</button>' : ""}
+          <div class="acct-form-msg" id="emailMsg">${info?.pending_email
+            ? `Check ${escapeHtml(info.pending_email)} to verify the new address.`
+            : info?.email
+              ? info.email_verified ? "Verified — available for password recovery." : "Not verified — confirm it to enable password recovery."
+              : "Add and verify an email address to enable password recovery."}</div>
+        </form>
+      </section>
+
+      <section class="acct-settings">
         <div class="acct-settings-title">Profile photo</div>
         <form id="photoForm" class="acct-form acct-photo-form">
           <input type="file" id="profilePhoto" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
@@ -3778,6 +3837,58 @@ async function renderAccountView(){
       toast(err.message);
     }
   });
+
+  const emailForm = $("#emailForm");
+  const emailInput = $("#accountEmail");
+  const emailPassword = $("#emailCurrentPassword");
+  const emailMsg = $("#emailMsg");
+  const saveAccountEmail = async email => {
+    const button = emailForm.querySelector("button[type='submit']");
+    button.disabled = true;
+    emailMsg.textContent = email ? "Sending verification link…" : "Removing email…";
+    emailMsg.className = "acct-form-msg";
+    try{
+      const res = await fetch("/api/account/email", {
+        method:"PUT",
+        headers:{"Content-Type":"application/json","X-CSRF-Token":await ensureCsrfToken()},
+        body:JSON.stringify({email,current_password:emailPassword.value}),
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok) throw new Error(data.detail || "Could not update email");
+      accountInfo = {...accountInfo, ...data};
+      emailMsg.textContent = data.pending_email
+        ? `Verification link sent to ${data.pending_email}.`
+        : data.email_verified
+          ? "Email verified and available for password recovery."
+          : "Email removed.";
+      emailMsg.className = "acct-form-msg ok";
+      emailInput.value = data.pending_email || data.email || "";
+      emailPassword.value = "";
+      $("#btnRemoveEmail")?.remove();
+      if(data.email || data.pending_email){
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "btn";
+        removeButton.id = "btnRemoveEmail";
+        removeButton.textContent = "Remove email";
+        emailForm.insertBefore(removeButton, emailMsg);
+        removeButton.addEventListener("click", removeAccountEmail);
+      }
+      const accountSub = content.querySelector(".acct-sub");
+      if(accountSub) accountSub.textContent = `${data.email || "No email on file"} · Member since ${fmtDate(accountInfo.created_at)}`;
+    }catch(error){
+      emailMsg.textContent = error.message || "Could not update email";
+      emailMsg.className = "acct-form-msg error";
+    }finally{
+      button.disabled = false;
+    }
+  };
+  const removeAccountEmail = () => saveAccountEmail("");
+  emailForm.addEventListener("submit", event=>{
+    event.preventDefault();
+    saveAccountEmail(emailInput.value.trim());
+  });
+  $("#btnRemoveEmail")?.addEventListener("click", removeAccountEmail);
 
   const avatarButton = $("#acctAvatarButton");
   const photoInput = $("#profilePhoto");
@@ -3943,7 +4054,6 @@ function renderArtistsView(){
         </div>`).join("")}
     </div>`;
   restoreScroll();
-  ArtistPhotoEngine.resolveAll(artists);
   $$(".artist-card").forEach(card=>{
     const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
     const open = () => openArtist(decodeURIComponent(card.dataset.artist));
@@ -4372,6 +4482,19 @@ on("#btnAddQueueSide", "click", openQueueLibraryPicker);
 on("#btnCloseQueuePicker", "click", closeQueueLibraryPicker);
 on("#queuePicker", "click", (e)=>{ if(e.target.id==="queuePicker") closeQueueLibraryPicker(); });
 on("#queuePickerSearch", "input", ()=> renderQueueLibraryPicker());
+on("#btnCloseSleepTimer", "click", ()=> $("#sleepTimerOverlay").classList.remove("open"));
+on("#sleepTimerOverlay", "click", (e)=>{
+  if(e.target.id === "sleepTimerOverlay") $("#sleepTimerOverlay").classList.remove("open");
+});
+$$("[data-sleep-minutes]").forEach(button => button.addEventListener("click", ()=>{
+  startSleepTimer(Number(button.dataset.sleepMinutes));
+}));
+on("#sleepTimerOverlay [data-sleep-end]", "click", setSleepTimerForTrackEnd);
+on("#btnCancelSleepTimer", "click", ()=>{
+  clearSleepTimer();
+  $("#sleepTimerOverlay").classList.remove("open");
+  toast("Sleep timer canceled.");
+});
 
 on("#btnLogout", "click", () => logoutAndRedirect());
   
@@ -4443,6 +4566,10 @@ on("#shortcutsOverlay", "click",(e)=>{ if(e.target.id==="shortcutsOverlay") $("#
 
 /* keyboard shortcuts */
 document.addEventListener("keydown",(e)=>{
+  if(e.key === "Escape" && $("#sleepTimerOverlay")?.classList.contains("open")){
+    $("#sleepTimerOverlay").classList.remove("open");
+    return;
+  }
   if(e.key === "Escape" && $("#photoEditorOverlay")?.classList.contains("open")){
     ProfilePhotoEditor.close();
     return;

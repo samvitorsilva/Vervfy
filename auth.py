@@ -25,6 +25,7 @@ from db import (
 )
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 try:
     import redis
@@ -116,7 +117,7 @@ class UserStore:
         # SQLite UNIQUE treats NULL as distinct but "" as a real value — blank
         # emails would otherwise collide on the second account that skips email.
         if email is not None:
-            email = email.strip() or None
+            email = email.strip().lower() or None
         with SessionLocal() as session:
             try:
                 session.add(User(id=user_id, username=username, username_key=username.lower(), email=email,
@@ -131,6 +132,10 @@ class UserStore:
         with SessionLocal() as session:
             return session.scalar(select(User).where(User.username_key == username.lower()))
 
+    def get_by_email(self, email: str):
+        with SessionLocal() as session:
+            return session.scalar(select(User).where(func.lower(User.email) == email.lower()))
+
     def get_by_id(self, user_id: str):
         with SessionLocal() as session:
             return session.get(User, user_id)
@@ -141,6 +146,49 @@ class UserStore:
             if row:
                 row.password_hash = new_password_hash
                 session.commit()
+
+    def reset_password(self, user_id: str, new_password_hash: str) -> int | None:
+        with SessionLocal() as session:
+            row = session.get(User, user_id)
+            if not row:
+                return None
+            row.password_hash = new_password_hash
+            row.session_version += 1
+            session.commit()
+            return row.session_version
+
+    def set_pending_email(self, user_id: str, email: str | None) -> None:
+        with SessionLocal() as session:
+            row = session.get(User, user_id)
+            if row:
+                row.pending_email = email
+                if email is None:
+                    row.email = None
+                    row.email_verified = False
+                session.commit()
+
+    def confirm_pending_email(self, user_id: str, email: str) -> bool:
+        with SessionLocal() as session:
+            row = session.get(User, user_id)
+            if not row or row.pending_email != email:
+                return False
+            existing_user_id = session.scalar(
+                select(User.id).where(
+                    func.lower(User.email) == email.lower(),
+                    User.id != user_id,
+                )
+            )
+            if existing_user_id:
+                raise ValueError("That email is already in use")
+            try:
+                row.email = email
+                row.email_verified = True
+                row.pending_email = None
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("That email is already in use") from exc
+            return True
 
     def bump_session_version(self, user_id: str) -> int:
         with SessionLocal() as session:
@@ -216,6 +264,12 @@ def verify_password(password: str, password_hash: str) -> bool:
 def validate_username(username: str) -> str | None:
     if not USERNAME_RE.match(username or ""):
         return "Username must be 3-32 characters: letters, numbers, _ . -"
+    return None
+
+
+def validate_email(email: str) -> str | None:
+    if len(email) > 320 or not EMAIL_RE.fullmatch(email):
+        return "Enter a valid email address"
     return None
 
 

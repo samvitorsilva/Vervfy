@@ -2,11 +2,15 @@
 """Vervfy — local music player server."""
 
 from __future__ import annotations
+
+from email.message import EmailMessage
 from database import Base, engine
 
 
 from io import BytesIO
 from html import escape as html_escape
+import smtplib
+import ssl
 import json
 import hashlib
 import logging
@@ -18,8 +22,7 @@ import time
 import unicodedata
 import uuid
 from typing import Annotated
-from urllib.parse import quote, urlencode
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.parse import quote, urlsplit
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -27,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
@@ -147,7 +151,7 @@ async def add_security_headers(request: Request, call_next):
                     status_code=429,
                     headers={"Retry-After": str(window)},
                 )
-        elif path in {"/login", "/register"}:
+        elif path in {"/login", "/register", "/forgot-password", "/reset-password", "/verify-email"}:
             try:
                 allowed = request_throttle.allow(
                     f"auth:{auth.client_ip(request)}:{path}", 30, 15 * 60
@@ -168,9 +172,11 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+SESSION_SECRET = _load_or_create_secret_key()
+app.state.session_secret = SESSION_SECRET
 app.add_middleware(
     SessionMiddleware,
-    secret_key=_load_or_create_secret_key(),
+    secret_key=SESSION_SECRET,
     session_cookie="auralis_session",
     same_site=configured_same_site,
     https_only=https_only,
@@ -190,72 +196,11 @@ MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
 _libraries: dict[str, Library] = {}
-_artist_photo_cache: dict[str, tuple[float, str | None]] = {}
-_artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
-MAX_ARTIST_CACHE_ENTRIES = 1024
-AUDIODB_API_KEY = os.environ.get("VERVFY_AUDIODB_API_KEY", "123")
-# A detail page should provide context without pushing a user's music library
-# off screen. Keep catalog descriptions to a compact, scan-friendly blurb.
-MAX_ARTIST_BIO_CHARS = 180
-
-
 def _artist_search_key(name: str) -> str:
     """Normalize names before comparing a public catalog search result."""
     normalized = unicodedata.normalize("NFKD", name)
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
     return "".join(c.lower() for c in normalized if c.isalnum())
-
-
-def _cache_artist_result(cache, key: str, value, expires_at: float) -> None:
-    """Keep public catalog caches bounded and discard expired entries opportunistically."""
-    now = time.monotonic()
-    for cached_key, (_, _) in list(cache.items()):
-        if cache[cached_key][0] <= now:
-            del cache[cached_key]
-    if len(cache) >= MAX_ARTIST_CACHE_ENTRIES and key not in cache:
-        del cache[min(cache, key=lambda item: cache[item][0])]
-    cache[key] = (expires_at, value)
-
-
-def _concise_artist_bio(value: object) -> str:
-    """Keep catalog biographies useful without turning an About card into an essay."""
-    bio = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not bio:
-        return ""
-    first_sentence = re.split(r"(?<=[.!?])\s+", bio, maxsplit=1)[0]
-    if len(first_sentence) <= MAX_ARTIST_BIO_CHARS:
-        return first_sentence
-    shortened = first_sentence[: MAX_ARTIST_BIO_CHARS - 1].rsplit(" ", 1)[0]
-    return f"{shortened or first_sentence[: MAX_ARTIST_BIO_CHARS - 1]}…"
-
-
-def _artist_name_candidates(name: str) -> list[str]:
-    """Return catalog lookup candidates for an artist credit.
-
-    Always try the exact name first. Split only common ``with``, ``&``, and
-    ``and`` collaborations as fallbacks; slashes can be part of artist names.
-    """
-    full_name = name.strip()
-    if not full_name:
-        return []
-
-    parts = [full_name]
-    if re.search(r"\bwith\b|&|\band\b", full_name, flags=re.IGNORECASE):
-        parts.extend(re.split(r"\s+(?:with|&|and)\s+", full_name, flags=re.IGNORECASE))
-
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for part in parts:
-        cleaned = part.strip(" \t-–—·•")
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if not cleaned:
-            continue
-        key = _artist_search_key(cleaned)
-        if key in seen:
-            continue
-        seen.add(key)
-        candidates.append(cleaned)
-    return candidates
 
 
 # These entries are deliberately small.  General music catalogs are useful for
@@ -468,24 +413,8 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
 
 def _verified_artist_profile(name: str) -> dict[str, str] | None:
     """Return an identity-checked profile for an artist credit, if available."""
-    for candidate in _artist_name_candidates(name):
-        profile = _VERIFIED_ARTIST_PROFILES.get(_artist_search_key(candidate))
-        if profile:
-            result = profile.copy()
-            if candidate != name.strip():
-                result["lookup_name"] = candidate
-            return result
-    return None
-
-
-def _matching_catalog_artist(results: list[dict], candidates: list[str], name_field: str) -> tuple[dict | None, str | None]:
-    """Find an exact normalized catalog result for the first safe candidate."""
-    for candidate in candidates:
-        key = _artist_search_key(candidate)
-        for result in results:
-            if _artist_search_key(str(result.get(name_field, ""))) == key:
-                return result, candidate
-    return None, None
+    profile = _VERIFIED_ARTIST_PROFILES.get(_artist_search_key(name.strip()))
+    return profile.copy() if profile else None
 
 
 # The British rapper Dave (Santan Dave) shares his stage name with unrelated
@@ -503,178 +432,16 @@ _VERIFIED_ARTIST_PHOTOS = {
 
 
 def _lookup_artist_photo(name: str) -> str | None:
-    """Return a verified public artist portrait, without making the UI wait.
-
-    Deezer's artist search is public and includes artist-owned portrait URLs.
-    Requiring an exact normalized name prevents a loose search from showing the
-    wrong person. Both hits and misses are cached briefly to avoid repeatedly
-    querying the catalog as users move between views.
-    """
+    """Return a portrait only when the artist identity has been explicitly verified."""
     key = _artist_search_key(name)
     if not key:
         return None
-    for candidate_name in _artist_name_candidates(name):
-        verified_photo = _VERIFIED_ARTIST_PHOTOS.get(
-            _artist_search_key(candidate_name)
-        )
-        if verified_photo:
-            return verified_photo
-
-    now = time.monotonic()
-    cached = _artist_photo_cache.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
-
-    photo: str | None = None
-    catalog_succeeded = False
-    try:
-        for candidate_name in _artist_name_candidates(name):
-            query = urlencode({"q": candidate_name, "limit": 5})
-            request = UrlRequest(
-                f"https://api.deezer.com/search/artist?{query}",
-                headers={"User-Agent": "Vervfy/1.0"},
-            )
-            with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                results = json.load(response).get("data", [])
-            catalog_succeeded = True
-            result, _ = _matching_catalog_artist(results, [candidate_name], "name")
-            if result:
-                # Artist cards are small; the medium CDN variant avoids
-                # downloading a 500px portrait for a ~100px avatar.
-                candidate = result.get("picture_medium") or result.get("picture_big")
-                if isinstance(candidate, str) and candidate.startswith("https://"):
-                    photo = candidate
-                break
-    except (OSError, ValueError, json.JSONDecodeError):
-        # Being offline must leave the local library fully usable.
-        pass
-
-    ttl = 60 * 60 * 24 if catalog_succeeded else 2 * 60
-    _cache_artist_result(_artist_photo_cache, key, photo, now + ttl)
-    return photo
+    return _VERIFIED_ARTIST_PHOTOS.get(key)
 
 
 def _lookup_artist_profile(name: str) -> dict[str, str] | None:
-    """Get an inline artist profile from public catalogs.
-
-    AudioDB provides structured artist facts for profiles that have not been
-    identity-checked against an artist or artist-specific profile. Wikipedia
-    is the fallback because AudioDB occasionally returns a service-wide miss.
-    """
-    key = _artist_search_key(name)
-    if not key:
-        return None
-    now = time.monotonic()
-    verified_profile = _verified_artist_profile(name)
-    if verified_profile:
-        # An identity-checked profile must not be replaced with a same-name
-        # result from an unauthenticated catalog search.
-        _cache_artist_result(
-            _artist_profile_cache, key, verified_profile, now + 60 * 60 * 24
-        )
-        return verified_profile
-
-    cached = _artist_profile_cache.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
-
-    profile: dict[str, str] | None = None
-    try:
-        for candidate_name in _artist_name_candidates(name):
-            query = urlencode({"s": candidate_name})
-            request = UrlRequest(
-                f"https://www.theaudiodb.com/api/v1/json/{AUDIODB_API_KEY}/search.php?{query}",
-                headers={"User-Agent": "Vervfy/1.0"},
-            )
-            with urlopen(request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                artists = json.load(response).get("artists") or []
-            artist, matched_name = _matching_catalog_artist(artists, [candidate_name], "strArtist")
-            if not artist:
-                continue
-            fields = {
-                "bio": _concise_artist_bio(
-                    artist.get("strBiographyEN") or artist.get("strBiography")
-                ),
-                "genre": artist.get("strGenre") or "",
-                "style": artist.get("strStyle") or "",
-                "mood": artist.get("strMood") or "",
-                "formed_year": artist.get("intFormedYear") or "",
-                "followers": artist.get("intFollowers") or "",
-                "popularity": artist.get("intPopularity") or "",
-                "label": artist.get("strLabel") or "",
-                "website": artist.get("strWebsite") or "",
-                "instagram": artist.get("strInstagram") or "",
-                "facebook": artist.get("strFacebook") or "",
-                "twitter": artist.get("strTwitter") or "",
-                "youtube": artist.get("strYoutube") or "",
-            }
-            profile = {field: str(value).strip() for field, value in fields.items() if value}
-            if profile:
-                profile["source"] = "TheAudioDB"
-                profile["source_url"] = "https://www.theaudiodb.com/"
-                if matched_name != name.strip():
-                    profile["lookup_name"] = matched_name
-            website = profile.get("website", "")
-            if website and not website.startswith(("http://", "https://")):
-                profile["website"] = f"https://{website}"
-            break
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-
-    if not profile:
-        try:
-            for candidate_name in _artist_name_candidates(name):
-                search_query = urlencode(
-                    {
-                        "action": "query",
-                        "list": "search",
-                        "srsearch": f'"{candidate_name}"',
-                        "srnamespace": "0",
-                        "srlimit": "5",
-                        "format": "json",
-                    }
-                )
-                search_request = UrlRequest(
-                    f"https://en.wikipedia.org/w/api.php?{search_query}",
-                    headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
-                )
-                with urlopen(search_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                    results = json.load(response).get("query", {}).get("search", [])
-                match, matched_name = _matching_catalog_artist(
-                    results, [candidate_name], "title"
-                )
-                if not match:
-                    continue
-                title = str(match["title"])
-                summary_request = UrlRequest(
-                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}",
-                    headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
-                )
-                with urlopen(summary_request, timeout=4) as response:  # nosec B310 - fixed HTTPS host
-                    summary = json.load(response)
-                bio = _concise_artist_bio(summary.get("extract"))
-                if not bio:
-                    continue
-                profile = {
-                    "bio": bio,
-                    "source": "Wikipedia",
-                    "source_url": (
-                        summary.get("content_urls", {})
-                        .get("desktop", {})
-                        .get("page", "")
-                    ),
-                }
-                if matched_name != name.strip():
-                    profile["lookup_name"] = matched_name
-                break
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            pass
-
-    # Keep successful profiles for a day, but retry a catalog miss soon. Public
-    # catalog records are occasionally incomplete or temporarily unavailable.
-    cache_seconds = 60 * 60 * 24 if profile and profile.get("bio") else 10 * 60
-    _cache_artist_result(_artist_profile_cache, key, profile, now + cache_seconds)
-    return profile
+    """Return only manually identity-checked details; never guess from a name search."""
+    return _verified_artist_profile(name)
 
 
 def get_library(user_id: str) -> Library:
@@ -762,6 +529,10 @@ def startup() -> None:
             connection.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(64)"))
         if "session_version" not in existing_columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"))
+        if "email_verified" not in existing_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE"))
+        if "pending_email" not in existing_columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN pending_email VARCHAR(320)"))
         existing_track_columns = {column["name"] for column in inspect(engine).get_columns("tracks")}
         if "size_bytes" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
@@ -850,6 +621,225 @@ def login_submit(
     return RedirectResponse("/", status_code=303)
 
 
+def _account_token_serializer(salt: str) -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(app.state.session_secret, salt=salt)
+
+
+def _send_account_email(recipient: str, subject: str, body: str) -> None:
+    host = os.environ.get("VERVFY_SMTP_HOST", "").strip()
+    sender = os.environ.get("VERVFY_EMAIL_FROM", "").strip()
+    if not host or not sender:
+        raise RuntimeError("Account email delivery is not configured")
+    port = int(os.environ.get("VERVFY_SMTP_PORT", "587"))
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(body)
+    context = ssl.create_default_context()
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=10, context=context) as smtp:
+            username = os.environ.get("VERVFY_SMTP_USERNAME")
+            password = os.environ.get("VERVFY_SMTP_PASSWORD")
+            if username:
+                smtp.login(username, password or "")
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=10) as smtp:
+            smtp.ehlo()
+            smtp.starttls(context=context)
+            smtp.ehlo()
+            username = os.environ.get("VERVFY_SMTP_USERNAME")
+            password = os.environ.get("VERVFY_SMTP_PASSWORD")
+            if username:
+                smtp.login(username, password or "")
+            smtp.send_message(message)
+
+
+def _account_link(request: Request, path: str, token: str) -> str:
+    public_url = os.environ.get("VERVFY_PUBLIC_URL", "").strip()
+    if is_production and not public_url:
+        raise RuntimeError("VERVFY_PUBLIC_URL is required for account email links")
+    base_url = public_url or str(request.base_url)
+    parsed = urlsplit(base_url)
+    if (
+        not parsed.hostname or parsed.username or parsed.password
+        or parsed.query or parsed.fragment
+        or (is_production and parsed.scheme != "https")
+    ):
+        raise RuntimeError("VERVFY_PUBLIC_URL must be a valid HTTPS application origin")
+    return f"{base_url.rstrip('/')}{path}?token={quote(token, safe='')}"
+
+
+def _render_password_reset(request: Request, token: str, error: str | None = None, success: bool = False):
+    return templates.TemplateResponse(
+        request,
+        "reset_password.html",
+        {
+            "csrf_token": auth.get_or_create_csrf_token(request),
+            "token": token,
+            "error": error,
+            "success": success,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_form(request: Request):
+    return templates.TemplateResponse(
+        request, "forgot_password.html",
+        {"csrf_token": auth.get_or_create_csrf_token(request)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/forgot-password", response_class=HTMLResponse)
+def forgot_password_submit(
+    request: Request,
+    email: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    auth.verify_csrf(request, csrf_token)
+    try:
+        allowed = request_throttle.allow(
+            f"password-reset:{auth.client_ip(request)}", 5, 15 * 60
+        )
+    except RuntimeError:
+        return Response("Password recovery is temporarily unavailable.", status_code=503)
+    if allowed:
+        normalized_email = email.strip().lower()
+        email_limit_key = hashlib.sha256(
+            f"{SESSION_SECRET}:{normalized_email}".encode("utf-8")
+        ).hexdigest()
+        try:
+            email_allowed = request_throttle.allow(
+                f"password-reset-email:{email_limit_key}", 3, 60 * 60
+            )
+        except RuntimeError:
+            return Response("Password recovery is temporarily unavailable.", status_code=503)
+        if email_allowed and not auth.validate_email(normalized_email):
+            user = user_store.get_by_email(normalized_email)
+            if user and user["email_verified"]:
+                token = _account_token_serializer("password-reset").dumps({
+                    "uid": user["id"], "sv": user["session_version"],
+                    "email": user["email"].lower(),
+                })
+                link = _account_link(request, "/reset-password", token)
+                try:
+                    _send_account_email(
+                        normalized_email,
+                        "Reset your Vervfy password",
+                        f"Use this link within 30 minutes to reset your Vervfy password:\n\n{link}\n\n"
+                        "If you did not request this, you can ignore this email.",
+                    )
+                except (OSError, smtplib.SMTPException, RuntimeError, ValueError):
+                    log.exception("Password reset email delivery failed")
+    return templates.TemplateResponse(
+        request,
+        "forgot_password.html",
+        {
+            "csrf_token": auth.get_or_create_csrf_token(request),
+            "sent": True,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+def reset_password_form(request: Request, token: str = Query(default="")):
+    try:
+        _account_token_serializer("password-reset").loads(token, max_age=30 * 60)
+    except (BadSignature, SignatureExpired):
+        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
+    return _render_password_reset(request, token)
+
+
+@app.post("/reset-password", response_class=HTMLResponse)
+def reset_password_submit(
+    request: Request,
+    token: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    auth.verify_csrf(request, csrf_token)
+    try:
+        payload = _account_token_serializer("password-reset").loads(token, max_age=30 * 60)
+    except (BadSignature, SignatureExpired):
+        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
+    error = auth.validate_password(password)
+    if error:
+        return _render_password_reset(request, token, error=error)
+    if password != password_confirm:
+        return _render_password_reset(request, token, error="Passwords do not match.")
+    user = user_store.get_by_id(payload.get("uid", ""))
+    if (
+        not user or not user["email_verified"] or not user["email"]
+        or user["session_version"] != payload.get("sv")
+        or user["email"].lower() != payload.get("email")
+    ):
+        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
+    if user_store.reset_password(user["id"], auth.hash_password(password)) is None:
+        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
+    request.session.clear()
+    return _render_password_reset(request, "", success=True)
+
+
+@app.get("/verify-email", response_class=HTMLResponse)
+def verify_email_form(request: Request, token: str = Query(default="")):
+    try:
+        _account_token_serializer("verify-email").loads(token, max_age=24 * 60 * 60)
+        error = None
+    except (BadSignature, SignatureExpired):
+        token, error = "", "This email confirmation link is invalid or expired."
+    return templates.TemplateResponse(
+        request,
+        "verify_email.html",
+        {
+            "csrf_token": auth.get_or_create_csrf_token(request),
+            "token": token,
+            "error": error,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/verify-email", response_class=HTMLResponse)
+def verify_email_submit(
+    request: Request,
+    token: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    auth.verify_csrf(request, csrf_token)
+    try:
+        payload = _account_token_serializer("verify-email").loads(token, max_age=24 * 60 * 60)
+    except (BadSignature, SignatureExpired):
+        return templates.TemplateResponse(
+            request, "verify_email.html",
+            {"csrf_token": auth.get_or_create_csrf_token(request), "token": "", "error": "This email confirmation link is invalid or expired."},
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        confirmed = user_store.confirm_pending_email(payload.get("uid", ""), payload.get("email", ""))
+    except ValueError as exc:
+        confirmed = False
+        error = str(exc)
+    else:
+        error = "This email confirmation link is no longer valid." if not confirmed else None
+    return templates.TemplateResponse(
+        request,
+        "verify_email.html",
+        {
+            "csrf_token": auth.get_or_create_csrf_token(request),
+            "token": "",
+            "error": error,
+            "success": confirmed,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/register", response_class=HTMLResponse)
 def register_form(request: Request) -> HTMLResponse:
     if current_user_row(request) is not None:
@@ -885,6 +875,10 @@ def register_submit(
     username_error = auth.validate_username(username)
     if username_error:
         return fail(username_error)
+    if email.strip():
+        email_error = auth.validate_email(email.strip())
+        if email_error:
+            return fail(email_error)
     password_error = auth.validate_password(password)
     if password_error:
         return fail(password_error)
@@ -937,6 +931,8 @@ def api_me(user=Depends(require_api_user)) -> dict:
         "id": user["id"],
         "username": user["username"],
         "email": user["email"],
+        "email_verified": user["email_verified"],
+        "pending_email": user["pending_email"],
         "created_at": user["created_at"],
         "photo_url": (
             f"/api/account/photo?v={int(user['created_at'])}"
@@ -1012,6 +1008,11 @@ def api_csrf(request: Request, user=Depends(require_api_user)) -> dict:
 class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
+
+
+class EmailChangeRequest(BaseModel):
+    email: str = Field(max_length=320)
+    current_password: str
 
 
 class AccountDeletionRequest(BaseModel):
@@ -1139,6 +1140,49 @@ def _content_disposition_filename(filename: str) -> str:
     """Keep uploaded names safe when placed in a response header."""
     ascii_name = os.path.basename(filename).encode("ascii", "ignore").decode("ascii")
     return re.sub(r'[\r\n"\\]', "_", ascii_name) or "audio"
+
+
+@app.put("/api/account/email")
+def change_account_email(
+    payload: EmailChangeRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    if not auth.verify_password(payload.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    email = payload.email.strip().lower()
+    if email:
+        error = auth.validate_email(email)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        if email == user["email"] and user["email_verified"]:
+            return {"email": user["email"], "email_verified": True, "pending_email": None}
+        token = _account_token_serializer("verify-email").dumps({
+            "uid": user["id"], "email": email,
+        })
+        link = _account_link(request, "/verify-email", token)
+        try:
+            _send_account_email(
+                email,
+                "Verify your Vervfy email address",
+                f"Confirm this address for your Vervfy account within 24 hours:\n\n{link}\n\n"
+                "If you did not request this, you can ignore this email.",
+            )
+        except (OSError, smtplib.SMTPException, RuntimeError, ValueError) as exc:
+            log.exception("Account email verification delivery failed")
+            raise HTTPException(
+                status_code=503,
+                detail="Could not send the verification email. Check the email service configuration and try again.",
+            ) from exc
+        user_store.set_pending_email(user["id"], email)
+        return {
+            "email": user["email"],
+            "email_verified": user["email_verified"],
+            "pending_email": email,
+        }
+    user_store.set_pending_email(user["id"], None)
+    return {"email": None, "email_verified": False, "pending_email": None}
 
 
 @app.post("/api/account/password")

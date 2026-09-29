@@ -770,6 +770,31 @@ body.mini-mode .mini-player{ display:block; }
   border-radius:22px; overflow:hidden;
   box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.08);
 }
+.sleep-timer-overlay{
+  position:fixed; inset:0; z-index:95; display:none; align-items:center; justify-content:center;
+  padding:24px; background:rgba(8,10,16,0.62); backdrop-filter:blur(10px);
+}
+.sleep-timer-overlay.open{ display:flex; }
+.sleep-timer-card{
+  width:min(420px, 100%); padding:8px 16px 16px; border-radius:22px;
+  background:rgba(22,24,34,0.97); border:1px solid var(--border-hi);
+  box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.sleep-timer-status{ padding:0 4px 12px; color:var(--text-dim); font-size:13px; }
+.sleep-timer-options{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.sleep-timer-option{
+  min-height:44px; padding:10px 12px; border:1px solid var(--border); border-radius:12px;
+  background:var(--glass); color:var(--text); font:600 13px var(--font-body); cursor:pointer;
+}
+.sleep-timer-option:hover,.sleep-timer-option:focus-visible{
+  border-color:var(--cyan); background:rgba(84,232,212,.1); outline:none;
+}
+.sleep-timer-track{ grid-column:1 / -1; }
+.sleep-timer-cancel{
+  width:100%; margin-top:12px; padding:11px; border:1px solid var(--border);
+  border-radius:12px; background:transparent; color:var(--danger); font:600 13px var(--font-body); cursor:pointer;
+}
+.sleep-timer-cancel:hover{ background:rgba(255,107,122,.1); }
 .queue-picker-head{
   display:flex; align-items:center; justify-content:space-between;
   padding:18px 18px 12px; flex:0 0 auto;

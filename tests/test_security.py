@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -275,6 +276,18 @@ assert.equal(existing.lyricsResolved, true);
 assert.equal(existing.lyricsLoading, false);
 assert.equal(existing.lyricsPromise, null);
 assert.equal(existing.lyrics.text, "new lyrics");
+const legacyExisting = {
+  id:"legacy", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
+  lyrics:{source:"online-synced", lines:[{time:0,text:"cached lyric"}]},
+  lyricsResolved:true, lyricsLoading:false,
+};
+const legacyMerged = mergeServerTrack(legacyExisting, {
+  id:"legacy", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
+  custom_lyrics:null,
+});
+assert.equal(legacyMerged.changed, false);
+assert.equal(legacyExisting.lyricsResolved, true);
+assert.equal(legacyExisting.lyrics.lines[0].text, "cached lyric");
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -403,6 +416,64 @@ def _reload_server(tmp_path, monkeypatch, env_name, env_value):
     for name in ("server", "auth", "db", "database"):
         sys.modules.pop(name, None)
     return importlib.import_module("server")
+
+
+def test_sleep_timer_stops_playback_and_can_be_canceled():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise the browser sleep timer")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("let sleepTimer = null;")
+    end = app_js.index("\nfunction playCurrent(){", start)
+    timer_code = app_js[start:end]
+    script = """
+const assert = require("node:assert/strict");
+const timers = new Map();
+let nextTimerId = 0;
+let paused = 0, stopped = 0, lastToast = "";
+const audioEl = {pause(){ paused++; }};
+const syncPlayIcons = () => {};
+const toast = message => { lastToast = message; };
+const currentTrack = () => ({id:"track"});
+const fmtTime = value => `${value}s`;
+const $ = selector => ({
+  classList:{remove(){}},
+  textContent:"",
+  hidden:false,
+  focus(){},
+  ...(selector === "#sleepTimerStatus" ? {set textContent(value){this.value=value;}, get textContent(){return this.value;}} : {}),
+});
+const setTimeout = (callback, delay) => {
+  const id = ++nextTimerId;
+  timers.set(id, {callback, delay});
+  return id;
+};
+const clearTimeout = id => timers.delete(id);
+""" + timer_code + """
+startSleepTimer(5);
+assert.equal(timers.size, 1);
+const [timerId, timer] = [...timers.entries()][0];
+assert.equal(timer.delay, 5 * 60 * 1000);
+timers.delete(timerId);
+timer.callback();
+assert.equal(paused, 1);
+assert.match(lastToast, /Sleep timer ended/);
+assert.equal(sleepTimer, null);
+
+startSleepTimer(10);
+const [cancelId, canceled] = [...timers.entries()][0];
+clearSleepTimer();
+canceled.callback();
+assert.equal(paused, 1);
+assert.equal(timers.has(cancelId), false);
+
+setSleepTimerForTrackEnd();
+assert.equal(stopAtTrackEnd(), true);
+assert.equal(paused, 2);
+assert.equal(stopAtTrackEnd(), false);
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_sync_dependency_contextvar_is_not_visible_to_endpoint_or_sqlalchemy(tmp_path):
@@ -581,43 +652,16 @@ def test_library_state_etag_rejects_stale_and_missing_preconditions(app_module):
     assert client.get("/api/library/state").json()["playlists"][0]["id"] == "new-list"
 
 
-def test_artist_lookup_preserves_full_names_and_short_caches_failures(app_module, monkeypatch):
+def test_artist_lookup_never_guesses_catalog_matches(app_module, monkeypatch):
     server, _ = app_module
-    assert server._artist_name_candidates("AC/DC") == ["AC/DC"]
-    assert server._artist_name_candidates("Sleeping with Sirens") == [
-        "Sleeping with Sirens", "Sleeping", "Sirens"
-    ]
+    def unexpected_lookup(*args, **kwargs):
+        pytest.fail("Unverified artist names must not trigger external catalog searches")
 
-    queried = []
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return None
-
-        def read(self):
-            return json.dumps({"data": [{"name": "Sleeping with Sirens"}]}).encode()
-
-    def successful_lookup(request, timeout):
-        queried.append(request.full_url)
-        return FakeResponse()
-
-    now = 1000.0
-    monkeypatch.setattr(server.time, "monotonic", lambda: now)
-    monkeypatch.setattr(server, "urlopen", successful_lookup)
-    server._artist_photo_cache.clear()
-    server._lookup_artist_photo("Sleeping with Sirens")
-    assert len(queried) == 1
-    assert "Sleeping+with+Sirens" in queried[0]
-    key = server._artist_search_key("Sleeping with Sirens")
-    assert server._artist_photo_cache[key][0] == now + 60 * 60 * 24
-
-    server._artist_photo_cache.clear()
-    monkeypatch.setattr(server, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")))
-    server._lookup_artist_photo("Network Failure Test")
-    key = server._artist_search_key("Network Failure Test")
-    assert server._artist_photo_cache[key][0] == now + 120
+    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
+    assert server._lookup_artist_photo("Tate McRae") is None
+    assert server._lookup_artist_photo("Sleeping with Sirens") is None
+    assert server._lookup_artist_profile("Tate McRae") is None
+    assert server._lookup_artist_profile("Unknown Artist") is None
 
 
 def test_postgres_psycopg_disables_prepared_statements(app_module):
@@ -652,6 +696,135 @@ def test_session_revocation_and_logout_all(app_module):
     csrf = client_a.get("/api/csrf").json()["csrf_token"]
     assert client_a.post("/api/account/logout-all", headers={"X-CSRF-Token": csrf}).json() == {"ok": True}
     assert client_c.get("/api/me").status_code == 401
+
+
+def test_verified_email_recovery_flow(app_module, monkeypatch):
+    server, client = app_module
+    _register(client)
+    sent = []
+    monkeypatch.setattr(
+        server,
+        "_send_account_email",
+        lambda recipient, subject, body: sent.append((recipient, subject, body)),
+    )
+
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    response = client.put(
+        "/api/account/email",
+        headers={"X-CSRF-Token": csrf},
+        json={"email": "Alice@example.com", "current_password": "old-password"},
+    )
+    assert response.status_code == 200
+    assert response.json()["pending_email"] == "alice@example.com"
+    assert sent[0][0] == "alice@example.com"
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    client.post(
+        "/forgot-password",
+        data={"email": "alice@example.com", "csrf_token": csrf},
+    )
+    assert len(sent) == 1
+
+    verify_link = re.search(r"https?://\S+", sent[0][2]).group(0)
+    verify_token = parse_qs(urlparse(verify_link).query)["token"][0]
+    verify_form = client.get(f"/verify-email?token={verify_token}")
+    verify_csrf = re.search(r'name="csrf_token" value="([^"]+)"', verify_form.text).group(1)
+    confirmed = client.post(
+        "/verify-email",
+        data={"token": verify_token, "csrf_token": verify_csrf},
+    )
+    assert "Email verified" in confirmed.text
+    assert client.get("/api/me").json()["email_verified"] is True
+
+    def request_reset(email):
+        csrf_token = client.get("/api/csrf").json()["csrf_token"]
+        client.post(
+            "/forgot-password",
+            data={"email": email, "csrf_token": csrf_token},
+        )
+        link = re.search(r"https?://\S+", sent[-1][2]).group(0)
+        return parse_qs(urlparse(link).query)["token"][0]
+
+    stale_reset_token = request_reset("alice@example.com")
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    change = client.put(
+        "/api/account/email",
+        headers={"X-CSRF-Token": csrf},
+        json={"email": "alice-new@example.com", "current_password": "old-password"},
+    )
+    assert change.status_code == 200
+    new_verify_link = re.search(r"https?://\S+", sent[-1][2]).group(0)
+    new_verify_token = parse_qs(urlparse(new_verify_link).query)["token"][0]
+    new_verify_form = client.get(f"/verify-email?token={new_verify_token}")
+    new_verify_csrf = re.search(r'name="csrf_token" value="([^"]+)"', new_verify_form.text).group(1)
+    assert "Email verified" in client.post(
+        "/verify-email",
+        data={"token": new_verify_token, "csrf_token": new_verify_csrf},
+    ).text
+
+    stale_form = client.get(f"/reset-password?token={stale_reset_token}")
+    stale_csrf = re.search(r'name="csrf_token" value="([^"]+)"', stale_form.text).group(1)
+    stale_reset = client.post(
+        "/reset-password",
+        data={
+            "token": stale_reset_token,
+            "password": "another-password",
+            "password_confirm": "another-password",
+            "csrf_token": stale_csrf,
+        },
+    )
+    assert "invalid or expired" in stale_reset.text
+
+    reset_token = request_reset("alice-new@example.com")
+    reset_form = client.get(f"/reset-password?token={reset_token}")
+    reset_csrf = re.search(r'name="csrf_token" value="([^"]+)"', reset_form.text).group(1)
+    reset = client.post(
+        "/reset-password",
+        data={
+            "token": reset_token,
+            "password": "new-password",
+            "password_confirm": "new-password",
+            "csrf_token": reset_csrf,
+        },
+    )
+    assert "Password updated" in reset.text
+    assert _login(client, passphrase="old-password").status_code == 400
+    assert _login(client, passphrase="new-password").status_code == 303
+
+    replay = client.post(
+        "/reset-password",
+        data={
+            "token": reset_token,
+            "password": "another-password",
+            "password_confirm": "another-password",
+            "csrf_token": client.get("/api/csrf").json()["csrf_token"],
+        },
+    )
+    assert "invalid or expired" in replay.text
+
+
+def test_account_email_links_use_canonical_public_origin(app_module, monkeypatch):
+    server, _ = app_module
+    from starlette.requests import Request
+
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "server": ("attacker.example", 443),
+        "client": ("127.0.0.1", 1234),
+        "headers": [(b"host", b"attacker.example")],
+        "path": "/",
+        "query_string": b"",
+    })
+    monkeypatch.setenv("VERVFY_PUBLIC_URL", "https://music.example")
+    assert server._account_link(request, "/reset-password", "signed-token") == (
+        "https://music.example/reset-password?token=signed-token"
+    )
+    monkeypatch.setattr(server, "is_production", True)
+    monkeypatch.delenv("VERVFY_PUBLIC_URL")
+    with pytest.raises(RuntimeError, match="VERVFY_PUBLIC_URL"):
+        server._account_link(request, "/reset-password", "signed-token")
 
 
 def test_logout_redirects_even_with_stale_csrf_token(app_module):
@@ -709,54 +882,26 @@ def test_authenticated_user_cannot_access_another_users_library(app_module):
     }).status_code == 404
 
 
-def test_artist_profile_uses_wikipedia_when_audiodb_is_unavailable(app_module, monkeypatch):
+def test_artist_profile_only_returns_preverified_details(app_module, monkeypatch):
     server, _ = app_module
 
-    class FakeResponse:
-        def __init__(self, payload):
-            self.payload = payload
+    def unexpected_lookup(*args, **kwargs):
+        pytest.fail("Artist profile lookup must not call an external catalog")
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return None
-
-        def read(self):
-            return json.dumps(self.payload).encode()
-
-    def fake_urlopen(request, timeout):
-        url = request.full_url
-        if "theaudiodb.com" in url:
-            return FakeResponse({"Message": "Not found"})
-        if "w/api.php" in url:
-            return FakeResponse({"query": {"search": [{"title": "Example Artist"}]}})
-        return FakeResponse(
-            {
-                "extract": "Example Artist is a musician known for influential recordings.",
-                "content_urls": {
-                    "desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist"}
-                },
-            }
-        )
-
-    monkeypatch.setattr(server, "urlopen", fake_urlopen)
-    server._artist_profile_cache.clear()
-    profile = server._lookup_artist_profile("Example Artist")
-
-    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
-    assert profile["source"] == "Wikipedia"
+    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
+    verified = server._lookup_artist_profile("MORADA")
+    assert verified["source"] == "MORADA artist biography"
+    assert server._lookup_artist_profile("Example Artist") is None
 
 
 @pytest.mark.parametrize("name", ["Dave", "Dave Santan", "Santan Dave"])
 def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch, name):
     server, _ = app_module
-    server._artist_photo_cache.clear()
 
     def unexpected_lookup(*args, **kwargs):
-        pytest.fail("Dave's ambiguous name must not trigger a catalog search")
+        pytest.fail("Verified artist photos must not trigger catalog searches")
 
-    monkeypatch.setattr(server, "urlopen", unexpected_lookup)
+    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
 
     assert server._lookup_artist_photo(name) == (
         "https://cdn-images.dzcdn.net/images/artist/"

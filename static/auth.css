@@ -38,6 +38,11 @@
   color:var(--danger); padding:10px 14px; border-radius:var(--radius-s);
   font-size:0.85rem; margin-bottom:16px;
 }
+.auth-notice{
+  background:rgba(84,232,212,0.1); border:1px solid rgba(84,232,212,0.28);
+  color:var(--text); padding:12px 14px; border-radius:var(--radius-s);
+  font-size:0.88rem; line-height:1.5; margin-bottom:16px;
+}
 .auth-submit{
   width:100%; padding:12px; border:none; border-radius:var(--radius-s);
   background:var(--grad-aura); color:#0c0e14; font-weight:700; font-size:0.95rem;

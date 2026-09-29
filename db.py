@@ -79,6 +79,10 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     username_key: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True)
     email: Mapped[str | None] = mapped_column(String(320), unique=True)
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    pending_email: Mapped[str | None] = mapped_column(String(320))
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     photo_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
