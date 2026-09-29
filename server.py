@@ -431,12 +431,92 @@ _VERIFIED_ARTIST_PHOTOS = {
 }
 
 
-def _lookup_artist_photo(name: str) -> str | None:
-    """Return a portrait only when the artist identity has been explicitly verified."""
+_DEEZER_API = "https://api.deezer.com"
+# name key -> (expiry, portrait url, verified catalog titles); misses keyed per song set.
+_ARTIST_PHOTO_CACHE: dict[str, tuple[float, str | None, frozenset[str]]] = {}
+_PHOTO_HIT_TTL = 30 * 24 * 3600
+_PHOTO_MISS_TTL = 6 * 3600
+
+
+def _title_key(title: str) -> str:
+    """Normalize a track/album title, dropping '(feat. …)' and '- Remastered' noise."""
+    text = re.sub(r"[\(\[]\s*(?:feat|ft|with|prod)\.?[^\)\]]*[\)\]]", "", title, flags=re.I)
+    text = re.sub(r"\s+-\s+(?:remaster(?:ed)?|single version|radio edit).*$", "", text, flags=re.I)
+    return _artist_search_key(text)
+
+
+def _deezer_verified_photo(name: str, titles: list[str]) -> tuple[str, set[str]] | None:
+    """Portrait from Deezer, accepted only when the artist's identity is proven.
+
+    An exact name match alone is not enough (short or shared names like "gio." or
+    "Dave"). So a candidate is accepted only if its name matches exactly AND at
+    least one song/album the user actually owns by this artist appears in that
+    Deezer artist's catalog. If nothing is proven we return None and the client
+    keeps its fallback rather than showing someone else's face.
+    """
+    import httpx
+
+    key = _artist_search_key(name)
+    wanted = {k for k in (_title_key(t) for t in titles) if k}
+    if not key or not wanted:
+        return None
+    with httpx.Client(timeout=4.0) as client:
+        found = client.get(f"{_DEEZER_API}/search/artist", params={"q": name, "limit": 8})
+        found.raise_for_status()
+        candidates = [
+            c for c in found.json().get("data", [])
+            if _artist_search_key(c.get("name", "")) == key
+        ]
+        # Most popular exact-name match first; only the top few get verified.
+        candidates.sort(key=lambda c: c.get("nb_fan") or 0, reverse=True)
+        for cand in candidates[:3]:
+            artist_id = cand.get("id")
+            picture = cand.get("picture_xl") or cand.get("picture_big") or ""
+            if not artist_id or "/images/artist//" in picture:
+                continue  # no real portrait (Deezer's blank placeholder)
+            if urlsplit(picture).hostname is None or not urlsplit(picture).hostname.endswith("dzcdn.net"):
+                continue
+            catalog: set[str] = set()
+            for path in (f"/artist/{artist_id}/top", f"/artist/{artist_id}/albums"):
+                resp = client.get(f"{_DEEZER_API}{path}", params={"limit": 100})
+                if resp.status_code == 200:
+                    catalog |= {_title_key(i.get("title", "")) for i in resp.json().get("data", [])}
+            if wanted & catalog:
+                return picture, catalog
+    return None
+
+
+def _lookup_artist_photo(name: str, titles: list[str] | None = None) -> str | None:
+    """Verified portrait: hand-checked list first, then an identity-proven catalog match."""
     key = _artist_search_key(name)
     if not key:
         return None
-    return _VERIFIED_ARTIST_PHOTOS.get(key)
+    if key in _VERIFIED_ARTIST_PHOTOS:
+        return _VERIFIED_ARTIST_PHOTOS[key]
+    titles = [t for t in (titles or []) if t][:40]
+    wanted = frozenset(k for k in (_title_key(t) for t in titles) if k)
+    if not wanted:
+        return None
+    now = time.time()
+    # A cached portrait is reused only if THIS user's songs also appear in the
+    # verified catalog, so a different artist with the same name is never served it.
+    hit = _ARTIST_PHOTO_CACHE.get(key)
+    if hit and now < hit[0] and hit[1] and wanted & hit[2]:
+        return hit[1]
+    miss_key = f"{key}:miss:{hash(wanted)}"
+    miss = _ARTIST_PHOTO_CACHE.get(miss_key)
+    if miss and now < miss[0]:
+        return None
+    try:
+        found = _deezer_verified_photo(name, titles)
+    except Exception as exc:  # network trouble must never break the artist page
+        log.warning("artist photo lookup failed for %r: %s", name, exc)
+        return None
+    if found:
+        _ARTIST_PHOTO_CACHE[key] = (now + _PHOTO_HIT_TTL, found[0], frozenset(found[1]))
+        return found[0]
+    _ARTIST_PHOTO_CACHE[miss_key] = (now + _PHOTO_MISS_TTL, None, frozenset())
+    return None
 
 
 def _lookup_artist_profile(name: str) -> dict[str, str] | None:
@@ -1327,11 +1407,13 @@ def save_library_state(
 
 @app.get("/api/artists/photo")
 def artist_photo(
-    name: str = Query(min_length=1, max_length=200), user=Depends(require_api_user)
+    name: str = Query(min_length=1, max_length=200),
+    titles: list[str] = Query(default=[], max_length=40),
+    user=Depends(require_api_user),
 ) -> dict:
-    """Find an artist portrait for the Artists view, if the public catalog has one."""
+    """Find a verified artist portrait; `titles` are the user's songs by this artist."""
     del user  # The dependency keeps this account-scoped endpoint private.
-    return {"url": _lookup_artist_photo(name.strip())}
+    return {"url": _lookup_artist_photo(name.strip(), [t[:200] for t in titles])}
 
 
 @app.get("/api/artists/profile")
