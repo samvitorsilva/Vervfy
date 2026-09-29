@@ -87,42 +87,7 @@ service may show a starting page while it wakes.
 
 Vervfy stores accounts, bcrypt password hashes, profile photos, tracks/audio,
 cover art, custom lyrics, favorites, and playlists in PostgreSQL. Profile
-photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. Session cookies
-are signed with `VERVFY_SECRET_KEY` in production, `VERVFY_HTTPS_ONLY=1`
-enables secure-only cookies behind HTTPS, and `VERVFY_COOKIE_SAME_SITE`
-controls the cookie SameSite policy (`lax` by default).
-Password recovery and email verification require SMTP settings:
-`VERVFY_PUBLIC_URL` (the canonical HTTPS app origin),
-`VERVFY_SMTP_HOST`, `VERVFY_SMTP_PORT` (587 with STARTTLS, or 465 with
-implicit TLS), `VERVFY_EMAIL_FROM`, and, when required by your provider,
-`VERVFY_SMTP_USERNAME` and `VERVFY_SMTP_PASSWORD`. Password reset is available
-only after the account email has been verified. Existing and registration-time
-email addresses must be verified from the account profile before they can be
-used for recovery.
-Apply database changes before deploying with `alembic upgrade head`.
-Set `VERVFY_TRUSTED_PROXY_HOPS=1` on Render so rate limits use each visitor's
-forwarded IP instead of the shared proxy address. Uploads are limited to 60
-per user per 10-minute window by default; adjust this with
-`VERVFY_UPLOADS_PER_10MIN`.
-For Supabase, use the PostgreSQL transaction-pooler connection URL when
-connecting through PgBouncer; Vervfy disables psycopg prepared statements for
-PostgreSQL URLs to remain compatible with transaction pooling.
-
-Tenant-scoped database work uses an explicit SQLAlchemy session carrying the
-authenticated user ID; PostgreSQL applies it transaction-locally for row-level
-security. It does not depend on request context being copied across threadpool
-calls.
-
-To run the PostgreSQL RLS integration test, set `VERVFY_TEST_POSTGRES_URL` to
-a dedicated PostgreSQL test database URL using a role that is neither a
-superuser nor `BYPASSRLS`, then run:
-
-```sh
-pytest -q tests/test_tenant_isolation_postgres.py
-```
-
-The test creates and drops a uniquely named schema in that database. The rest
-of the suite does not require PostgreSQL.
+photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. 
 
 ---
 
