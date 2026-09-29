@@ -510,6 +510,14 @@ const LyricsEngine = (() => {
     return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
+  function cleanTrackTitle(value){
+    return String(value || "")
+      .replace(/\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?)\s+[^\])]*[\])]/ig, "")
+      .replace(/\s+(?:feat(?:uring)?\.?|ft\.?)\s+.+$/ig, "")
+      .replace(/\s*[\[(]\s*explicit\s*[\])]/ig, "")
+      .replace(/\s*[-–—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$/ig, "")
+      .trim();
+  }
   function lrclibResultToLyrics(data){
     if(!data || data.instrumental) return null;
     if(data.syncedLyrics && data.syncedLyrics.trim()){
@@ -532,75 +540,88 @@ const LyricsEngine = (() => {
   }
   async function fromOnline(track){
     if(!track || !track.title){ LyricsDebug.log("online: skipped, no title to search with"); return null; }
-    const artist = (track.artist || "").trim();
+    const artist = splitArtistCreditList(track.artist || "")[0]?.trim() || "";
     if(!artist || /^unknown artist$/i.test(artist)){
       LyricsDebug.log(`online: skipped for "${track.title}" — artist is unknown, a search would be unreliable`);
       return null;
     }
-    const durationSec = Math.round(track.duration || 0);
-    const baseParams = { track_name: track.title, artist_name: artist };
+    const title = cleanTrackTitle(track.title);
+    const titleKey = normalizeSearchText(title);
+    const artistKey = normalizeSearchText(artist);
+    const duration = Number(track.duration);
+    const durationKnown = Number.isFinite(duration) && duration > 0;
+    const durationSec = Math.round(duration);
+    const baseParams = { track_name: title, artist_name: artist };
     const album = (track.album || "").trim();
-    if(album && !/^unknown album$/i.test(album)) baseParams.album_name = album;
+    const albumKnown = album && !/^unknown album$/i.test(album);
+    let requestFailed = false;
+    const matchesTrack = candidate =>
+      candidate && typeof candidate === "object" &&
+      normalizeSearchText(cleanTrackTitle(candidate.trackName)) === titleKey &&
+      normalizeSearchText(splitArtistCreditList(candidate.artistName || "")[0] || candidate.artistName) === artistKey &&
+      durationKnown && Number.isFinite(candidate.duration) &&
+      Math.abs(candidate.duration - duration) <= 3;
 
-    // 1) exact match (only meaningful once we know the track's duration)
-    if(durationSec > 0){
+    // Exact lookup needs all three identifying fields.
+    if(albumKnown && durationKnown){
       try{
-        const url = `${LRCLIB_BASE}/get?` + new URLSearchParams({ ...baseParams, duration:durationSec });
+        const url = `${LRCLIB_BASE}/get?` + new URLSearchParams({
+          ...baseParams, album_name:album, duration:durationSec,
+        });
         LyricsDebug.log("online: exact-match query →", url);
         const res = await fetchLyrics(url);
         LyricsDebug.log("online: exact-match response status", res.status);
         if(res.ok){
           const data = await res.json();
-          const durationMatches = durationSec <= 0 ||
-            (Number.isFinite(data.duration) && Math.abs(data.duration - durationSec) <= 3);
-          const parsed = durationMatches ? lrclibResultToLyrics(data) : null;
+          const parsed = matchesTrack(data) ? lrclibResultToLyrics(data) : null;
           LyricsDebug.log("online: exact-match parsed result →", parsed ? `${parsed.source}, ${parsed.lines?parsed.lines.length+" lines":parsed.text.length+" chars"}` : "none usable");
           if(parsed) return parsed;
+        }else if(res.status !== 404){
+          requestFailed = true;
         }
-      }catch(e){ LyricsDebug.warn("online: exact-match request failed —", e.message); }
+      }catch(e){
+        requestFailed = true;
+        LyricsDebug.warn("online: exact-match request failed —", e.message);
+      }
     }
 
-    // 2) fuzzy search fallback
-    try{
-      const url = `${LRCLIB_BASE}/search?` + new URLSearchParams(baseParams);
-      LyricsDebug.log("online: search query →", url);
-      const res = await fetchLyrics(url);
-      LyricsDebug.log("online: search response status", res.status);
-      if(!res.ok) return null;
-      const results = await res.json();
-      LyricsDebug.log(`online: search returned ${Array.isArray(results)?results.length:0} candidate(s)`);
-      if(!Array.isArray(results) || results.length === 0) return null;
-      const titleKey = normalizeSearchText(track.title);
-      const artistKey = normalizeSearchText(artist);
-      const candidates = results.filter(candidate =>
-        durationSec <= 0 ||
-        (Number.isFinite(candidate.duration) && Math.abs(candidate.duration - durationSec) <= 3)
-      );
-      const best = candidates.slice().sort((a,b) => {
-        const score = candidate => {
-          const titleMatch = normalizeSearchText(candidate.trackName) === titleKey;
-          const artistMatch = normalizeSearchText(candidate.artistName) === artistKey;
-          const durationDifference = durationSec > 0 && Number.isFinite(candidate.duration)
-            ? Math.abs(candidate.duration - durationSec)
-            : Number.POSITIVE_INFINITY;
-          return [
-            titleMatch ? 1 : 0,
-            artistMatch ? 1 : 0,
-            durationDifference,
-            candidate.syncedLyrics ? 0 : 1,
-          ];
-        };
-        const left = score(a), right = score(b);
-        for(let i=0;i<left.length;i++){
-          if(left[i] !== right[i]) return i < 2 ? right[i] - left[i] : left[i] - right[i];
+    // Search with exact fields, then a combined query; never send album metadata.
+    const searches = [
+      { track_name:title, artist_name:artist },
+      { q:`${artist} ${title}` },
+    ];
+    for(const params of searches){
+      try{
+        const url = `${LRCLIB_BASE}/search?` + new URLSearchParams(params);
+        LyricsDebug.log("online: search query →", url);
+        const res = await fetchLyrics(url);
+        LyricsDebug.log("online: search response status", res.status);
+        if(!res.ok){
+          if(res.status !== 404) requestFailed = true;
+          continue;
         }
-        return 0;
-      })[0];
-      const parsed = best ? lrclibResultToLyrics(best) : null;
-      if(!best) return null;
-      LyricsDebug.log("online: best candidate", `"${best.trackName}" by ${best.artistName}`, "→", parsed ? parsed.source : "no usable lyrics (instrumental or empty)");
-      return parsed;
-    }catch(e){ LyricsDebug.warn("online: search request failed —", e.message); return null; }
+        const results = await res.json();
+        LyricsDebug.log(`online: search returned ${Array.isArray(results)?results.length:0} candidate(s)`);
+        if(!Array.isArray(results)){
+          requestFailed = true;
+          continue;
+        }
+        const candidates = results.filter(matchesTrack)
+          .sort((a,b) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration));
+        for(const candidate of candidates){
+          const parsed = lrclibResultToLyrics(candidate);
+          if(parsed){
+            LyricsDebug.log("online: accepted candidate", `"${candidate.trackName}" by ${candidate.artistName}`, "→", parsed.source);
+            return parsed;
+          }
+        }
+      }catch(e){
+        requestFailed = true;
+        LyricsDebug.warn("online: search request failed —", e.message);
+      }
+    }
+    if(requestFailed) throw new Error("LRCLIB_UNAVAILABLE");
+    return null;
   }
   // Embedded synced/plain lyrics are checked before the online fallback.
   async function resolve(track, idMeta){
@@ -622,7 +643,7 @@ function normalizeSyncedLyrics(lyrics){
 
 async function fetchArtistCatalog(url){
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const timeout = setTimeout(() => controller.abort(), 12000);
   try{
     return await fetch(url, {signal:controller.signal});
   }finally{
@@ -636,6 +657,9 @@ async function fetchArtistCatalog(url){
 const ArtistPhotoEngine = (() => {
   const resolved = new Map();
   const pending = new Map();
+  const waiting = [];
+  let active = 0;
+  const MAX_ACTIVE = 2;
 
   function apply(name, url){
     if(!url) return;
@@ -652,7 +676,7 @@ const ArtistPhotoEngine = (() => {
       const res = await fetchArtistCatalog("/api/artists/photo?" + new URLSearchParams({name}));
       if(!res.ok) throw new Error(`Artist photo lookup failed (${res.status})`);
       const data = await res.json();
-      const url = data && typeof data.url === "string" ? data.url : null;
+      const url = data && typeof data.picture === "string" ? data.picture : null;
       resolved.set(name, url);
       apply(name, url);
     }catch(_){
@@ -663,6 +687,18 @@ const ArtistPhotoEngine = (() => {
     }
   }
 
+  function pump(){
+    while(active < MAX_ACTIVE && waiting.length){
+      const job = waiting.shift();
+      active++;
+      lookup(job.name).finally(() => {
+        active--;
+        job.done();
+        pump();
+      });
+    }
+  }
+
   function resolve(name){
     if(!name) return Promise.resolve(null);
     if(resolved.has(name)){
@@ -670,8 +706,10 @@ const ArtistPhotoEngine = (() => {
       return Promise.resolve(resolved.get(name));
     }
     if(pending.has(name)) return pending.get(name);
-    const request = lookup(name);
+    const request = new Promise(done => waiting.push({name, done}))
+      .then(() => resolved.get(name) ?? null);
     pending.set(name, request);
+    pump();
     return request;
   }
 
@@ -1988,7 +2026,9 @@ function ensureTrackLyrics(track){
   track.lyricsPromise = (async () => {
     const lyricsCacheKey = `lyrics:${activeAccountId || "anonymous"}:${track.id}`;
     const cached = await AuralisDB.get(lyricsCacheKey);
-    if(cached && cached.customLyrics === (track.customLyrics || null)){
+    const cacheFresh = cached?.lyrics ||
+      (cached?.checkedAt && Date.now() - cached.checkedAt < 3 * 24 * 60 * 60 * 1000);
+    if(cached && cacheFresh && cached.customLyrics === (track.customLyrics || null)){
       return cached.lyrics || null;
     }
     let result = track.customLyrics
@@ -2014,6 +2054,7 @@ function ensureTrackLyrics(track){
     await AuralisDB.set(lyricsCacheKey, {
       customLyrics: track.customLyrics || null,
       lyrics: result || null,
+      checkedAt: Date.now(),
     });
     return result;
   })().then(result => {
@@ -2029,7 +2070,7 @@ function ensureTrackLyrics(track){
     if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
     return track.lyrics;
   }).catch(e => {
-    track.lyricsResolved = true;
+    track.lyricsResolved = e.message !== "LRCLIB_UNAVAILABLE";
     track.lyricsLoading = false;
     track.lyricsPromise = null;
     LyricsDebug.warn("state: lyrics lookup threw —", e.message);
@@ -2734,17 +2775,28 @@ function getArtists(){
   for(const t of state.tracks){
     const names = artistsOf(t);
     if(!names.length) continue;
+    const leadArtist = splitArtistCreditList(artistNameOf(t))[0] || "";
     const album = typeof t.album === "string" ? t.album.trim() : "";
     const duration = Number(t.duration);
     for(const name of names){
       const key = artistKey(name);
+      const isLeadArtist = artistKey(name) === artistKey(leadArtist);
       let entry = map.get(key);
       if(!entry){
-        entry = { name, art: t.art, fallbackArt: t.fallbackArt, tracks: [], albums: new Set(), duration: 0 };
+        entry = {
+          name,
+          art: isLeadArtist ? t.art : null,
+          fallbackArt: isLeadArtist ? t.fallbackArt : null,
+          tracks: [], albums: new Set(), duration: 0,
+        };
         map.set(key, entry);
       } else if(name.length > entry.name.length){
         // Prefer the fuller casing/spelling when the same person appears twice.
         entry.name = name;
+      }
+      if(isLeadArtist && !entry.art){
+        entry.art = t.art;
+        entry.fallbackArt = t.fallbackArt;
       }
       // A collab track belongs on each performer's profile once.
       if(entry.tracks.some(existing => existing.id === t.id)) continue;
@@ -4054,6 +4106,7 @@ function renderArtistsView(){
         </div>`).join("")}
     </div>`;
   restoreScroll();
+  artists.forEach(a => ArtistPhotoEngine.resolve(a.name));
   $$(".artist-card").forEach(card=>{
     const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
     const open = () => openArtist(decodeURIComponent(card.dataset.artist));

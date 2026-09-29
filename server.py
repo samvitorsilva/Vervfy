@@ -197,11 +197,9 @@ MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
 _libraries: dict[str, Library] = {}
-_artist_photo_cache: dict[str, tuple[float, str | None]] = {}
+_artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 MAX_ARTIST_CACHE_ENTRIES = 1024
-AUDIODB_API_KEY = os.environ.get("VERVFY_AUDIODB_API_KEY", "123")
-MAX_ARTIST_BIO_CHARS = 180
 
 
 def _artist_search_key(name: str) -> str:
@@ -219,17 +217,6 @@ def _cache_artist_result(cache, key: str, value, expires_at: float) -> None:
     if len(cache) >= MAX_ARTIST_CACHE_ENTRIES and key not in cache:
         del cache[min(cache, key=lambda item: cache[item][0])]
     cache[key] = (expires_at, value)
-
-
-def _concise_artist_bio(value: object) -> str:
-    bio = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not bio:
-        return ""
-    first_sentence = re.split(r"(?<=[.!?])\s+", bio, maxsplit=1)[0]
-    if len(first_sentence) <= MAX_ARTIST_BIO_CHARS:
-        return first_sentence
-    shortened = first_sentence[: MAX_ARTIST_BIO_CHARS - 1].rsplit(" ", 1)[0]
-    return f"{shortened or first_sentence[: MAX_ARTIST_BIO_CHARS - 1]}…"
 
 
 def _artist_name_candidates(name: str) -> list[str]:
@@ -511,173 +498,197 @@ def _matching_catalog_artist(
     return None, None
 
 
-def _lookup_artist_photo(name: str, titles: list[str] | None = None) -> str | None:
-    """Fetch the exact-name Deezer portrait, retaining album art on a miss."""
-    del titles
+def _deezer_artist_for_name(name: str) -> dict | None:
     key = _artist_search_key(name)
     if not key:
         return None
-    for candidate_name in _artist_name_candidates(name):
-        verified_photo = _VERIFIED_ARTIST_PHOTOS.get(
-            _artist_search_key(candidate_name)
-        )
-        if verified_photo:
-            return verified_photo
     now = time.monotonic()
     cached = _artist_photo_cache.get(key)
     if cached and cached[0] > now:
         return cached[1]
 
-    photo: str | None = None
+    artist: dict | None = None
     try:
         with httpx.Client(timeout=4.0) as client:
-            for candidate_name in _artist_name_candidates(name):
-                response = client.get(
-                    "https://api.deezer.com/search/artist",
-                    params={"q": candidate_name, "limit": 5},
-                    headers={"User-Agent": "Vervfy/1.0"},
-                )
-                response.raise_for_status()
-                results = response.json().get("data", [])
-                result, _ = _matching_catalog_artist(
-                    results, [candidate_name], "name"
-                )
-                if result:
-                    candidate = result.get("picture_medium") or result.get("picture_big")
-                    host = urlsplit(candidate).hostname if isinstance(candidate, str) else None
-                    if (
-                        isinstance(candidate, str)
-                        and candidate.startswith("https://")
-                        and host
-                        and host.endswith("dzcdn.net")
-                    ):
-                        photo = candidate
-                    break
+            response = client.get(
+                "https://api.deezer.com/search/artist",
+                params={"q": name, "limit": 10},
+                headers={"User-Agent": "Vervfy/1.0"},
+            )
+            response.raise_for_status()
+            results = response.json().get("data", [])
+            artist, _ = _matching_catalog_artist(results, [name], "name")
     except (httpx.HTTPError, ValueError, TypeError) as exc:
-        log.warning("artist photo lookup failed for %r: %s", name, exc)
+        log.warning("Deezer artist lookup failed for %r: %s", name, exc)
+    _cache_artist_result(
+        _artist_photo_cache, key, artist, now + (60 * 60 * 24 if artist else 10 * 60)
+    )
+    return artist
 
-    _cache_artist_result(_artist_photo_cache, key, photo, now + 60 * 60 * 24)
-    return photo
+
+def _deezer_artist_has_library_title(artist: dict, titles: list[str]) -> bool:
+    title_keys = {_artist_track_title_key(title) for title in titles if title.strip()}
+    artist_id = artist.get("id")
+    if not artist_id or not title_keys:
+        return False
+    try:
+        with httpx.Client(timeout=4.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
+            try:
+                top = client.get(
+                    f"https://api.deezer.com/artist/{artist_id}/top",
+                    params={"limit": 100},
+                )
+                top.raise_for_status()
+                tracks = top.json().get("data", [])
+                if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
+                    return True
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                log.warning("Deezer top-track check failed for artist %r: %s", artist.get("name"), exc)
+
+            albums_response = client.get(
+                f"https://api.deezer.com/artist/{artist_id}/albums",
+                params={"limit": 100},
+            )
+            albums_response.raise_for_status()
+            albums = albums_response.json().get("data", [])
+            for album in albums:
+                if _artist_track_title_key(str(album.get("title", ""))) in title_keys:
+                    return True
+            for album in albums[:10]:
+                album_id = album.get("id")
+                if not album_id:
+                    continue
+                try:
+                    response = client.get(
+                        f"https://api.deezer.com/album/{album_id}/tracks",
+                        params={"limit": 100},
+                    )
+                    response.raise_for_status()
+                    tracks = response.json().get("data", [])
+                    if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
+                        return True
+                except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    log.warning("Deezer album-track check failed for artist %r: %s", artist.get("name"), exc)
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
+        log.warning("Deezer catalog verification failed for artist %r: %s", artist.get("name"), exc)
+    return False
 
 
-def _lookup_artist_profile(name: str, titles: list[str] | None = None) -> dict[str, str] | None:
-    """Use TheAudioDB for artist facts and Wikipedia when its record is missing."""
-    del titles
+def _artist_track_title_key(title: str) -> str:
+    cleaned = re.sub(
+        r"\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?)\s+[^\])]*[\])]", "", title, flags=re.I
+    )
+    cleaned = re.sub(r"\s+(?:feat(?:uring)?\.?|ft\.?)\s+.+$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s*[\[(]\s*explicit\s*[\])]", "", cleaned, flags=re.I)
+    cleaned = re.sub(
+        r"\s*[-–—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$",
+        "", cleaned, flags=re.I,
+    )
+    return _artist_search_key(cleaned)
+
+
+def _verified_deezer_artist(name: str, titles: list[str]) -> dict | None:
+    artist = _deezer_artist_for_name(name)
+    if not artist or _artist_search_key(str(artist.get("name", ""))) != _artist_search_key(name):
+        return None
+    return artist if _deezer_artist_has_library_title(artist, titles) else None
+
+
+def _lookup_artist_photo(name: str, titles: list[str]) -> tuple[str | None, int | None]:
+    """Return a Deezer portrait only after matching this user's catalog titles."""
+    for candidate_name in _artist_name_candidates(name):
+        verified_photo = _VERIFIED_ARTIST_PHOTOS.get(_artist_search_key(candidate_name))
+        if verified_photo:
+            artist = _verified_deezer_artist(name, titles)
+            fans = artist.get("nb_fan") if artist else None
+            return verified_photo, fans if isinstance(fans, int) else None
+    artist = _verified_deezer_artist(name, titles)
+    if not artist:
+        return None, None
+    photo = artist.get("picture_medium") or artist.get("picture_big")
+    try:
+        host = urlsplit(photo).hostname if isinstance(photo, str) else None
+    except ValueError:
+        host = None
+    if (
+        not isinstance(photo, str)
+        or not photo.startswith("https://")
+        or not host
+        or not host.endswith(".dzcdn.net")
+        or "/images/artist//" in photo
+    ):
+        photo = None
+    fans = artist.get("nb_fan")
+    return photo, fans if isinstance(fans, int) else None
+
+
+def _wiki_title_matches(title: str, name: str) -> bool:
+    without_qualifier = lambda value: re.sub(r"\s*\(singer\)\s*$", "", value, flags=re.I).strip()
+    return _artist_search_key(without_qualifier(title)) == _artist_search_key(without_qualifier(name))
+
+
+def _first_sentences(value: object, limit: int = 3) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return " ".join(re.split(r"(?<=[.!?])\s+", text)[:limit])
+
+
+def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
+    """Return verified Wikipedia biography and Deezer audience information."""
     manual = _verified_artist_profile(name)
     if manual:
         return manual
+    artist = _verified_deezer_artist(name, titles)
+    if not artist:
+        return None
     key = _artist_search_key(name)
     if not key:
         return None
     now = time.monotonic()
     cached = _artist_profile_cache.get(key)
     if cached and cached[0] > now:
-        return cached[1].copy() if cached[1] else None
-
-    profile: dict[str, str] | None = None
-    try:
-        with httpx.Client(timeout=4.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
-            for candidate_name in _artist_name_candidates(name):
-                response = client.get(
-                    f"https://www.theaudiodb.com/api/v1/json/{AUDIODB_API_KEY}/search.php",
-                    params={"s": candidate_name},
-                )
-                response.raise_for_status()
-                artists = response.json().get("artists") or []
-                artist, matched_name = _matching_catalog_artist(
-                    artists, [candidate_name], "strArtist"
-                )
-                if not artist:
-                    continue
-                fields = {
-                    "bio": _concise_artist_bio(
-                        artist.get("strBiographyEN") or artist.get("strBiography")
-                    ),
-                    "genre": artist.get("strGenre"),
-                    "style": artist.get("strStyle"),
-                    "mood": artist.get("strMood"),
-                    "formed_year": artist.get("intFormedYear"),
-                    "followers": artist.get("intFollowers"),
-                    "popularity": artist.get("intPopularity"),
-                    "label": artist.get("strLabel"),
-                    "website": artist.get("strWebsite"),
-                    "instagram": artist.get("strInstagram"),
-                    "facebook": artist.get("strFacebook"),
-                    "twitter": artist.get("strTwitter"),
-                    "youtube": artist.get("strYoutube"),
-                }
-                profile = {
-                    field: str(value).strip()
-                    for field, value in fields.items()
-                    if value
-                }
-                if profile:
-                    profile["source"] = "TheAudioDB"
-                    profile["source_url"] = "https://www.theaudiodb.com/"
-                    if matched_name != name.strip():
-                        profile["lookup_name"] = matched_name
-                    website = profile.get("website", "")
-                    if website and not website.startswith(("http://", "https://")):
-                        profile["website"] = f"https://{website}"
-                break
-    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
-        log.warning("TheAudioDB artist lookup failed for %r: %s", name, exc)
-
-    if not profile:
+        profile = cached[1].copy() if cached[1] else {}
+    else:
+        profile = {}
         try:
             with httpx.Client(
                 timeout=4.0,
                 headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
                 follow_redirects=True,
             ) as client:
-                for candidate_name in _artist_name_candidates(name):
-                    response = client.get(
-                        "https://en.wikipedia.org/w/api.php",
-                        params={
-                            "action": "query",
-                            "list": "search",
-                            "srsearch": f'"{candidate_name}"',
-                            "srnamespace": "0",
-                            "srlimit": "5",
-                            "format": "json",
-                        },
-                    )
-                    response.raise_for_status()
-                    results = response.json().get("query", {}).get("search", [])
-                    match, matched_name = _matching_catalog_artist(
-                        results, [candidate_name], "title"
-                    )
-                    if not match:
-                        continue
-                    title = str(match["title"])
-                    summary_response = client.get(
-                        f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}"
-                    )
-                    summary_response.raise_for_status()
-                    summary = summary_response.json()
-                    bio = _concise_artist_bio(summary.get("extract"))
-                    if not bio:
-                        continue
-                    profile = {
-                        "bio": bio,
-                        "source": "Wikipedia",
-                        "source_url": (
-                            summary.get("content_urls", {})
-                            .get("desktop", {})
-                            .get("page", "")
-                        ),
-                    }
-                    if matched_name != name.strip():
-                        profile["lookup_name"] = matched_name
-                    break
+                response = client.get(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(name, safe='')}"
+                )
+                response.raise_for_status()
+                summary = response.json()
+                description = str(summary.get("description", ""))
+                extract = str(summary.get("extract", ""))
+                mentions_music = re.search(r"\bmusic(?:al|ian|ians)?\b", f"{description} {extract}", re.I)
+                if (
+                    summary.get("type") == "standard"
+                    and _wiki_title_matches(str(summary.get("title", "")), name)
+                    and mentions_music
+                ):
+                    bio = _first_sentences(extract)
+                    if bio:
+                        profile = {
+                            "bio": bio,
+                            "source": "Wikipedia",
+                            "source_url": (
+                                summary.get("content_urls", {})
+                                .get("desktop", {})
+                                .get("page", "")
+                            ),
+                        }
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             log.warning("Wikipedia artist lookup failed for %r: %s", name, exc)
-
-    cache_seconds = 60 * 60 * 24 if profile and profile.get("bio") else 10 * 60
-    _cache_artist_result(
-        _artist_profile_cache, key, profile, now + cache_seconds
-    )
-    return profile.copy() if profile else None
+        _cache_artist_result(
+            _artist_profile_cache, key, profile or None,
+            now + (60 * 60 * 24 if profile else 10 * 60),
+        )
+    fans = artist.get("nb_fan")
+    if isinstance(fans, int):
+        profile["followers"] = str(fans)
+    return profile or None
 
 
 def get_library(user_id: str) -> Library:
@@ -1573,13 +1584,15 @@ def _library_titles_for_artist(user_id: str, name: str) -> list[str]:
     titles: list[str] = []
     for track in get_library(user_id).list_tracks():
         credit = getattr(track, "artist", "") or ""
-        parts = [p for p in re.split(r"\s*(?:,|;|/|\bfeat\.?|\bft\.?|\bwith\b)\s*", credit, flags=re.I) if p]
-        if key == _artist_search_key(credit) or any(_artist_search_key(p) == key for p in parts):
-            if track.title:
-                titles.append(track.title)
-        elif key in _artist_search_key(getattr(track, "title", "") or "") and re.search(
-                r"\b(?:feat|ft|with)\.?\b", track.title or "", re.I):
-            titles.append(track.title)
+        names = _artist_name_candidates(credit)
+        title = getattr(track, "title", "") or ""
+        featured = re.search(r"\b(?:feat(?:uring)?\.?|ft\.?|with)\s+(.+)$", title, re.I)
+        if featured:
+            featured_names = re.sub(r"[\])].*$", "", featured.group(1)).strip()
+            names.extend(_artist_name_candidates(featured_names))
+        if key in {_artist_search_key(artist) for artist in names}:
+            if title:
+                titles.append(title)
         if len(titles) >= 40:
             break
     return titles
@@ -1588,23 +1601,22 @@ def _library_titles_for_artist(user_id: str, name: str) -> list[str]:
 @app.get("/api/artists/photo")
 def artist_photo(
     name: str = Query(min_length=1, max_length=200),
-    titles: list[str] = Query(default=[], max_length=40),
     user=Depends(require_api_user),
 ) -> dict:
-    """Find a verified artist portrait; `titles` are the user's songs by this artist."""
+    """Find a verified portrait from this user's own artist catalog."""
     own = _library_titles_for_artist(user["id"], name.strip())
-    return {"url": _lookup_artist_photo(name.strip(), own or [t[:200] for t in titles])}
+    picture, fans = _lookup_artist_photo(name.strip(), own)
+    return {"picture": picture, "nb_fan": fans}
 
 
 @app.get("/api/artists/profile")
 def artist_profile(
     name: str = Query(min_length=1, max_length=200),
-    titles: list[str] = Query(default=[], max_length=40),
     user=Depends(require_api_user),
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
     own = _library_titles_for_artist(user["id"], name.strip())
-    return {"profile": _lookup_artist_profile(name.strip(), own or [t[:200] for t in titles])}
+    return {"profile": _lookup_artist_profile(name.strip(), own)}
 
 
 @app.get("/api/tracks")
