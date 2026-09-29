@@ -198,6 +198,7 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
+_artist_photo_result_cache: dict[str, tuple[float, tuple[str | None, int | None]]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 MAX_ARTIST_CACHE_ENTRIES = 1024
 
@@ -536,7 +537,7 @@ def _deezer_artist_has_library_title(artist: dict, titles: list[str]) -> bool:
     if not artist_id or not title_keys:
         return False
     try:
-        with httpx.Client(timeout=4.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
+        with httpx.Client(timeout=3.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
             try:
                 top = client.get(
                     f"https://api.deezer.com/artist/{artist_id}/top",
@@ -551,14 +552,15 @@ def _deezer_artist_has_library_title(artist: dict, titles: list[str]) -> bool:
 
             albums_response = client.get(
                 f"https://api.deezer.com/artist/{artist_id}/albums",
-                params={"limit": 100},
+                params={"limit": 50},
             )
             albums_response.raise_for_status()
             albums = albums_response.json().get("data", [])
             for album in albums:
                 if _artist_track_title_key(str(album.get("title", ""))) in title_keys:
                     return True
-            for album in albums[:10]:
+            # Cap album crawls — top + album titles cover most library matches.
+            for album in albums[:5]:
                 album_id = album.get("id")
                 if not album_id:
                     continue
@@ -605,10 +607,11 @@ def _verified_deezer_artist(name: str, titles: list[str]) -> dict | None:
 
 
 def _deezer_portrait_url(artist: dict) -> str | None:
+    # Prefer mid-size portraits: artist cards/detail avatars are ~112–256px.
     photo = (
-        artist.get("picture_xl")
-        or artist.get("picture_big")
+        artist.get("picture_big")
         or artist.get("picture_medium")
+        or artist.get("picture_xl")
         or artist.get("picture")
     )
     try:
@@ -626,20 +629,43 @@ def _deezer_portrait_url(artist: dict) -> str | None:
     return photo
 
 
+def _artist_photo_result_key(name: str, titles: list[str]) -> str:
+    key = _artist_search_key(name)
+    title_keys = sorted(
+        {_artist_track_title_key(title) for title in titles if title.strip()}
+    )[:40]
+    return f"{key}|{'|'.join(title_keys)}"
+
+
 def _lookup_artist_photo(name: str, titles: list[str]) -> tuple[str | None, int | None]:
     """Return a Deezer portrait only after matching this user's catalog titles."""
     for candidate_name in _artist_name_candidates(name):
         verified_photo = _VERIFIED_ARTIST_PHOTOS.get(_artist_search_key(candidate_name))
         if verified_photo:
-            artist = _verified_deezer_artist(name, titles)
-            fans = artist.get("nb_fan") if artist else None
-            return verified_photo, fans if isinstance(fans, int) else None
+            # Hardcoded portraits are already trusted — skip live Deezer verification.
+            return verified_photo, None
+
+    cache_key = _artist_photo_result_key(name, titles)
+    now = time.monotonic()
+    cached = _artist_photo_result_cache.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+
     artist = _verified_deezer_artist(name, titles)
     if not artist:
-        return None, None
+        result: tuple[str | None, int | None] = (None, None)
+        _cache_artist_result(_artist_photo_result_cache, cache_key, result, now + 10 * 60)
+        return result
     photo = _deezer_portrait_url(artist)
     fans = artist.get("nb_fan")
-    return photo, fans if isinstance(fans, int) else None
+    result = (photo, fans if isinstance(fans, int) else None)
+    _cache_artist_result(
+        _artist_photo_result_cache,
+        cache_key,
+        result,
+        now + (60 * 60 * 24 if photo else 10 * 60),
+    )
+    return result
 
 
 _WIKI_TITLE_QUALIFIER = re.compile(

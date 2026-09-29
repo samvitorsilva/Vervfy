@@ -677,7 +677,8 @@ const ArtistPhotoEngine = (() => {
   const pending = new Map();
   const waiting = [];
   let active = 0;
-  const MAX_ACTIVE = 2;
+  const MAX_ACTIVE = 6;
+  let observer = null;
 
   function apply(name, url){
     if(!url) return;
@@ -731,7 +732,32 @@ const ArtistPhotoEngine = (() => {
     return request;
   }
 
-  return { resolve };
+  function observe(img){
+    if(!(img instanceof Element)) return;
+    const name = img.dataset.artistPhoto;
+    if(!name) return;
+    if(resolved.has(name) || pending.has(name)){
+      resolve(name);
+      return;
+    }
+    if(typeof IntersectionObserver !== "function"){
+      resolve(name);
+      return;
+    }
+    if(!observer){
+      observer = new IntersectionObserver(entries => {
+        for(const entry of entries){
+          if(!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          const artistName = entry.target.dataset?.artistPhoto;
+          if(artistName) resolve(artistName);
+        }
+      }, {root: $("#content") || null, rootMargin: "240px 0px", threshold: 0.01});
+    }
+    observer.observe(img);
+  }
+
+  return { resolve, observe };
 })();
 
 const ArtistProfileEngine = (() => {
@@ -2793,28 +2819,20 @@ function getArtists(){
   for(const t of state.tracks){
     const names = artistsOf(t);
     if(!names.length) continue;
-    const leadArtist = splitArtistCreditList(artistNameOf(t))[0] || "";
     const album = typeof t.album === "string" ? t.album.trim() : "";
     const duration = Number(t.duration);
     for(const name of names){
       const key = artistKey(name);
-      const isLeadArtist = artistKey(name) === artistKey(leadArtist);
       let entry = map.get(key);
       if(!entry){
         entry = {
           name,
-          art: isLeadArtist ? t.art : null,
-          fallbackArt: isLeadArtist ? t.fallbackArt : null,
           tracks: [], albums: new Set(), duration: 0,
         };
         map.set(key, entry);
       } else if(name.length > entry.name.length){
         // Prefer the fuller casing/spelling when the same person appears twice.
         entry.name = name;
-      }
-      if(isLeadArtist && !entry.art){
-        entry.art = t.art;
-        entry.fallbackArt = t.fallbackArt;
       }
       // A collab track belongs on each performer's profile once.
       if(entry.tracks.some(existing => existing.id === t.id)) continue;
@@ -2827,10 +2845,18 @@ function getArtists(){
       }
     }
   }
-  return Array.from(map.values()).map(artist => ({
-    ...artist,
-    albumCount: artist.albums.size,
-  })).sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:"base"}));
+  return Array.from(map.values()).map(artist => {
+    const leadTrack = artist.tracks.find(track =>
+      artistKey(splitArtistCreditList(artistNameOf(track))[0] || "") === artistKey(artist.name)
+    );
+    const artworkTrack = leadTrack || artist.tracks[0];
+    return {
+      ...artist,
+      art: artworkTrack?.art || null,
+      fallbackArt: artworkTrack?.fallbackArt || null,
+      albumCount: artist.albums.size,
+    };
+  }).sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:"base"}));
 }
 function artistViewKey(name){
   return "artist:" + encodeURIComponent(name);
@@ -4124,7 +4150,7 @@ function renderArtistsView(){
         </div>`).join("")}
     </div>`;
   restoreScroll();
-  artists.forEach(a => ArtistPhotoEngine.resolve(a.name));
+  $$("[data-artist-photo]").forEach(img => ArtistPhotoEngine.observe(img));
   $$(".artist-card").forEach(card=>{
     const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
     const open = () => openArtist(decodeURIComponent(card.dataset.artist));

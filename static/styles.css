@@ -1512,6 +1512,12 @@ body :not(.glass){
 
 @media (max-width:640px){
   .rail.glass{
+    /* .glass / .rail.glass set position:relative for the desktop sidebar;
+       keep the mobile dock pinned to the bottom of the viewport. */
+    position:fixed;
+    left:var(--rail-inset); right:var(--rail-inset);
+    bottom:calc(var(--rail-inset) + var(--safe-bottom));
+    width:auto; height:var(--rail-h);
     border-radius:22px;
     border-left:1px solid rgba(255,255,255,.19);
     background:rgba(255,255,255,.10);

@@ -293,6 +293,42 @@ assert.equal(legacyExisting.lyrics.lines[0].text, "cached lyric");
     assert result.returncode == 0, result.stderr
 
 
+def test_artist_without_portrait_uses_track_artwork():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise artist artwork selection")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("function getArtists(){")
+    end = app_js.index("\nfunction artistViewKey", start)
+    get_artists = app_js[start:end]
+    script = """
+const state = {tracks:[
+  {
+    id:"collab", artist:"Main Artist", artists:["Main Artist", "Featured Artist"],
+    title:"Collaboration", album:"Shared", duration:180,
+    art:"shared-cover", fallbackArt:"shared-fallback",
+  },
+  {
+    id:"featured-own", artist:"Featured Artist", artists:["Featured Artist"],
+    title:"Solo", album:"Solo", duration:200,
+    art:"featured-cover", fallbackArt:"featured-fallback",
+  },
+]};
+const artistsOf = track => track.artists;
+const artistKey = name => String(name || "").toLowerCase();
+const splitArtistCreditList = artist => [artist];
+const artistNameOf = track => track.artist;
+""" + get_artists + """
+const assert = require("node:assert/strict");
+const artists = Object.fromEntries(getArtists().map(artist => [artist.name, artist]));
+assert.equal(artists["Featured Artist"].art, "featured-cover");
+assert.equal(artists["Featured Artist"].fallbackArt, "featured-fallback");
+assert.equal(artists["Main Artist"].art, "shared-cover");
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_library_state_refresh_keeps_local_edits_and_remote_changes():
     node = shutil.which("node")
     if node is None:
@@ -716,11 +752,13 @@ def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypa
             pytest.fail(f"Unexpected Deezer request: {url}")
 
     server._artist_photo_cache.clear()
+    server._artist_photo_result_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
     expected = ("https://cdn.dzcdn.net/tate.jpg", None)
     assert server._lookup_artist_photo("Tate McRae", ["Greedy"]) == expected
     assert server._lookup_artist_photo("Tate McRae", ["Greedy"]) == expected
     assert sum(url.endswith("/search/artist") for url in calls) == 1
+    assert sum("/artist/2/top" in url for url in calls) == 1
 
 
 def test_postgres_psycopg_disables_prepared_statements(app_module):
@@ -984,6 +1022,7 @@ def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatc
 
     server._artist_profile_cache.clear()
     server._artist_photo_cache.clear()
+    server._artist_photo_result_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
     profile = server._lookup_artist_profile("Example Artist", ["Example Song"])
     assert profile["bio"] == (
@@ -992,7 +1031,7 @@ def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatc
     assert profile["followers"] == "42"
     assert profile["source"] == "Wikipedia"
     assert server._lookup_artist_photo("Example Artist", ["Example Song"]) == (
-        "https://cdn-images.dzcdn.net/images/artist/example/1000x1000-000000-80-0-0.jpg",
+        "https://cdn-images.dzcdn.net/images/artist/example/250x250-000000-80-0-0.jpg",
         42,
     )
 
@@ -1044,6 +1083,7 @@ def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_mod
 
     server._artist_profile_cache.clear()
     server._artist_photo_cache.clear()
+    server._artist_photo_result_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
     profile = server._lookup_artist_profile("Example Artist", ["Example Song"])
     assert profile["bio"] == "Example Artist is an American rapper."
@@ -1090,6 +1130,7 @@ def test_artist_profile_rejects_mismatched_wikipedia_summary(app_module, monkeyp
 
     server._artist_profile_cache.clear()
     server._artist_photo_cache.clear()
+    server._artist_photo_result_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
     assert server._lookup_artist_profile("Example Artist", ["Example Song"]) is None
 
@@ -1097,13 +1138,7 @@ def test_artist_profile_rejects_mismatched_wikipedia_summary(app_module, monkeyp
 @pytest.mark.parametrize("name", ["Dave", "Dave Santan", "Santan Dave"])
 def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch, name):
     server, _ = app_module
-
-    class FakeResponse:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"data": [{"title": "Streatham"}]}
+    calls = []
 
     class FakeClient:
         def __enter__(self):
@@ -1113,13 +1148,11 @@ def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monk
             pass
 
         def get(self, url, **kwargs):
-            assert url.endswith("/artist/99/top")
-            return FakeResponse()
+            calls.append(url)
+            pytest.fail(f"Verified portraits must not hit Deezer: {url}")
 
-    server._artist_photo_cache[server._artist_search_key(name)] = (
-        server.time.monotonic() + 60,
-        {"name": name, "id": 99},
-    )
+    server._artist_photo_cache.clear()
+    server._artist_photo_result_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
 
     assert server._lookup_artist_photo(name, ["Streatham"]) == (
@@ -1127,3 +1160,4 @@ def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monk
         "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg",
         None,
     )
+    assert calls == []
