@@ -3794,6 +3794,12 @@ function fmtDate(unixSeconds){
 
 async function renderAccountView(){
   const content = $("#content");
+  // Library updates can refresh the account view while a form is being edited.
+  // Keep drafts across that DOM replacement instead of clearing user input.
+  const existingEmailInput = $("#accountEmail");
+  const existingEmailPassword = $("#emailCurrentPassword");
+  const emailDraft = existingEmailInput ? existingEmailInput.value : null;
+  const emailPasswordDraft = existingEmailPassword ? existingEmailPassword.value : null;
   if(!accountInfo){
     content.innerHTML = `<div class="account-view acct-loading">Loading account…</div>`;
     await fetchAccountInfo();
@@ -3910,6 +3916,9 @@ async function renderAccountView(){
         </form>
       </section>
     </div>`;
+
+  if(emailDraft !== null) $("#accountEmail").value = emailDraft;
+  if(emailPasswordDraft !== null) $("#emailCurrentPassword").value = emailPasswordDraft;
 
   $$(".acct-panel[data-nav]").forEach(panel=>{
     panel.addEventListener("click", ()=>{ state.view = panel.dataset.nav; render(); });
