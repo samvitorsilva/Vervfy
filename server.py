@@ -433,7 +433,7 @@ _VERIFIED_ARTIST_PHOTOS = {
 
 _DEEZER_API = "https://api.deezer.com"
 # name key -> (expiry, portrait url, verified catalog titles); misses keyed per song set.
-_ARTIST_PHOTO_CACHE: dict[str, tuple[float, str | None, frozenset[str]]] = {}
+_ARTIST_PHOTO_CACHE: dict[str, tuple[float, str | None, frozenset[str], int]] = {}
 _PHOTO_HIT_TTL = 30 * 24 * 3600
 _PHOTO_MISS_TTL = 6 * 3600
 
@@ -445,7 +445,7 @@ def _title_key(title: str) -> str:
     return _artist_search_key(text)
 
 
-def _deezer_verified_photo(name: str, titles: list[str]) -> tuple[str, set[str]] | None:
+def _deezer_verified_photo(name: str, titles: list[str]) -> tuple[str, set[str], int] | None:
     """Portrait from Deezer, accepted only when the artist's identity is proven.
 
     An exact name match alone is not enough (short or shared names like "gio." or
@@ -482,7 +482,7 @@ def _deezer_verified_photo(name: str, titles: list[str]) -> tuple[str, set[str]]
                 if resp.status_code == 200:
                     catalog |= {_title_key(i.get("title", "")) for i in resp.json().get("data", [])}
             if wanted & catalog:
-                return picture, catalog
+                return picture, catalog, int(cand.get("nb_fan") or 0)
     return None
 
 
@@ -513,15 +513,84 @@ def _lookup_artist_photo(name: str, titles: list[str] | None = None) -> str | No
         log.warning("artist photo lookup failed for %r: %s", name, exc)
         return None
     if found:
-        _ARTIST_PHOTO_CACHE[key] = (now + _PHOTO_HIT_TTL, found[0], frozenset(found[1]))
+        _ARTIST_PHOTO_CACHE[key] = (now + _PHOTO_HIT_TTL, found[0], frozenset(found[1]), found[2])
         return found[0]
-    _ARTIST_PHOTO_CACHE[miss_key] = (now + _PHOTO_MISS_TTL, None, frozenset())
+    _ARTIST_PHOTO_CACHE[miss_key] = (now + _PHOTO_MISS_TTL, None, frozenset(), 0)
     return None
 
 
-def _lookup_artist_profile(name: str) -> dict[str, str] | None:
-    """Return only manually identity-checked details; never guess from a name search."""
-    return _verified_artist_profile(name)
+_MUSIC_WORDS = re.compile(
+    r"\b(singer|songwriter|rapper|musician|band|vocalist|recording artist|"
+    r"duo|group|dj|producer|composer|hip hop|pop|rock)\b", re.I)
+_WIKI_SUFFIXES = ("", " (singer)", " (musician)", " (rapper)", " (band)", " (singer-songwriter)")
+_PROFILE_CACHE: dict[str, tuple[float, dict[str, str] | None]] = {}
+
+
+def _wikipedia_music_summary(name: str) -> dict[str, str] | None:
+    """Wikipedia summary, accepted only for a page that is clearly a musical act
+    whose title equals the artist's name (ignoring a '(singer)'-style qualifier)."""
+    import httpx
+
+    key = _artist_search_key(name)
+    headers = {"User-Agent": "Vervfy/1.0 (artist info lookup)"}
+    with httpx.Client(timeout=4.0, headers=headers, follow_redirects=True) as client:
+        for suffix in _WIKI_SUFFIXES:
+            title = (name + suffix).replace(" ", "_")
+            resp = client.get(f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}")
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if data.get("type") != "standard":  # skips disambiguation pages
+                continue
+            page_title = re.sub(r"\s*\([^)]*\)\s*$", "", data.get("title", ""))
+            if _artist_search_key(page_title) != key:
+                continue
+            blurb = f"{data.get('description', '')} {data.get('extract', '')[:400]}"
+            if not _MUSIC_WORDS.search(blurb):
+                continue
+            extract = (data.get("extract") or "").strip()
+            sentences = re.split(r"(?<=[.!?])\s+", extract)
+            bio = " ".join(sentences[:3]).strip()
+            page_url = (data.get("content_urls", {}).get("desktop", {}) or {}).get("page", "")
+            if not bio or not page_url.startswith("https://en.wikipedia.org/"):
+                continue
+            return {"bio": bio, "source": "Wikipedia", "source_url": page_url,
+                    "website": page_url, "website_label": "Read more on Wikipedia"}
+    return None
+
+
+def _lookup_artist_profile(name: str, titles: list[str] | None = None) -> dict[str, str] | None:
+    """Hand-verified profile first; otherwise a Wikipedia summary, but only for an
+    artist whose identity was proven against a public catalog using the user's songs."""
+    manual = _verified_artist_profile(name)
+    if manual:
+        return manual
+    key = _artist_search_key(name)
+    wanted = frozenset(k for k in (_title_key(t) for t in (titles or [])[:40]) if k)
+    if not key or not wanted:
+        return None
+    now = time.time()
+    cache_key = f"{key}:{hash(wanted)}"
+    cached = _PROFILE_CACHE.get(cache_key)
+    if cached and now < cached[0]:
+        return cached[1].copy() if cached[1] else None
+    profile: dict[str, str] | None = None
+    try:
+        # Prove identity (also warms the photo cache); reuse its fan count.
+        _lookup_artist_photo(name, list(titles or []))
+        ident = _ARTIST_PHOTO_CACHE.get(key)
+        if ident and ident[1] and wanted & ident[2]:
+            profile = _wikipedia_music_summary(name)
+            if profile and ident[3]:
+                profile["followers"] = str(ident[3])
+            elif ident[3]:
+                profile = {"followers": str(ident[3]), "source": "Deezer",
+                           "source_url": "https://www.deezer.com/"}
+    except Exception as exc:
+        log.warning("artist profile lookup failed for %r: %s", name, exc)
+        return None
+    _PROFILE_CACHE[cache_key] = (now + (7 * 24 * 3600 if profile else _PHOTO_MISS_TTL), profile)
+    return profile.copy() if profile else None
 
 
 def get_library(user_id: str) -> Library:
@@ -1405,6 +1474,30 @@ def save_library_state(
     return state
 
 
+def _library_titles_for_artist(user_id: str, name: str) -> list[str]:
+    """Titles in this user's own library credited to `name` (used to prove identity).
+
+    Derived server-side so identity checks never depend on what the browser sends,
+    which also keeps older cached clients working.
+    """
+    key = _artist_search_key(name)
+    if not key:
+        return []
+    titles: list[str] = []
+    for track in get_library(user_id).list_tracks():
+        credit = getattr(track, "artist", "") or ""
+        parts = [p for p in re.split(r"\s*(?:,|;|/|\bfeat\.?|\bft\.?|\bwith\b)\s*", credit, flags=re.I) if p]
+        if key == _artist_search_key(credit) or any(_artist_search_key(p) == key for p in parts):
+            if track.title:
+                titles.append(track.title)
+        elif key in _artist_search_key(getattr(track, "title", "") or "") and re.search(
+                r"\b(?:feat|ft|with)\.?\b", track.title or "", re.I):
+            titles.append(track.title)
+        if len(titles) >= 40:
+            break
+    return titles
+
+
 @app.get("/api/artists/photo")
 def artist_photo(
     name: str = Query(min_length=1, max_length=200),
@@ -1412,17 +1505,19 @@ def artist_photo(
     user=Depends(require_api_user),
 ) -> dict:
     """Find a verified artist portrait; `titles` are the user's songs by this artist."""
-    del user  # The dependency keeps this account-scoped endpoint private.
-    return {"url": _lookup_artist_photo(name.strip(), [t[:200] for t in titles])}
+    own = _library_titles_for_artist(user["id"], name.strip())
+    return {"url": _lookup_artist_photo(name.strip(), own or [t[:200] for t in titles])}
 
 
 @app.get("/api/artists/profile")
 def artist_profile(
-    name: str = Query(min_length=1, max_length=200), user=Depends(require_api_user)
+    name: str = Query(min_length=1, max_length=200),
+    titles: list[str] = Query(default=[], max_length=40),
+    user=Depends(require_api_user),
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
-    del user  # The dependency keeps this account-scoped endpoint private.
-    return {"profile": _lookup_artist_profile(name.strip())}
+    own = _library_titles_for_artist(user["id"], name.strip())
+    return {"profile": _lookup_artist_profile(name.strip(), own or [t[:200] for t in titles])}
 
 
 @app.get("/api/tracks")

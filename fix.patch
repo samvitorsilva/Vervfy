@@ -1,0 +1,414 @@
+diff --git a/server.py b/server.py
+index e4c3fec..776f094 100644
+--- a/server.py
++++ b/server.py
+@@ -431,12 +431,92 @@ _VERIFIED_ARTIST_PHOTOS = {
+ }
+ 
+ 
+-def _lookup_artist_photo(name: str) -> str | None:
+-    """Return a portrait only when the artist identity has been explicitly verified."""
++_DEEZER_API = "https://api.deezer.com"
++# name key -> (expiry, portrait url, verified catalog titles); misses keyed per song set.
++_ARTIST_PHOTO_CACHE: dict[str, tuple[float, str | None, frozenset[str]]] = {}
++_PHOTO_HIT_TTL = 30 * 24 * 3600
++_PHOTO_MISS_TTL = 6 * 3600
++
++
++def _title_key(title: str) -> str:
++    """Normalize a track/album title, dropping '(feat. …)' and '- Remastered' noise."""
++    text = re.sub(r"[\(\[]\s*(?:feat|ft|with|prod)\.?[^\)\]]*[\)\]]", "", title, flags=re.I)
++    text = re.sub(r"\s+-\s+(?:remaster(?:ed)?|single version|radio edit).*$", "", text, flags=re.I)
++    return _artist_search_key(text)
++
++
++def _deezer_verified_photo(name: str, titles: list[str]) -> tuple[str, set[str]] | None:
++    """Portrait from Deezer, accepted only when the artist's identity is proven.
++
++    An exact name match alone is not enough (short or shared names like "gio." or
++    "Dave"). So a candidate is accepted only if its name matches exactly AND at
++    least one song/album the user actually owns by this artist appears in that
++    Deezer artist's catalog. If nothing is proven we return None and the client
++    keeps its fallback rather than showing someone else's face.
++    """
++    import httpx
++
++    key = _artist_search_key(name)
++    wanted = {k for k in (_title_key(t) for t in titles) if k}
++    if not key or not wanted:
++        return None
++    with httpx.Client(timeout=4.0) as client:
++        found = client.get(f"{_DEEZER_API}/search/artist", params={"q": name, "limit": 8})
++        found.raise_for_status()
++        candidates = [
++            c for c in found.json().get("data", [])
++            if _artist_search_key(c.get("name", "")) == key
++        ]
++        # Most popular exact-name match first; only the top few get verified.
++        candidates.sort(key=lambda c: c.get("nb_fan") or 0, reverse=True)
++        for cand in candidates[:3]:
++            artist_id = cand.get("id")
++            picture = cand.get("picture_xl") or cand.get("picture_big") or ""
++            if not artist_id or "/images/artist//" in picture:
++                continue  # no real portrait (Deezer's blank placeholder)
++            if urlsplit(picture).hostname is None or not urlsplit(picture).hostname.endswith("dzcdn.net"):
++                continue
++            catalog: set[str] = set()
++            for path in (f"/artist/{artist_id}/top", f"/artist/{artist_id}/albums"):
++                resp = client.get(f"{_DEEZER_API}{path}", params={"limit": 100})
++                if resp.status_code == 200:
++                    catalog |= {_title_key(i.get("title", "")) for i in resp.json().get("data", [])}
++            if wanted & catalog:
++                return picture, catalog
++    return None
++
++
++def _lookup_artist_photo(name: str, titles: list[str] | None = None) -> str | None:
++    """Verified portrait: hand-checked list first, then an identity-proven catalog match."""
+     key = _artist_search_key(name)
+     if not key:
+         return None
+-    return _VERIFIED_ARTIST_PHOTOS.get(key)
++    if key in _VERIFIED_ARTIST_PHOTOS:
++        return _VERIFIED_ARTIST_PHOTOS[key]
++    titles = [t for t in (titles or []) if t][:40]
++    wanted = frozenset(k for k in (_title_key(t) for t in titles) if k)
++    if not wanted:
++        return None
++    now = time.time()
++    # A cached portrait is reused only if THIS user's songs also appear in the
++    # verified catalog, so a different artist with the same name is never served it.
++    hit = _ARTIST_PHOTO_CACHE.get(key)
++    if hit and now < hit[0] and hit[1] and wanted & hit[2]:
++        return hit[1]
++    miss_key = f"{key}:miss:{hash(wanted)}"
++    miss = _ARTIST_PHOTO_CACHE.get(miss_key)
++    if miss and now < miss[0]:
++        return None
++    try:
++        found = _deezer_verified_photo(name, titles)
++    except Exception as exc:  # network trouble must never break the artist page
++        log.warning("artist photo lookup failed for %r: %s", name, exc)
++        return None
++    if found:
++        _ARTIST_PHOTO_CACHE[key] = (now + _PHOTO_HIT_TTL, found[0], frozenset(found[1]))
++        return found[0]
++    _ARTIST_PHOTO_CACHE[miss_key] = (now + _PHOTO_MISS_TTL, None, frozenset())
++    return None
+ 
+ 
+ def _lookup_artist_profile(name: str) -> dict[str, str] | None:
+@@ -1327,11 +1407,13 @@ def save_library_state(
+ 
+ @app.get("/api/artists/photo")
+ def artist_photo(
+-    name: str = Query(min_length=1, max_length=200), user=Depends(require_api_user)
++    name: str = Query(min_length=1, max_length=200),
++    titles: list[str] = Query(default=[], max_length=40),
++    user=Depends(require_api_user),
+ ) -> dict:
+-    """Find an artist portrait for the Artists view, if the public catalog has one."""
++    """Find a verified artist portrait; `titles` are the user's songs by this artist."""
+     del user  # The dependency keeps this account-scoped endpoint private.
+-    return {"url": _lookup_artist_photo(name.strip())}
++    return {"url": _lookup_artist_photo(name.strip(), [t[:200] for t in titles])}
+ 
+ 
+ @app.get("/api/artists/profile")
+diff --git a/static/app.js b/static/app.js
+index 8433106..27253b8 100644
+--- a/static/app.js
++++ b/static/app.js
+@@ -530,77 +530,98 @@ const LyricsEngine = (() => {
+       if(timeout) clearTimeout(timeout);
+     }
+   }
++  // Strip decorations that make LRCLIB miss: "(feat. X)", "- Remastered 2011", "[Explicit]".
++  function cleanLyricsTitle(title){
++    return String(title || "")
++      .replace(/\s*[\(\[]\s*(?:feat|ft|with|prod)\.?[^\)\]]*[\)\]]/ig, "")
++      .replace(/\s*[\(\[]\s*(?:explicit|clean|remaster(?:ed)?[^\)\]]*|live[^\)\]]*)[\)\]]/ig, "")
++      .replace(/\s+-\s+(?:remaster(?:ed)?|single version|radio edit).*$/i, "")
++      .trim();
++  }
++  // LRCLIB indexes the lead artist; a credit like "A, B feat. C" never matches.
++  function primaryLyricsArtist(artist){
++    const first = typeof splitArtistCreditList === "function" ? splitArtistCreditList(artist)[0] : "";
++    return (first || artist || "").trim();
++  }
++  // Returns lyrics, or null when LRCLIB genuinely has none.
++  // Throws LRCLIB_UNAVAILABLE when nothing was found AND a request failed (timeout,
++  // 5xx, offline) so callers do not remember a transient failure as "no lyrics".
+   async function fromOnline(track){
+     if(!track || !track.title){ LyricsDebug.log("online: skipped, no title to search with"); return null; }
+-    const artist = (track.artist || "").trim();
+-    if(!artist || /^unknown artist$/i.test(artist)){
++    const rawArtist = (track.artist || "").trim();
++    if(!rawArtist || /^unknown artist$/i.test(rawArtist)){
+       LyricsDebug.log(`online: skipped for "${track.title}" — artist is unknown, a search would be unreliable`);
+       return null;
+     }
++    const artist = primaryLyricsArtist(rawArtist);
++    const title = cleanLyricsTitle(track.title) || track.title;
+     const durationSec = Math.round(track.duration || 0);
+-    const baseParams = { track_name: track.title, artist_name: artist };
+     const album = (track.album || "").trim();
+-    if(album && !/^unknown album$/i.test(album)) baseParams.album_name = album;
++    const hasAlbum = album && !/^unknown album$/i.test(album);
++    let hadError = false;
+ 
+-    // 1) exact match (only meaningful once we know the track's duration)
+-    if(durationSec > 0){
++    async function getJson(url){
+       try{
+-        const url = `${LRCLIB_BASE}/get?` + new URLSearchParams({ ...baseParams, duration:durationSec });
+-        LyricsDebug.log("online: exact-match query →", url);
++        LyricsDebug.log("online: query →", url);
+         const res = await fetchLyrics(url);
+-        LyricsDebug.log("online: exact-match response status", res.status);
+-        if(res.ok){
+-          const data = await res.json();
+-          const durationMatches = durationSec <= 0 ||
+-            (Number.isFinite(data.duration) && Math.abs(data.duration - durationSec) <= 3);
+-          const parsed = durationMatches ? lrclibResultToLyrics(data) : null;
+-          LyricsDebug.log("online: exact-match parsed result →", parsed ? `${parsed.source}, ${parsed.lines?parsed.lines.length+" lines":parsed.text.length+" chars"}` : "none usable");
+-          if(parsed) return parsed;
+-        }
+-      }catch(e){ LyricsDebug.warn("online: exact-match request failed —", e.message); }
++        LyricsDebug.log("online: response status", res.status);
++        if(res.ok) return await res.json();
++        if(res.status >= 500 || res.status === 429) hadError = true;
++      }catch(e){
++        hadError = true;
++        LyricsDebug.warn("online: request failed —", e.message);
++      }
++      return null;
+     }
+ 
+-    // 2) fuzzy search fallback
+-    try{
+-      const url = `${LRCLIB_BASE}/search?` + new URLSearchParams(baseParams);
+-      LyricsDebug.log("online: search query →", url);
+-      const res = await fetchLyrics(url);
+-      LyricsDebug.log("online: search response status", res.status);
+-      if(!res.ok) return null;
+-      const results = await res.json();
+-      LyricsDebug.log(`online: search returned ${Array.isArray(results)?results.length:0} candidate(s)`);
+-      if(!Array.isArray(results) || results.length === 0) return null;
+-      const titleKey = normalizeSearchText(track.title);
+-      const artistKey = normalizeSearchText(artist);
+-      const candidates = results.filter(candidate =>
+-        durationSec <= 0 ||
+-        (Number.isFinite(candidate.duration) && Math.abs(candidate.duration - durationSec) <= 3)
+-      );
+-      const best = candidates.slice().sort((a,b) => {
+-        const score = candidate => {
+-          const titleMatch = normalizeSearchText(candidate.trackName) === titleKey;
+-          const artistMatch = normalizeSearchText(candidate.artistName) === artistKey;
+-          const durationDifference = durationSec > 0 && Number.isFinite(candidate.duration)
+-            ? Math.abs(candidate.duration - durationSec)
+-            : Number.POSITIVE_INFINITY;
+-          return [
+-            titleMatch ? 1 : 0,
+-            artistMatch ? 1 : 0,
+-            durationDifference,
+-            candidate.syncedLyrics ? 0 : 1,
+-          ];
+-        };
+-        const left = score(a), right = score(b);
+-        for(let i=0;i<left.length;i++){
+-          if(left[i] !== right[i]) return i < 2 ? right[i] - left[i] : left[i] - right[i];
+-        }
++    // 1) exact match (needs album + duration)
++    if(durationSec > 0 && hasAlbum){
++      const data = await getJson(`${LRCLIB_BASE}/get?` + new URLSearchParams({
++        track_name: title, artist_name: artist, album_name: album, duration: durationSec }));
++      if(data && Number.isFinite(data.duration) && Math.abs(data.duration - durationSec) <= 3){
++        const parsed = lrclibResultToLyrics(data);
++        if(parsed) return parsed;
++      }
++    }
++
++    // 2) fuzzy search. The album is deliberately NOT sent: a differently-tagged
++    // album (singles, deluxe editions) used to make the search return nothing.
++    const titleKey = normalizeSearchText(title);
++    const artistKey = normalizeSearchText(artist);
++    const attempts = [
++      { track_name: title, artist_name: artist },
++      { q: `${artist} ${title}` },
++    ];
++    for(const params of attempts){
++      const results = await getJson(`${LRCLIB_BASE}/search?` + new URLSearchParams(params));
++      if(!Array.isArray(results) || results.length === 0) continue;
++      LyricsDebug.log(`online: search returned ${results.length} candidate(s)`);
++      const usable = results.filter(c =>
++        (c.syncedLyrics || c.plainLyrics) && !c.instrumental &&
++        (durationSec <= 0 || (Number.isFinite(c.duration) && Math.abs(c.duration - durationSec) <= 3)) &&
++        normalizeSearchText(c.artistName).includes(artistKey.split(" ")[0] || artistKey));
++      const rank = c => [
++        normalizeSearchText(c.trackName) === titleKey ? 0 : 1,
++        normalizeSearchText(c.artistName) === artistKey ? 0 : 1,
++        c.syncedLyrics ? 0 : 1,
++        durationSec > 0 && Number.isFinite(c.duration) ? Math.abs(c.duration - durationSec) : 999,
++      ];
++      usable.sort((a,b) => {
++        const l = rank(a), r = rank(b);
++        for(let i=0;i<l.length;i++) if(l[i] !== r[i]) return l[i] - r[i];
+         return 0;
+-      })[0];
++      });
++      // Only accept a candidate whose title actually matches.
++      const best = usable.find(c => normalizeSearchText(c.trackName) === titleKey)
++        || usable.find(c => { const n = normalizeSearchText(c.trackName); return n.includes(titleKey) || titleKey.includes(n); });
+       const parsed = best ? lrclibResultToLyrics(best) : null;
+-      if(!best) return null;
+-      LyricsDebug.log("online: best candidate", `"${best.trackName}" by ${best.artistName}`, "→", parsed ? parsed.source : "no usable lyrics (instrumental or empty)");
+-      return parsed;
+-    }catch(e){ LyricsDebug.warn("online: search request failed —", e.message); return null; }
++      if(parsed){
++        LyricsDebug.log("online: best candidate", `"${best.trackName}" by ${best.artistName}`, "→", parsed.source);
++        return parsed;
++      }
++    }
++    if(hadError) throw new Error("LRCLIB_UNAVAILABLE");
++    return null;
+   }
+   // Embedded synced/plain lyrics are checked before the online fallback.
+   async function resolve(track, idMeta){
+@@ -636,6 +657,9 @@ async function fetchArtistCatalog(url){
+ const ArtistPhotoEngine = (() => {
+   const resolved = new Map();
+   const pending = new Map();
++  const waiting = [];
++  let active = 0;
++  const MAX_ACTIVE = 2; // the server verifies each artist against a public catalog
+ 
+   function apply(name, url){
+     if(!url) return;
+@@ -647,9 +671,11 @@ const ArtistPhotoEngine = (() => {
+     });
+   }
+ 
+-  async function lookup(name){
++  async function lookup(name, titles){
+     try{
+-      const res = await fetchArtistCatalog("/api/artists/photo?" + new URLSearchParams({name}));
++      const params = new URLSearchParams({name});
++      titles.slice(0, 25).forEach(t => params.append("titles", t));
++      const res = await fetchArtistCatalog("/api/artists/photo?" + params);
+       if(!res.ok) throw new Error(`Artist photo lookup failed (${res.status})`);
+       const data = await res.json();
+       const url = data && typeof data.url === "string" ? data.url : null;
+@@ -663,15 +689,26 @@ const ArtistPhotoEngine = (() => {
+     }
+   }
+ 
+-  function resolve(name){
++  function pump(){
++    while(active < MAX_ACTIVE && waiting.length){
++      const job = waiting.shift();
++      active++;
++      lookup(job.name, job.titles).finally(() => { active--; job.done(); pump(); });
++    }
++  }
++
++  // titles: the user's own songs by this artist, used server-side to prove identity.
++  function resolve(name, titles = []){
+     if(!name) return Promise.resolve(null);
+     if(resolved.has(name)){
+       apply(name, resolved.get(name));
+       return Promise.resolve(resolved.get(name));
+     }
+     if(pending.has(name)) return pending.get(name);
+-    const request = lookup(name);
++    const request = new Promise(done => waiting.push({name, titles, done}))
++      .then(() => resolved.get(name) ?? null);
+     pending.set(name, request);
++    pump();
+     return request;
+   }
+ 
+@@ -1988,9 +2025,12 @@ function ensureTrackLyrics(track){
+   track.lyricsPromise = (async () => {
+     const lyricsCacheKey = `lyrics:${activeAccountId || "anonymous"}:${track.id}`;
+     const cached = await AuralisDB.get(lyricsCacheKey);
+-    if(cached && cached.customLyrics === (track.customLyrics || null)){
+-      return cached.lyrics || null;
+-    }
++    const NOT_FOUND_TTL_MS = 3 * 24 * 60 * 60 * 1000;
++    const cachedFresh = cached && cached.customLyrics === (track.customLyrics || null) &&
++      (cached.lyrics || (cached.checkedAt && Date.now() - cached.checkedAt < NOT_FOUND_TTL_MS));
++    if(cachedFresh) return cached.lyrics || null;
++    let lookupFailed = false;
++    track._lyricsFailed = false;
+     let result = track.customLyrics
+       ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
+       : null;
+@@ -2008,19 +2048,25 @@ function ensureTrackLyrics(track){
+         LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
+       }
+       if(!result){
+-        result = await LyricsEngine.fromOnline(track);
++        try{ result = await LyricsEngine.fromOnline(track); }
++        catch(e){ lookupFailed = true; LyricsDebug.warn("state: online lyrics unavailable —", e.message); }
+       }
+     }
+-    await AuralisDB.set(lyricsCacheKey, {
+-      customLyrics: track.customLyrics || null,
+-      lyrics: result || null,
+-    });
++    // A transient failure must not be remembered as "this song has no lyrics".
++    track._lyricsFailed = lookupFailed;
++    if(!lookupFailed){
++      await AuralisDB.set(lyricsCacheKey, {
++        customLyrics: track.customLyrics || null,
++        lyrics: result || null,
++        checkedAt: Date.now(),
++      });
++    }
+     return result;
+   })().then(result => {
+     track.lyrics = result || (track.customLyrics
+       ? { source:"custom", text:track.customLyrics }
+       : null);
+-    track.lyricsResolved = true;
++    track.lyricsResolved = !track._lyricsFailed; // failed lookups may retry next time
+     track.lyricsLoading = false;
+     track.lyricsPromise = null;
+     LyricsDebug.log(`state: lyrics lookup finished for "${track.title}" →`, result ? result.source : "nothing found");
+@@ -2740,12 +2786,17 @@ function getArtists(){
+       const key = artistKey(name);
+       let entry = map.get(key);
+       if(!entry){
+-        entry = { name, art: t.art, fallbackArt: t.fallbackArt, tracks: [], albums: new Set(), duration: 0 };
++        entry = { name, art: t.art, fallbackArt: t.fallbackArt, artIsLead: false, tracks: [], albums: new Set(), duration: 0 };
+         map.set(key, entry);
+       } else if(name.length > entry.name.length){
+         // Prefer the fuller casing/spelling when the same person appears twice.
+         entry.name = name;
+       }
++      // Use art from a track where this artist is the lead credit, never from
++      // a collab/feature whose cover belongs to somebody else.
++      if(!entry.artIsLead && artistKey(names[0]) === key){
++        entry.art = t.art; entry.fallbackArt = t.fallbackArt; entry.artIsLead = true;
++      }
+       // A collab track belongs on each performer's profile once.
+       if(entry.tracks.some(existing => existing.id === t.id)) continue;
+       entry.tracks.push(t);
+@@ -4054,6 +4105,7 @@ function renderArtistsView(){
+         </div>`).join("")}
+     </div>`;
+   restoreScroll();
++  artists.forEach(a => ArtistPhotoEngine.resolve(a.name, a.tracks.map(t => t.title)));
+   $$(".artist-card").forEach(card=>{
+     const artist = artists.find(a => encodeURIComponent(a.name) === card.dataset.artist);
+     const open = () => openArtist(decodeURIComponent(card.dataset.artist));
+@@ -4119,7 +4171,7 @@ function renderArtistDetailView(){
+       </section>
+       ${tracksHtml}
+     </div>`;
+-  ArtistPhotoEngine.resolve(artist.name);
++  ArtistPhotoEngine.resolve(artist.name, artist.tracks.map(t => t.title));
+   ArtistProfileEngine.resolve(artist.name);
+   if(list.length) wireTrackInteractions(list);
+ }
