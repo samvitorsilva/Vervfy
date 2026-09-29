@@ -35,13 +35,13 @@ def _csrf(client):
     return re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
 
 
-def _register(client, username="alice", passphrase="old-password"):
+def _register(client, username="alice", passphrase="old-password", email=""):
     response = client.post(
         "/register",
         data={
             "username": username,
             "password": passphrase,
-            "email": "",
+            "email": email,
             "csrf_token": _csrf(client),
         },
         follow_redirects=False,
@@ -342,6 +342,7 @@ def test_lrclib_rejects_distant_duration_candidates():
     engine = app_js[start:end]
     script = """
 const LyricsDebug = {log(){}, warn(){}};
+function splitArtistCreditList(artist){ return [artist]; }
 let candidates = [];
 let calls = 0;
 globalThis.fetch = async (url, options) => {
@@ -356,11 +357,23 @@ const assert = require("node:assert/strict");
   const track = {title:"Song", artist:"Artist", album:"Album", duration:180};
   candidates = [{trackName:"Song", artistName:"Artist", duration:190, plainLyrics:"wrong"}];
   assert.equal(await LyricsEngine.fromOnline(track), null);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   candidates = [{trackName:"Song", artistName:"Artist", duration:183, plainLyrics:"right"}];
   calls = 0;
   assert.deepEqual(await LyricsEngine.fromOnline(track), {source:"online-plain", text:"right"});
   assert.equal(calls, 2);
+
+  // Unknown duration still requires an exact title/artist identity match.
+  candidates = [
+    {trackName:"Other", artistName:"Artist", duration:180, plainLyrics:"wrong"},
+    {trackName:"Song (Remastered 2011)", artistName:"Artist", duration:181, syncedLyrics:"[00:01.00]right"},
+  ];
+  calls = 0;
+  const undated = {title:"Song", artist:"Artist", album:"Album", duration:0};
+  const synced = await LyricsEngine.fromOnline(undated);
+  assert.equal(synced.source, "online-synced");
+  assert.equal(synced.lines[0].text, "right");
+  assert.equal(calls, 1);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
@@ -572,6 +585,20 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
     assert len(calls) == 1
 
 
+def test_login_accepts_email_and_preserves_identifier_on_failure(app_module):
+    server, client = app_module
+    _register(client, email="alice@example.com")
+    login_client = TestClient(server.app)
+
+    failed = _login(login_client, username="ALICE@example.com", passphrase="wrong-password")
+    assert failed.status_code == 400
+    assert 'value="ALICE@example.com"' in failed.text
+
+    successful = _login(login_client, username="ALICE@example.com")
+    assert successful.status_code == 303
+    assert successful.headers["location"] == "/"
+
+
 def test_library_ids_are_validated(app_module):
     _, client = app_module
     _register(client)
@@ -657,16 +684,14 @@ def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypa
     calls = []
 
     class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
         def raise_for_status(self):
             pass
 
         def json(self):
-            return {
-                "data": [
-                    {"name": "Tate McRae tribute", "picture_medium": "https://cdn.dzcdn.net/wrong.jpg"},
-                    {"name": "Tate McRae", "picture_medium": "https://cdn.dzcdn.net/tate.jpg"},
-                ]
-            }
+            return self.payload
 
     class FakeClient:
         def __enter__(self):
@@ -677,13 +702,25 @@ def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypa
 
         def get(self, url, **kwargs):
             calls.append(url)
-            return FakeResponse()
+            if url.endswith("/search/artist"):
+                return FakeResponse({"data": [
+                    {"name": "Tate McRae tribute", "id": 1},
+                    {
+                        "name": "Tate McRae",
+                        "id": 2,
+                        "picture_medium": "https://cdn.dzcdn.net/tate.jpg",
+                    },
+                ]})
+            if url.endswith("/artist/2/top"):
+                return FakeResponse({"data": [{"title": "Greedy"}]})
+            pytest.fail(f"Unexpected Deezer request: {url}")
 
     server._artist_photo_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
-    assert server._lookup_artist_photo("Tate McRae") == "https://cdn.dzcdn.net/tate.jpg"
-    assert server._lookup_artist_photo("Tate McRae") == "https://cdn.dzcdn.net/tate.jpg"
-    assert len(calls) == 1
+    expected = ("https://cdn.dzcdn.net/tate.jpg", None)
+    assert server._lookup_artist_photo("Tate McRae", ["Greedy"]) == expected
+    assert server._lookup_artist_photo("Tate McRae", ["Greedy"]) == expected
+    assert sum(url.endswith("/search/artist") for url in calls) == 1
 
 
 def test_postgres_psycopg_disables_prepared_statements(app_module):
@@ -904,53 +941,17 @@ def test_authenticated_user_cannot_access_another_users_library(app_module):
     }).status_code == 404
 
 
-def test_artist_profile_fetches_theaudiodb_result(app_module, monkeypatch):
+def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatch):
     server, _ = app_module
 
     class FakeResponse:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {
-                "artists": [
-                    {
-                        "strArtist": "Example Artist",
-                        "strBiographyEN": "Example Artist is a musician known for influential recordings. More details.",
-                        "strGenre": "Pop",
-                        "strWebsite": "example.com",
-                    }
-                ]
-            }
-
-    class FakeClient:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def get(self, url, **kwargs):
-            return FakeResponse()
-
-    server._artist_profile_cache.clear()
-    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
-    profile = server._lookup_artist_profile("Example Artist")
-    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
-    assert profile["genre"] == "Pop"
-    assert profile["website"] == "https://example.com"
-    assert profile["source"] == "TheAudioDB"
-
-
-def test_artist_profile_falls_back_to_wikipedia(app_module, monkeypatch):
-    server, _ = app_module
-
-    class FakeResponse:
-        def __init__(self, payload):
+        def __init__(self, payload, status_code=200):
             self.payload = payload
+            self.status_code = status_code
 
         def raise_for_status(self):
-            pass
+            if self.status_code >= 400:
+                raise server.httpx.HTTPError(f"status {self.status_code}")
 
         def json(self):
             return self.payload
@@ -963,32 +964,166 @@ def test_artist_profile_falls_back_to_wikipedia(app_module, monkeypatch):
             pass
 
         def get(self, url, **kwargs):
-            if "theaudiodb.com" in url:
-                return FakeResponse({"artists": None})
-            if url.endswith("/w/api.php"):
-                return FakeResponse({"query": {"search": [{"title": "Example Artist"}]}})
+            if url.endswith("/search/artist"):
+                return FakeResponse({"data": [{
+                    "name": "Example Artist",
+                    "id": 12,
+                    "nb_fan": 42,
+                    "picture_xl": "https://cdn-images.dzcdn.net/images/artist/example/1000x1000-000000-80-0-0.jpg",
+                    "picture_medium": "https://cdn-images.dzcdn.net/images/artist/example/250x250-000000-80-0-0.jpg",
+                }]})
+            if url.endswith("/artist/12/top"):
+                return FakeResponse({"data": [{"title": "Example Song"}]})
             return FakeResponse({
+                "type": "standard",
+                "title": "Example Artist",
+                "description": "British rapper",
+                "extract": "Example Artist is a British rapper known for influential recordings. More details.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist"}},
+            })
+
+    server._artist_profile_cache.clear()
+    server._artist_photo_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    profile = server._lookup_artist_profile("Example Artist", ["Example Song"])
+    assert profile["bio"] == (
+        "Example Artist is a British rapper known for influential recordings. More details."
+    )
+    assert profile["followers"] == "42"
+    assert profile["source"] == "Wikipedia"
+    assert server._lookup_artist_photo("Example Artist", ["Example Song"]) == (
+        "https://cdn-images.dzcdn.net/images/artist/example/1000x1000-000000-80-0-0.jpg",
+        42,
+    )
+
+
+def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_module, monkeypatch):
+    server, _ = app_module
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self.payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise server.httpx.HTTPError(f"status {self.status_code}")
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            if url.endswith("/search/artist"):
+                return FakeResponse({"data": [{"name": "Example Artist", "id": 15, "nb_fan": 9}]})
+            if url.endswith("/artist/15/top"):
+                return FakeResponse({"data": [{"title": "Example Song"}]})
+            if url.endswith("/w/api.php"):
+                return FakeResponse({"query": {"search": [{"title": "Example Artist (rapper)"}]}})
+            if url.rstrip("/").endswith("/page/summary/Example%20Artist"):
+                return FakeResponse({}, status_code=404)
+            if "page/summary/Example%20Artist%20%28rapper%29" in url:
+                return FakeResponse({
+                    "type": "standard",
+                    "title": "Example Artist (rapper)",
+                    "description": "American rapper",
+                    "extract": "Example Artist is an American rapper.",
+                    "content_urls": {
+                        "desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist_(rapper)"}
+                    },
+                })
+            pytest.fail(f"Unexpected request: {url}")
+
+    server._artist_profile_cache.clear()
+    server._artist_photo_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    profile = server._lookup_artist_profile("Example Artist", ["Example Song"])
+    assert profile["bio"] == "Example Artist is an American rapper."
+    assert profile["source"] == "Wikipedia"
+    assert any(url.endswith("/w/api.php") for url in calls)
+
+
+def test_artist_profile_rejects_mismatched_wikipedia_summary(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self.payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise server.httpx.HTTPError(f"status {self.status_code}")
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            if url.endswith("/search/artist"):
+                return FakeResponse({"data": [{"name": "Example Artist", "id": 13}]})
+            if url.endswith("/artist/13/top"):
+                return FakeResponse({"data": [{"title": "Example Song"}]})
+            if url.endswith("/w/api.php"):
+                return FakeResponse({"query": {"search": []}})
+            return FakeResponse({
+                "type": "standard",
+                "title": "An unrelated artist",
+                "description": "Musician",
                 "extract": "Example Artist is a musician known for influential recordings.",
                 "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Example_Artist"}},
             })
 
     server._artist_profile_cache.clear()
+    server._artist_photo_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
-    profile = server._lookup_artist_profile("Example Artist")
-    assert profile["bio"] == "Example Artist is a musician known for influential recordings."
-    assert profile["source"] == "Wikipedia"
+    assert server._lookup_artist_profile("Example Artist", ["Example Song"]) is None
 
 
 @pytest.mark.parametrize("name", ["Dave", "Dave Santan", "Santan Dave"])
 def test_dave_artist_photo_uses_verified_british_rapper_profile(app_module, monkeypatch, name):
     server, _ = app_module
 
-    def unexpected_lookup(*args, **kwargs):
-        pytest.fail("Verified artist photos must not trigger catalog searches")
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
 
-    monkeypatch.setattr(server, "urlopen", unexpected_lookup, raising=False)
+        def json(self):
+            return {"data": [{"title": "Streatham"}]}
 
-    assert server._lookup_artist_photo(name) == (
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            assert url.endswith("/artist/99/top")
+            return FakeResponse()
+
+    server._artist_photo_cache[server._artist_search_key(name)] = (
+        server.time.monotonic() + 60,
+        {"name": name, "id": 99},
+    )
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+
+    assert server._lookup_artist_photo(name, ["Streatham"]) == (
         "https://cdn-images.dzcdn.net/images/artist/"
-        "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg"
+        "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg",
+        None,
     )

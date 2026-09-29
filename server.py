@@ -508,16 +508,20 @@ def _deezer_artist_for_name(name: str) -> dict | None:
         return cached[1]
 
     artist: dict | None = None
+    candidates = _artist_name_candidates(name) or [name.strip()]
     try:
         with httpx.Client(timeout=4.0) as client:
-            response = client.get(
-                "https://api.deezer.com/search/artist",
-                params={"q": name, "limit": 10},
-                headers={"User-Agent": "Vervfy/1.0"},
-            )
-            response.raise_for_status()
-            results = response.json().get("data", [])
-            artist, _ = _matching_catalog_artist(results, [name], "name")
+            for candidate in candidates:
+                response = client.get(
+                    "https://api.deezer.com/search/artist",
+                    params={"q": candidate, "limit": 10},
+                    headers={"User-Agent": "Vervfy/1.0"},
+                )
+                response.raise_for_status()
+                results = response.json().get("data", [])
+                artist, _ = _matching_catalog_artist(results, [candidate], "name")
+                if artist:
+                    break
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         log.warning("Deezer artist lookup failed for %r: %s", name, exc)
     _cache_artist_result(
@@ -588,10 +592,38 @@ def _artist_track_title_key(title: str) -> str:
 
 
 def _verified_deezer_artist(name: str, titles: list[str]) -> dict | None:
+    """Exact Deezer name match for any credit variant, proven by library titles."""
+    candidate_keys = {
+        _artist_search_key(candidate) for candidate in _artist_name_candidates(name)
+    }
     artist = _deezer_artist_for_name(name)
-    if not artist or _artist_search_key(str(artist.get("name", ""))) != _artist_search_key(name):
+    if not artist:
+        return None
+    if _artist_search_key(str(artist.get("name", ""))) not in candidate_keys:
         return None
     return artist if _deezer_artist_has_library_title(artist, titles) else None
+
+
+def _deezer_portrait_url(artist: dict) -> str | None:
+    photo = (
+        artist.get("picture_xl")
+        or artist.get("picture_big")
+        or artist.get("picture_medium")
+        or artist.get("picture")
+    )
+    try:
+        host = urlsplit(photo).hostname if isinstance(photo, str) else None
+    except ValueError:
+        host = None
+    if (
+        not isinstance(photo, str)
+        or not photo.startswith("https://")
+        or not host
+        or not (host == "dzcdn.net" or host.endswith(".dzcdn.net"))
+        or "/images/artist//" in photo
+    ):
+        return None
+    return photo
 
 
 def _lookup_artist_photo(name: str, titles: list[str]) -> tuple[str | None, int | None]:
@@ -605,31 +637,103 @@ def _lookup_artist_photo(name: str, titles: list[str]) -> tuple[str | None, int 
     artist = _verified_deezer_artist(name, titles)
     if not artist:
         return None, None
-    photo = artist.get("picture_medium") or artist.get("picture_big")
-    try:
-        host = urlsplit(photo).hostname if isinstance(photo, str) else None
-    except ValueError:
-        host = None
-    if (
-        not isinstance(photo, str)
-        or not photo.startswith("https://")
-        or not host
-        or not host.endswith(".dzcdn.net")
-        or "/images/artist//" in photo
-    ):
-        photo = None
+    photo = _deezer_portrait_url(artist)
     fans = artist.get("nb_fan")
     return photo, fans if isinstance(fans, int) else None
 
 
+_WIKI_TITLE_QUALIFIER = re.compile(
+    r"\s*\((?:singer(?:-songwriter)?|rapper|band|musician|group|dj|composer|"
+    r"vocalist|music(?:al)?\s+group|recording\s+artist)\)\s*$",
+    re.I,
+)
+_MUSIC_PERSON_HINT = re.compile(
+    r"\b(?:music(?:al|ian|ians)?|singer(?:-songwriter)?s?|songwriters?|"
+    r"rappers?|bands?|groups?|vocalists?|composers?|djs?|producers?|"
+    r"orchestras?|ensembles?|recording\s+artists?|hip[\s-]?hop|"
+    r"r&b|rhythm\s+and\s+blues|pop\s+stars?|rock\s+bands?)\b",
+    re.I,
+)
+
+
 def _wiki_title_matches(title: str, name: str) -> bool:
-    without_qualifier = lambda value: re.sub(r"\s*\(singer\)\s*$", "", value, flags=re.I).strip()
-    return _artist_search_key(without_qualifier(title)) == _artist_search_key(without_qualifier(name))
+    strip = lambda value: _WIKI_TITLE_QUALIFIER.sub("", value).strip()
+    return _artist_search_key(strip(title)) == _artist_search_key(strip(name))
 
 
 def _first_sentences(value: object, limit: int = 3) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return " ".join(re.split(r"(?<=[.!?])\s+", text)[:limit])
+
+
+def _wikipedia_summary_to_profile(summary: dict, name: str) -> dict[str, str] | None:
+    if summary.get("type") != "standard":
+        return None
+    if not _wiki_title_matches(str(summary.get("title", "")), name):
+        return None
+    description = str(summary.get("description", ""))
+    extract = str(summary.get("extract", ""))
+    if not _MUSIC_PERSON_HINT.search(f"{description} {extract}"):
+        return None
+    bio = _first_sentences(extract)
+    if not bio:
+        return None
+    return {
+        "bio": bio,
+        "source": "Wikipedia",
+        "source_url": (
+            summary.get("content_urls", {})
+            .get("desktop", {})
+            .get("page", "")
+        ),
+    }
+
+
+def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str, str] | None:
+    """Direct summary first, then a title-constrained Wikipedia search."""
+    try:
+        response = client.get(
+            f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(name, safe='')}"
+        )
+        if response.status_code == 200:
+            profile = _wikipedia_summary_to_profile(response.json(), name)
+            if profile:
+                return profile
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Wikipedia summary lookup failed for %r: %s", name, exc)
+
+    try:
+        search = client.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": name,
+                "srlimit": 5,
+                "format": "json",
+            },
+        )
+        search.raise_for_status()
+        hits = search.json().get("query", {}).get("search", [])
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Wikipedia search failed for %r: %s", name, exc)
+        return None
+
+    for hit in hits:
+        title = str(hit.get("title", "")).strip()
+        if not title or not _wiki_title_matches(title, name):
+            continue
+        try:
+            response = client.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}"
+            )
+            response.raise_for_status()
+            profile = _wikipedia_summary_to_profile(response.json(), name)
+            if profile:
+                return profile
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            log.warning("Wikipedia search-hit summary failed for %r: %s", title, exc)
+    return None
 
 
 def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
@@ -651,34 +755,11 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
         profile = {}
         try:
             with httpx.Client(
-                timeout=4.0,
+                timeout=6.0,
                 headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
                 follow_redirects=True,
             ) as client:
-                response = client.get(
-                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(name, safe='')}"
-                )
-                response.raise_for_status()
-                summary = response.json()
-                description = str(summary.get("description", ""))
-                extract = str(summary.get("extract", ""))
-                mentions_music = re.search(r"\bmusic(?:al|ian|ians)?\b", f"{description} {extract}", re.I)
-                if (
-                    summary.get("type") == "standard"
-                    and _wiki_title_matches(str(summary.get("title", "")), name)
-                    and mentions_music
-                ):
-                    bio = _first_sentences(extract)
-                    if bio:
-                        profile = {
-                            "bio": bio,
-                            "source": "Wikipedia",
-                            "source_url": (
-                                summary.get("content_urls", {})
-                                .get("desktop", {})
-                                .get("page", "")
-                            ),
-                        }
+                profile = _fetch_wikipedia_artist_profile(client, name) or {}
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             log.warning("Wikipedia artist lookup failed for %r: %s", name, exc)
         _cache_artist_result(
@@ -828,12 +909,13 @@ def login_form(request: Request) -> HTMLResponse:
 @app.post("/login")
 def login_submit(
     request: Request,
-    username: str = Form(...),
+    identifier: str = Form(..., alias="username"),
     password: str = Form(...),
     csrf_token: str = Form(...),
 ) -> Response:
     auth.verify_csrf(request, csrf_token)
     ip = auth.client_ip(request)
+    identifier = identifier.strip()
 
     def fail(message: str) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -842,26 +924,30 @@ def login_submit(
             {
                 "csrf_token": auth.get_or_create_csrf_token(request),
                 "error": message,
-                "username": username,
+                "username": identifier,
             },
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
 
-    if login_throttle.is_locked(ip, username):
+    if login_throttle.is_locked(ip, identifier):
         return fail("Too many attempts. Please wait a few minutes and try again.")
 
-    row = user_store.get_by_username(username)
+    row = (
+        user_store.get_by_email(identifier)
+        if "@" in identifier
+        else user_store.get_by_username(identifier)
+    )
     password_matches = (
         auth.verify_password(password, row["password_hash"])
         if row is not None
         else auth.verify_password(password, auth._DUMMY_HASH)
     )
     if row is None or not password_matches:
-        login_throttle.record_failure(ip, username)
+        login_throttle.record_failure(ip, identifier)
         return fail("Incorrect username or password")
 
-    login_throttle.clear(ip, username)
+    login_throttle.clear(ip, identifier)
     request.session.clear()
     request.session["user_id"] = row["id"]
     request.session["sv"] = row["session_version"]

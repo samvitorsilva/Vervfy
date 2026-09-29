@@ -1163,30 +1163,60 @@ body.mini-mode .mini-player{ display:block; }
   .mobile-lyrics-preview .lyric-next{ color:rgba(242,243,247,.55); font-weight:600; }
 }
 @media (max-width:640px){
-  /* Mobile chrome: bottom nav + now-playing bar stacked, never overlapping */
+  /* Mobile chrome: floating glass dock + now-playing bar stacked above it */
   :root{
-    --rail-h:64px;
+    --rail-h:68px;
     --nowbar-h:76px;
     --player-height:var(--nowbar-h);
     --nowbar-gap:10px;
     --safe-bottom:env(safe-area-inset-bottom, 0px);
-    --mobile-rail-clear:calc(var(--rail-h) + var(--safe-bottom) + 16px);
-    /* Full stack: bottom nav + gap + mini-player + safe area + breathing room */
-    --mobile-player-clear:calc(var(--rail-h) + var(--nowbar-gap) + var(--player-height) + var(--safe-bottom) + 16px);
+    --rail-inset:10px;
+    --mobile-rail-clear:calc(var(--rail-h) + var(--rail-inset) + var(--safe-bottom) + 16px);
+    /* Full stack: dock + gap + mini-player + safe area + breathing room */
+    --mobile-player-clear:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--player-height) + var(--safe-bottom) + 16px);
   }
   body{ overflow:hidden; }
   .shell{ display:block; }
   .rail{
-    position:fixed; left:0; right:0; bottom:0; width:100%;
-    height:calc(var(--rail-h) + var(--safe-bottom)); z-index:70;
-    flex-direction:row; justify-content:space-around; gap:2px;
-    padding:7px 8px calc(7px + var(--safe-bottom));
-    border-right:0; border-top:1px solid var(--border);
-    background:rgba(18,20,30,0.88);
+    position:fixed;
+    left:var(--rail-inset); right:var(--rail-inset);
+    bottom:calc(var(--rail-inset) + var(--safe-bottom));
+    width:auto; height:var(--rail-h); z-index:70;
+    flex-direction:row; justify-content:space-between; align-items:center;
+    gap:2px; padding:6px 4px;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:22px;
+    /* Fallback until liquid-glass.js assigns .glass */
+    background:rgba(18,20,30,.78);
+    box-shadow:0 12px 36px rgba(0,0,0,.28);
   }
-  .logo-mark, .rail-spacer, #btnShortcuts, #btnImportRail, .rail-btn[data-view="account"]{ display:none; }
-  .rail-btn{ width:44px; height:44px; border-radius:12px; }
-  .rail-btn[data-tip]:hover::after{ display:none; }
+  /* Keep nav destinations; profile is opened from the topbar avatar. */
+  .logo-mark, .rail-spacer, #btnShortcuts, #btnImportRail, #btnLogout,
+  .rail-btn[data-view="account"]{ display:none; }
+  .rail-btn{
+    flex:1 1 0; width:auto; max-width:64px; height:100%;
+    border-radius:16px; flex-direction:column; gap:3px;
+    color:var(--text-dim);
+  }
+  .rail-btn svg{ width:20px; height:20px; flex:0 0 auto; }
+  .rail-btn.active{
+    color:var(--text);
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.16);
+  }
+  /* Compact labels under icons — tooltips don't work well on touch. */
+  .rail-btn[data-view][data-tip]::after{
+    content:attr(data-tip);
+    display:block; position:static; left:auto; top:auto; transform:none;
+    padding:0; border:0; border-radius:0; background:none; box-shadow:none;
+    backdrop-filter:none; -webkit-backdrop-filter:none;
+    font-size:9px; font-weight:650; letter-spacing:.02em; line-height:1;
+    color:inherit; white-space:nowrap; pointer-events:none; z-index:auto;
+  }
+  .rail-btn[data-tip]:hover::after{ display:block; }
+  .rail-btn[data-view="playlists"][data-tip]::after{ content:"Lists"; }
+  .rail-btn[data-view="favorites"][data-tip]::after{ content:"Liked"; }
   .main{ width:100%; height:100vh; }
   .topbar{ padding:12px; gap:8px; height:auto; flex-wrap:wrap; }
   .topbar-id{ flex:1 1 auto; min-width:0; }
@@ -1250,8 +1280,8 @@ body.mini-mode .mini-player{ display:block; }
   .row .row-actions button{ width:34px; height:34px; }
   .row .row-actions [data-action="queue"]{ display:none; }
   .nowbar{
-    left:8px; right:8px;
-    bottom:calc(var(--rail-h) + var(--nowbar-gap) + var(--safe-bottom));
+    left:var(--rail-inset); right:var(--rail-inset);
+    bottom:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--safe-bottom));
     padding:8px 10px; gap:6px; height:var(--player-height); border-radius:20px;
     z-index:50; overflow:hidden;
   }
@@ -1336,12 +1366,15 @@ body.mini-mode .mini-player{ display:block; }
   .acct-form .btn{ width:100%; justify-content:center; }
   .mobile-player-art{ width:min(48vw, 220px); margin-bottom:14px; }
   .mobile-lyrics-preview p{ font-size:16px; }
+  .rail-btn[data-view][data-tip]::after{ font-size:8px; }
+  .rail-btn{ max-width:none; padding:0 1px; }
 }
 @media (min-width:641px) and (max-width:900px){
   .lyrics-player{ bottom:18px; width:min(500px, calc(100% - 36px)); }
 }
 @media (max-width:900px){
-  .nowbar, .mini-player{
+  /* Opaque fallback only when liquid glass is not active on these surfaces. */
+  .nowbar:not(.glass), .mini-player:not(.glass){
     backdrop-filter:none;
     -webkit-backdrop-filter:none;
     background:rgba(18,20,30,.96);
@@ -1478,7 +1511,11 @@ body :not(.glass){
 }
 
 @media (max-width:640px){
-  .rail.glass{ border-radius:24px 24px 0 0; }
+  .rail.glass{
+    border-radius:22px;
+    border-left:1px solid rgba(255,255,255,.19);
+    background:rgba(255,255,255,.10);
+  }
   .nowbar.glass{ border-radius:20px; }
   .mobile-player-scroll.glass{ margin:0 10px 10px; }
 }

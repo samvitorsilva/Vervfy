@@ -510,13 +510,20 @@ const LyricsEngine = (() => {
     return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
       .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   }
+  // Strip decorations that make LRCLIB miss matches without changing the song identity.
   function cleanTrackTitle(value){
     return String(value || "")
-      .replace(/\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?)\s+[^\])]*[\])]/ig, "")
-      .replace(/\s+(?:feat(?:uring)?\.?|ft\.?)\s+.+$/ig, "")
-      .replace(/\s*[\[(]\s*explicit\s*[\])]/ig, "")
-      .replace(/\s*[-–—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$/ig, "")
+      .replace(/\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?|with|prod(?:uced)?\.?\s*by)\s+[^\])]*[\])]/ig, "")
+      .replace(/\s+(?:feat(?:uring)?\.?|ft\.?|with)\s+.+$/ig, "")
+      .replace(/\s*[\[(]\s*(?:explicit|clean|deluxe(?:\s+edition)?|bonus(?:\s+track)?|radio\s+edit|single(?:\s+version)?|live(?:\s+[^\])]*)?|remaster(?:ed)?(?:\s+\d{4})?)\s*[\])]/ig, "")
+      .replace(/\s*[-–—]\s*(?:\d{4}\s+)?(?:remaster(?:ed)?(?:\s+\d{4})?|single\s+version|radio\s+edit|live(?:\s+.+)?)\s*$/ig, "")
       .trim();
+  }
+  function primaryArtistName(value){
+    const first = typeof splitArtistCreditList === "function"
+      ? splitArtistCreditList(value || "")[0]
+      : "";
+    return (first || value || "").trim();
   }
   function lrclibResultToLyrics(data){
     if(!data || data.instrumental) return null;
@@ -540,12 +547,13 @@ const LyricsEngine = (() => {
   }
   async function fromOnline(track){
     if(!track || !track.title){ LyricsDebug.log("online: skipped, no title to search with"); return null; }
-    const artist = splitArtistCreditList(track.artist || "")[0]?.trim() || "";
+    const artist = primaryArtistName(track.artist || "");
     if(!artist || /^unknown artist$/i.test(artist)){
       LyricsDebug.log(`online: skipped for "${track.title}" — artist is unknown, a search would be unreliable`);
       return null;
     }
-    const title = cleanTrackTitle(track.title);
+    const title = cleanTrackTitle(track.title) || String(track.title).trim();
+    if(!title){ LyricsDebug.log("online: skipped, empty title after cleaning"); return null; }
     const titleKey = normalizeSearchText(title);
     const artistKey = normalizeSearchText(artist);
     const duration = Number(track.duration);
@@ -555,14 +563,21 @@ const LyricsEngine = (() => {
     const album = (track.album || "").trim();
     const albumKnown = album && !/^unknown album$/i.test(album);
     let requestFailed = false;
-    const matchesTrack = candidate =>
-      candidate && typeof candidate === "object" &&
-      normalizeSearchText(cleanTrackTitle(candidate.trackName)) === titleKey &&
-      normalizeSearchText(splitArtistCreditList(candidate.artistName || "")[0] || candidate.artistName) === artistKey &&
-      durationKnown && Number.isFinite(candidate.duration) &&
-      Math.abs(candidate.duration - duration) <= 3;
+    // Identity check: same cleaned title + lead artist. Duration must agree when known
+    // (±3s); unknown durations still allow an exact title/artist hit so tagless files work.
+    const matchesTrack = candidate => {
+      if(!candidate || typeof candidate !== "object") return false;
+      if(normalizeSearchText(cleanTrackTitle(candidate.trackName) || candidate.trackName) !== titleKey) return false;
+      if(normalizeSearchText(primaryArtistName(candidate.artistName)) !== artistKey) return false;
+      if(!durationKnown) return true;
+      return Number.isFinite(candidate.duration) && Math.abs(candidate.duration - duration) <= 3;
+    };
+    const rankCandidate = candidate => [
+      candidate.syncedLyrics ? 0 : 1,
+      durationKnown && Number.isFinite(candidate.duration) ? Math.abs(candidate.duration - duration) : 0,
+    ];
 
-    // Exact lookup needs all three identifying fields.
+    // Exact lookup needs album + duration (LRCLIB signature).
     if(albumKnown && durationKnown){
       try{
         const url = `${LRCLIB_BASE}/get?` + new URLSearchParams({
@@ -606,8 +621,11 @@ const LyricsEngine = (() => {
           requestFailed = true;
           continue;
         }
-        const candidates = results.filter(matchesTrack)
-          .sort((a,b) => Math.abs(a.duration - duration) - Math.abs(b.duration - duration));
+        const candidates = results.filter(matchesTrack).sort((a,b) => {
+          const left = rankCandidate(a), right = rankCandidate(b);
+          for(let i = 0; i < left.length; i++) if(left[i] !== right[i]) return left[i] - right[i];
+          return 0;
+        });
         for(const candidate of candidates){
           const parsed = lrclibResultToLyrics(candidate);
           if(parsed){

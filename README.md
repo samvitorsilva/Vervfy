@@ -28,10 +28,10 @@ This ended up being one of the more involved parts. Vervfy checks embedded ID3 l
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
 
 **Accounts**
-Its own auth system — registration, login/logout, verified-email password recovery, account email management, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Every user gets their own isolated library.
+Its own auth system — registration, login by username or email, logout, verified-email password recovery, account email management, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Every user gets their own isolated library.
 
 **Artist info**
-Artist profiles prefer manually checked entries, then fetch exact-name results from TheAudioDB with Wikipedia as a fallback. Portraits use exact-name Deezer results, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable. Set `VERVFY_AUDIODB_API_KEY` to a personal TheAudioDB key if needed; the public key is used by default.
+Artist profiles prefer manually checked entries, then use an exact Deezer artist match tied to a title in the user's library before fetching a matching Wikipedia summary. Portraits use the same catalog/title verification, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
