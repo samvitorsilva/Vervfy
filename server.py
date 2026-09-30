@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-from email.message import EmailMessage
 from database import Base, engine
 
 
 from io import BytesIO
 from html import escape as html_escape
-import smtplib
-import ssl
 import json
 import hashlib
 import logging
@@ -30,7 +27,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 import httpx
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
@@ -152,7 +148,7 @@ async def add_security_headers(request: Request, call_next):
                     status_code=429,
                     headers={"Retry-After": str(window)},
                 )
-        elif path in {"/login", "/register", "/forgot-password", "/reset-password", "/verify-email"}:
+        elif path in {"/login", "/register"}:
             try:
                 allowed = request_throttle.allow(
                     f"auth:{auth.client_ip(request)}:{path}", 30, 15 * 60
@@ -609,8 +605,8 @@ def _verified_deezer_artist(name: str, titles: list[str]) -> dict | None:
 def _deezer_portrait_url(artist: dict) -> str | None:
     # Prefer mid-size portraits: artist cards/detail avatars are ~112–256px.
     photo = (
-        artist.get("picture_big")
-        or artist.get("picture_medium")
+        artist.get("picture_medium")
+        or artist.get("picture_big")
         or artist.get("picture_xl")
         or artist.get("picture")
     )
@@ -959,11 +955,7 @@ def login_submit(
     if login_throttle.is_locked(ip, identifier):
         return fail("Too many attempts. Please wait a few minutes and try again.")
 
-    row = (
-        user_store.get_by_email(identifier)
-        if "@" in identifier
-        else user_store.get_by_username(identifier)
-    )
+    row = user_store.get_by_username(identifier)
     password_matches = (
         auth.verify_password(password, row["password_hash"])
         if row is not None
@@ -978,225 +970,6 @@ def login_submit(
     request.session["user_id"] = row["id"]
     request.session["sv"] = row["session_version"]
     return RedirectResponse("/", status_code=303)
-
-
-def _account_token_serializer(salt: str) -> URLSafeTimedSerializer:
-    return URLSafeTimedSerializer(app.state.session_secret, salt=salt)
-
-
-def _send_account_email(recipient: str, subject: str, body: str) -> None:
-    host = os.environ.get("VERVFY_SMTP_HOST", "").strip()
-    sender = os.environ.get("VERVFY_EMAIL_FROM", "").strip()
-    if not host or not sender:
-        raise RuntimeError("Account email delivery is not configured")
-    port = int(os.environ.get("VERVFY_SMTP_PORT", "587"))
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = sender
-    message["To"] = recipient
-    message.set_content(body)
-    context = ssl.create_default_context()
-    if port == 465:
-        with smtplib.SMTP_SSL(host, port, timeout=10, context=context) as smtp:
-            username = os.environ.get("VERVFY_SMTP_USERNAME")
-            password = os.environ.get("VERVFY_SMTP_PASSWORD")
-            if username:
-                smtp.login(username, password or "")
-            smtp.send_message(message)
-    else:
-        with smtplib.SMTP(host, port, timeout=10) as smtp:
-            smtp.ehlo()
-            smtp.starttls(context=context)
-            smtp.ehlo()
-            username = os.environ.get("VERVFY_SMTP_USERNAME")
-            password = os.environ.get("VERVFY_SMTP_PASSWORD")
-            if username:
-                smtp.login(username, password or "")
-            smtp.send_message(message)
-
-
-def _account_link(request: Request, path: str, token: str) -> str:
-    public_url = os.environ.get("VERVFY_PUBLIC_URL", "").strip()
-    if is_production and not public_url:
-        raise RuntimeError("VERVFY_PUBLIC_URL is required for account email links")
-    base_url = public_url or str(request.base_url)
-    parsed = urlsplit(base_url)
-    if (
-        not parsed.hostname or parsed.username or parsed.password
-        or parsed.query or parsed.fragment
-        or (is_production and parsed.scheme != "https")
-    ):
-        raise RuntimeError("VERVFY_PUBLIC_URL must be a valid HTTPS application origin")
-    return f"{base_url.rstrip('/')}{path}?token={quote(token, safe='')}"
-
-
-def _render_password_reset(request: Request, token: str, error: str | None = None, success: bool = False):
-    return templates.TemplateResponse(
-        request,
-        "reset_password.html",
-        {
-            "csrf_token": auth.get_or_create_csrf_token(request),
-            "token": token,
-            "error": error,
-            "success": success,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.get("/forgot-password", response_class=HTMLResponse)
-def forgot_password_form(request: Request):
-    return templates.TemplateResponse(
-        request, "forgot_password.html",
-        {"csrf_token": auth.get_or_create_csrf_token(request)},
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.post("/forgot-password", response_class=HTMLResponse)
-def forgot_password_submit(
-    request: Request,
-    email: str = Form(...),
-    csrf_token: str = Form(...),
-):
-    auth.verify_csrf(request, csrf_token)
-    try:
-        allowed = request_throttle.allow(
-            f"password-reset:{auth.client_ip(request)}", 5, 15 * 60
-        )
-    except RuntimeError:
-        return Response("Password recovery is temporarily unavailable.", status_code=503)
-    if allowed:
-        normalized_email = email.strip().lower()
-        email_limit_key = hashlib.sha256(
-            f"{SESSION_SECRET}:{normalized_email}".encode("utf-8")
-        ).hexdigest()
-        try:
-            email_allowed = request_throttle.allow(
-                f"password-reset-email:{email_limit_key}", 3, 60 * 60
-            )
-        except RuntimeError:
-            return Response("Password recovery is temporarily unavailable.", status_code=503)
-        if email_allowed and not auth.validate_email(normalized_email):
-            user = user_store.get_by_email(normalized_email)
-            if user and user["email_verified"]:
-                token = _account_token_serializer("password-reset").dumps({
-                    "uid": user["id"], "sv": user["session_version"],
-                    "email": user["email"].lower(),
-                })
-                link = _account_link(request, "/reset-password", token)
-                try:
-                    _send_account_email(
-                        normalized_email,
-                        "Reset your Vervfy password",
-                        f"Use this link within 30 minutes to reset your Vervfy password:\n\n{link}\n\n"
-                        "If you did not request this, you can ignore this email.",
-                    )
-                except (OSError, smtplib.SMTPException, RuntimeError, ValueError):
-                    log.exception("Password reset email delivery failed")
-    return templates.TemplateResponse(
-        request,
-        "forgot_password.html",
-        {
-            "csrf_token": auth.get_or_create_csrf_token(request),
-            "sent": True,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.get("/reset-password", response_class=HTMLResponse)
-def reset_password_form(request: Request, token: str = Query(default="")):
-    try:
-        _account_token_serializer("password-reset").loads(token, max_age=30 * 60)
-    except (BadSignature, SignatureExpired):
-        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
-    return _render_password_reset(request, token)
-
-
-@app.post("/reset-password", response_class=HTMLResponse)
-def reset_password_submit(
-    request: Request,
-    token: str = Form(...),
-    password: str = Form(...),
-    password_confirm: str = Form(...),
-    csrf_token: str = Form(...),
-):
-    auth.verify_csrf(request, csrf_token)
-    try:
-        payload = _account_token_serializer("password-reset").loads(token, max_age=30 * 60)
-    except (BadSignature, SignatureExpired):
-        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
-    error = auth.validate_password(password)
-    if error:
-        return _render_password_reset(request, token, error=error)
-    if password != password_confirm:
-        return _render_password_reset(request, token, error="Passwords do not match.")
-    user = user_store.get_by_id(payload.get("uid", ""))
-    if (
-        not user or not user["email_verified"] or not user["email"]
-        or user["session_version"] != payload.get("sv")
-        or user["email"].lower() != payload.get("email")
-    ):
-        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
-    if user_store.reset_password(user["id"], auth.hash_password(password)) is None:
-        return _render_password_reset(request, "", error="This password reset link is invalid or expired.")
-    request.session.clear()
-    return _render_password_reset(request, "", success=True)
-
-
-@app.get("/verify-email", response_class=HTMLResponse)
-def verify_email_form(request: Request, token: str = Query(default="")):
-    try:
-        _account_token_serializer("verify-email").loads(token, max_age=24 * 60 * 60)
-        error = None
-    except (BadSignature, SignatureExpired):
-        token, error = "", "This email confirmation link is invalid or expired."
-    return templates.TemplateResponse(
-        request,
-        "verify_email.html",
-        {
-            "csrf_token": auth.get_or_create_csrf_token(request),
-            "token": token,
-            "error": error,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-@app.post("/verify-email", response_class=HTMLResponse)
-def verify_email_submit(
-    request: Request,
-    token: str = Form(...),
-    csrf_token: str = Form(...),
-):
-    auth.verify_csrf(request, csrf_token)
-    try:
-        payload = _account_token_serializer("verify-email").loads(token, max_age=24 * 60 * 60)
-    except (BadSignature, SignatureExpired):
-        return templates.TemplateResponse(
-            request, "verify_email.html",
-            {"csrf_token": auth.get_or_create_csrf_token(request), "token": "", "error": "This email confirmation link is invalid or expired."},
-            headers={"Cache-Control": "no-store"},
-        )
-    try:
-        confirmed = user_store.confirm_pending_email(payload.get("uid", ""), payload.get("email", ""))
-    except ValueError as exc:
-        confirmed = False
-        error = str(exc)
-    else:
-        error = "This email confirmation link is no longer valid." if not confirmed else None
-    return templates.TemplateResponse(
-        request,
-        "verify_email.html",
-        {
-            "csrf_token": auth.get_or_create_csrf_token(request),
-            "token": "",
-            "error": error,
-            "success": confirmed,
-        },
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 @app.get("/register", response_class=HTMLResponse)
@@ -1290,8 +1063,6 @@ def api_me(user=Depends(require_api_user)) -> dict:
         "id": user["id"],
         "username": user["username"],
         "email": user["email"],
-        "email_verified": user["email_verified"],
-        "pending_email": user["pending_email"],
         "created_at": user["created_at"],
         "photo_url": (
             f"/api/account/photo?v={int(user['created_at'])}"
@@ -1504,7 +1275,6 @@ def _content_disposition_filename(filename: str) -> str:
 @app.put("/api/account/email")
 def change_account_email(
     payload: EmailChangeRequest,
-    request: Request,
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
@@ -1515,33 +1285,11 @@ def change_account_email(
         error = auth.validate_email(email)
         if error:
             raise HTTPException(status_code=400, detail=error)
-        if email == user["email"] and user["email_verified"]:
-            return {"email": user["email"], "email_verified": True, "pending_email": None}
-        token = _account_token_serializer("verify-email").dumps({
-            "uid": user["id"], "email": email,
-        })
-        link = _account_link(request, "/verify-email", token)
-        try:
-            _send_account_email(
-                email,
-                "Verify your Vervfy email address",
-                f"Confirm this address for your Vervfy account within 24 hours:\n\n{link}\n\n"
-                "If you did not request this, you can ignore this email.",
-            )
-        except (OSError, smtplib.SMTPException, RuntimeError, ValueError) as exc:
-            log.exception("Account email verification delivery failed")
-            raise HTTPException(
-                status_code=503,
-                detail="Could not send the verification email. Check the email service configuration and try again.",
-            ) from exc
-        user_store.set_pending_email(user["id"], email)
-        return {
-            "email": user["email"],
-            "email_verified": user["email_verified"],
-            "pending_email": email,
-        }
-    user_store.set_pending_email(user["id"], None)
-    return {"email": None, "email_verified": False, "pending_email": None}
+    try:
+        user_store.update_email(user["id"], email or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"email": email or None}
 
 
 @app.post("/api/account/password")

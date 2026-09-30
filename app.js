@@ -3816,15 +3816,11 @@ async function renderAccountView(){
       <section class="acct-settings">
         <div class="acct-settings-title">Email address</div>
         <form id="emailForm" class="acct-form">
-          <input type="email" id="accountEmail" placeholder="you@example.com" autocomplete="email" maxlength="320" value="${escapeHtml(info?.pending_email || info?.email || "")}">
+          <input type="email" id="accountEmail" placeholder="you@example.com" autocomplete="email" maxlength="320" value="${escapeHtml(info?.email || "")}">
           <input type="password" id="emailCurrentPassword" placeholder="Current password" autocomplete="current-password" required>
           <button type="submit" class="btn btn-primary">Save email</button>
-          ${info?.email || info?.pending_email ? '<button type="button" class="btn" id="btnRemoveEmail">Remove email</button>' : ""}
-          <div class="acct-form-msg" id="emailMsg">${info?.pending_email
-            ? `Check ${escapeHtml(info.pending_email)} to verify the new address.`
-            : info?.email
-              ? info.email_verified ? "Verified — available for password recovery." : "Not verified — confirm it to enable password recovery."
-              : "Add and verify an email address to enable password recovery."}</div>
+          ${info?.email ? '<button type="button" class="btn" id="btnRemoveEmail">Remove email</button>' : ""}
+          <div class="acct-form-msg" id="emailMsg">Email is account information only; sign in with your username.</div>
         </form>
       </section>
 
@@ -3911,7 +3907,7 @@ async function renderAccountView(){
   const saveAccountEmail = async email => {
     const button = emailForm.querySelector("button[type='submit']");
     button.disabled = true;
-    emailMsg.textContent = email ? "Sending verification link…" : "Removing email…";
+    emailMsg.textContent = email ? "Saving email…" : "Removing email…";
     emailMsg.className = "acct-form-msg";
     try{
       const res = await fetch("/api/account/email", {
@@ -3922,16 +3918,12 @@ async function renderAccountView(){
       const data = await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data.detail || "Could not update email");
       accountInfo = {...accountInfo, ...data};
-      emailMsg.textContent = data.pending_email
-        ? `Verification link sent to ${data.pending_email}.`
-        : data.email_verified
-          ? "Email verified and available for password recovery."
-          : "Email removed.";
+      emailMsg.textContent = data.email ? "Email saved to your account." : "Email removed.";
       emailMsg.className = "acct-form-msg ok";
-      emailInput.value = data.pending_email || data.email || "";
+      emailInput.value = data.email || "";
       emailPassword.value = "";
       $("#btnRemoveEmail")?.remove();
-      if(data.email || data.pending_email){
+      if(data.email){
         const removeButton = document.createElement("button");
         removeButton.type = "button";
         removeButton.className = "btn";

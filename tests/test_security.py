@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -288,6 +287,18 @@ const legacyMerged = mergeServerTrack(legacyExisting, {
 assert.equal(legacyMerged.changed, false);
 assert.equal(legacyExisting.lyricsResolved, true);
 assert.equal(legacyExisting.lyrics.lines[0].text, "cached lyric");
+const metadataExisting = {
+  id:"metadata", title:"Old title", artist:"Artist", album:"Album", duration:10, art:"cover",
+  customLyrics:null, lyrics:{source:"online-synced", lines:[{time:0,text:"stale"}]},
+  lyricsResolved:true, lyricsLoading:false,
+};
+const metadataMerged = mergeServerTrack(metadataExisting, {
+  id:"metadata", title:"New title", artist:"Artist", album:"Album", duration:10, art:"cover",
+  custom_lyrics:null,
+});
+assert.equal(metadataMerged.track, metadataExisting);
+assert.equal(metadataExisting.lyrics, null);
+assert.equal(metadataExisting.lyricsResolved, false);
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -378,7 +389,7 @@ def test_lrclib_rejects_distant_duration_candidates():
     engine = app_js[start:end]
     script = """
 const LyricsDebug = {log(){}, warn(){}};
-function splitArtistCreditList(artist){ return [artist]; }
+function splitArtistCreditList(artist){ return String(artist || "").split(/,\\s*/); }
 let candidates = [];
 let calls = 0;
 globalThis.fetch = async (url, options) => {
@@ -391,7 +402,7 @@ globalThis.fetch = async (url, options) => {
 const assert = require("node:assert/strict");
 (async () => {
   const track = {title:"Song", artist:"Artist", album:"Album", duration:180};
-  candidates = [{trackName:"Song", artistName:"Artist", duration:190, plainLyrics:"wrong"}];
+  candidates = [{trackName:"Song", artistName:"Artist", duration:195, plainLyrics:"wrong"}];
   assert.equal(await LyricsEngine.fromOnline(track), null);
   assert.equal(calls, 3);
   candidates = [{trackName:"Song", artistName:"Artist", duration:183, plainLyrics:"right"}];
@@ -410,7 +421,47 @@ const assert = require("node:assert/strict");
   assert.equal(synced.source, "online-synced");
   assert.equal(synced.lines[0].text, "right");
   assert.equal(calls, 1);
+
+  // Ignore a bogus short result but accept the correct collaboration match
+  // when release runtimes differ slightly from the uploaded file.
+  candidates = [
+    {trackName:"Raindance", artistName:"Dave, Tems", duration:3, syncedLyrics:"[00:01.00]wrong"},
+    {trackName:"Raindance", artistName:"Dave, Tems", duration:221, syncedLyrics:"[00:17.86]opening line"},
+  ];
+  calls = 0;
+  const raindance = await LyricsEngine.fromOnline({
+    title:"Raindance", artist:"Dave, Tems", album:"Album", duration:234,
+  });
+  assert.equal(raindance.source, "online-synced");
+  assert.equal(raindance.lines[0].time, 17860);
+  assert.equal(raindance.lines[0].text.trim(), "opening line");
+  assert.equal(calls, 2);
 })().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_synced_lyrics_active_line_uses_timestamp_boundaries():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser lyrics synchronization")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("function activeLyricsIndex(lines, timeMs){")
+    end = app_js.index("\nasync function fetchArtistCatalog", start)
+    helper = app_js[start:end]
+    script = helper + """
+const assert = require("node:assert/strict");
+const lines = [
+  {time:17860, text:"first"},
+  {time:19370, text:"second"},
+  {time:21740, text:"third"},
+];
+assert.equal(activeLyricsIndex(lines, 0), -1);
+assert.equal(activeLyricsIndex(lines, 17859), -1);
+assert.equal(activeLyricsIndex(lines, 17860), 0);
+assert.equal(activeLyricsIndex(lines, 20000), 1);
+assert.equal(activeLyricsIndex(lines, 30000), 2);
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
@@ -433,6 +484,9 @@ const AuralisDB = {
   set: async (key, value) => { entries.set(key, value); return true; },
 };
 const LyricsEngine = {fromID3(){return null;}, fromOnline:async () => {onlineLookups++; return null;}};
+const lyricsLookupFingerprint = track => JSON.stringify([
+  track?.title || "", track?.artist || "", track?.album || "", Number(track?.duration) || 0,
+]);
 let onlineLookups = 0, headRequests = 0;
 globalThis.fetch = async () => {headRequests++; return {ok:false};};
 let track;
@@ -452,6 +506,17 @@ const assert = require("node:assert/strict");
   assert.equal(onlineLookups, 1);
   assert.equal(track.lyricsResolved, true);
   assert.equal(entries.get("lyrics:account:track").lyrics, null);
+  track = {id:"track", title:"Updated Song", artist:"Artist", album:"Album", duration:10,
+    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
+  await ensureTrackLyrics(track);
+  assert.equal(headRequests, 2);
+  assert.equal(onlineLookups, 2);
+  entries.get("lyrics:account:track").checkedAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
+  track = {id:"track", title:"Updated Song", artist:"Artist", album:"Album", duration:10,
+    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
+  await ensureTrackLyrics(track);
+  assert.equal(headRequests, 3);
+  assert.equal(onlineLookups, 3);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
@@ -621,7 +686,7 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
     assert len(calls) == 1
 
 
-def test_login_accepts_email_and_preserves_identifier_on_failure(app_module):
+def test_login_requires_username_even_when_account_has_email(app_module):
     server, client = app_module
     _register(client, email="alice@example.com")
     login_client = TestClient(server.app)
@@ -630,7 +695,9 @@ def test_login_accepts_email_and_preserves_identifier_on_failure(app_module):
     assert failed.status_code == 400
     assert 'value="ALICE@example.com"' in failed.text
 
-    successful = _login(login_client, username="ALICE@example.com")
+    email_login = _login(login_client, username="alice@example.com")
+    assert email_login.status_code == 400
+    successful = _login(login_client, username="alice")
     assert successful.status_code == 303
     assert successful.headers["location"] == "/"
 
@@ -744,6 +811,7 @@ def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypa
                     {
                         "name": "Tate McRae",
                         "id": 2,
+                        "picture_big": "https://cdn.dzcdn.net/tate-large.jpg",
                         "picture_medium": "https://cdn.dzcdn.net/tate.jpg",
                     },
                 ]})
@@ -795,16 +863,9 @@ def test_session_revocation_and_logout_all(app_module):
     assert client_c.get("/api/me").status_code == 401
 
 
-def test_verified_email_recovery_flow(app_module, monkeypatch):
-    server, client = app_module
+def test_email_is_account_information_not_an_authentication_method(app_module):
+    _, client = app_module
     _register(client)
-    sent = []
-    monkeypatch.setattr(
-        server,
-        "_send_account_email",
-        lambda recipient, subject, body: sent.append((recipient, subject, body)),
-    )
-
     csrf = client.get("/api/csrf").json()["csrf_token"]
     response = client.put(
         "/api/account/email",
@@ -812,116 +873,21 @@ def test_verified_email_recovery_flow(app_module, monkeypatch):
         json={"email": "Alice@example.com", "current_password": "old-password"},
     )
     assert response.status_code == 200
-    assert response.json()["pending_email"] == "alice@example.com"
-    assert sent[0][0] == "alice@example.com"
+    assert response.json() == {"email": "alice@example.com"}
+    assert client.get("/api/me").json()["email"] == "alice@example.com"
+
     csrf = client.get("/api/csrf").json()["csrf_token"]
-    client.post(
-        "/forgot-password",
-        data={"email": "alice@example.com", "csrf_token": csrf},
-    )
-    assert len(sent) == 1
-
-    verify_link = re.search(r"https?://\S+", sent[0][2]).group(0)
-    verify_token = parse_qs(urlparse(verify_link).query)["token"][0]
-    verify_form = client.get(f"/verify-email?token={verify_token}")
-    verify_csrf = re.search(r'name="csrf_token" value="([^"]+)"', verify_form.text).group(1)
-    confirmed = client.post(
-        "/verify-email",
-        data={"token": verify_token, "csrf_token": verify_csrf},
-    )
-    assert "Email verified" in confirmed.text
-    assert client.get("/api/me").json()["email_verified"] is True
-
-    def request_reset(email):
-        csrf_token = client.get("/api/csrf").json()["csrf_token"]
-        client.post(
-            "/forgot-password",
-            data={"email": email, "csrf_token": csrf_token},
-        )
-        link = re.search(r"https?://\S+", sent[-1][2]).group(0)
-        return parse_qs(urlparse(link).query)["token"][0]
-
-    stale_reset_token = request_reset("alice@example.com")
-    csrf = client.get("/api/csrf").json()["csrf_token"]
-    change = client.put(
+    removed = client.put(
         "/api/account/email",
         headers={"X-CSRF-Token": csrf},
-        json={"email": "alice-new@example.com", "current_password": "old-password"},
+        json={"email": "", "current_password": "old-password"},
     )
-    assert change.status_code == 200
-    new_verify_link = re.search(r"https?://\S+", sent[-1][2]).group(0)
-    new_verify_token = parse_qs(urlparse(new_verify_link).query)["token"][0]
-    new_verify_form = client.get(f"/verify-email?token={new_verify_token}")
-    new_verify_csrf = re.search(r'name="csrf_token" value="([^"]+)"', new_verify_form.text).group(1)
-    assert "Email verified" in client.post(
-        "/verify-email",
-        data={"token": new_verify_token, "csrf_token": new_verify_csrf},
-    ).text
+    assert removed.status_code == 200
+    assert removed.json() == {"email": None}
+    assert client.get("/api/me").json()["email"] is None
 
-    stale_form = client.get(f"/reset-password?token={stale_reset_token}")
-    stale_csrf = re.search(r'name="csrf_token" value="([^"]+)"', stale_form.text).group(1)
-    stale_reset = client.post(
-        "/reset-password",
-        data={
-            "token": stale_reset_token,
-            "password": "another-password",
-            "password_confirm": "another-password",
-            "csrf_token": stale_csrf,
-        },
-    )
-    assert "invalid or expired" in stale_reset.text
-
-    reset_token = request_reset("alice-new@example.com")
-    reset_form = client.get(f"/reset-password?token={reset_token}")
-    reset_csrf = re.search(r'name="csrf_token" value="([^"]+)"', reset_form.text).group(1)
-    reset = client.post(
-        "/reset-password",
-        data={
-            "token": reset_token,
-            "password": "new-password",
-            "password_confirm": "new-password",
-            "csrf_token": reset_csrf,
-        },
-    )
-    assert "Password updated" in reset.text
-    assert _login(client, passphrase="old-password").status_code == 400
-    assert _login(client, passphrase="new-password").status_code == 303
-
-    replay = client.post(
-        "/reset-password",
-        data={
-            "token": reset_token,
-            "password": "another-password",
-            "password_confirm": "another-password",
-            "csrf_token": client.get("/api/csrf").json()["csrf_token"],
-        },
-    )
-    assert "invalid or expired" in replay.text
-
-
-def test_account_email_links_use_canonical_public_origin(app_module, monkeypatch):
-    server, _ = app_module
-    from starlette.requests import Request
-
-    request = Request({
-        "type": "http",
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "https",
-        "server": ("attacker.example", 443),
-        "client": ("127.0.0.1", 1234),
-        "headers": [(b"host", b"attacker.example")],
-        "path": "/",
-        "query_string": b"",
-    })
-    monkeypatch.setenv("VERVFY_PUBLIC_URL", "https://music.example")
-    assert server._account_link(request, "/reset-password", "signed-token") == (
-        "https://music.example/reset-password?token=signed-token"
-    )
-    monkeypatch.setattr(server, "is_production", True)
-    monkeypatch.delenv("VERVFY_PUBLIC_URL")
-    with pytest.raises(RuntimeError, match="VERVFY_PUBLIC_URL"):
-        server._account_link(request, "/reset-password", "signed-token")
+    for path in ("/forgot-password", "/reset-password", "/verify-email"):
+        assert client.get(path).status_code == 404
 
 
 def test_logout_redirects_even_with_stale_csrf_token(app_module):

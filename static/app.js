@@ -563,18 +563,22 @@ const LyricsEngine = (() => {
     const album = (track.album || "").trim();
     const albumKnown = album && !/^unknown album$/i.test(album);
     let requestFailed = false;
-    // Identity check: same cleaned title + lead artist. Duration must agree when known
-    // (±3s); unknown durations still allow an exact title/artist hit so tagless files work.
+    // Identity check: same cleaned title + lead artist. Runtimes can vary slightly
+    // between releases; keep a bounded tolerance and rank the closest match first.
+    const durationTolerance = durationKnown
+      ? Math.min(15, Math.max(5, duration * 0.06))
+      : 0;
     const matchesTrack = candidate => {
       if(!candidate || typeof candidate !== "object") return false;
       if(normalizeSearchText(cleanTrackTitle(candidate.trackName) || candidate.trackName) !== titleKey) return false;
       if(normalizeSearchText(primaryArtistName(candidate.artistName)) !== artistKey) return false;
       if(!durationKnown) return true;
-      return Number.isFinite(candidate.duration) && Math.abs(candidate.duration - duration) <= 3;
+      return Number.isFinite(candidate.duration) && candidate.duration > 0 &&
+        Math.abs(candidate.duration - duration) <= durationTolerance;
     };
     const rankCandidate = candidate => [
-      candidate.syncedLyrics ? 0 : 1,
       durationKnown && Number.isFinite(candidate.duration) ? Math.abs(candidate.duration - duration) : 0,
+      candidate.syncedLyrics ? 0 : 1,
     ];
 
     // Exact lookup needs album + duration (LRCLIB signature).
@@ -659,6 +663,20 @@ function normalizeSyncedLyrics(lyrics){
   return {...lyrics, lines};
 }
 
+function activeLyricsIndex(lines, timeMs){
+  let low = 0, high = lines.length - 1, activeIdx = -1;
+  while(low <= high){
+    const middle = (low + high) >> 1;
+    if(lines[middle].time <= timeMs){
+      activeIdx = middle;
+      low = middle + 1;
+    }else{
+      high = middle - 1;
+    }
+  }
+  return activeIdx;
+}
+
 async function fetchArtistCatalog(url){
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);
@@ -677,7 +695,7 @@ const ArtistPhotoEngine = (() => {
   const pending = new Map();
   const waiting = [];
   let active = 0;
-  const MAX_ACTIVE = 6;
+  const MAX_ACTIVE = 8;
   let observer = null;
 
   function apply(name, url){
@@ -752,7 +770,7 @@ const ArtistPhotoEngine = (() => {
           const artistName = entry.target.dataset?.artistPhoto;
           if(artistName) resolve(artistName);
         }
-      }, {root: $("#content") || null, rootMargin: "240px 0px", threshold: 0.01});
+      }, {root: $("#content") || null, rootMargin: "800px 0px", threshold: 0.01});
     }
     observer.observe(img);
   }
@@ -1026,17 +1044,25 @@ function mergeServerTrack(existing, payload){
     ? payload.custom_lyrics
     : null;
   Object.assign(existing, incoming);
+  const currentTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
+  const metadataChanged = previousTrackData.slice(0, 4).some((value, index) => value !== currentTrackData[index]);
   if(previousCustomLyrics === customLyrics){
-    existing.lyrics = previousLyrics;
     existing.customLyrics = previousCustomLyrics;
-    existing.lyricsResolved = previousResolved;
-    existing.lyricsLoading = previousLoading;
-    existing.lyricsPromise = previousPromise;
+    if(metadataChanged && !customLyrics){
+      existing.lyrics = null;
+      existing.lyricsResolved = false;
+      existing.lyricsLoading = false;
+      existing.lyricsPromise = null;
+    }else{
+      existing.lyrics = previousLyrics;
+      existing.lyricsResolved = previousResolved;
+      existing.lyricsLoading = previousLoading;
+      existing.lyricsPromise = previousPromise;
+    }
   }else{
     existing.customLyrics = previousCustomLyrics;
     applyServerCustomLyrics(existing, payload);
   }
-  const currentTrackData = [existing.title, existing.artist, existing.album, existing.duration, existing.art];
   return {
     track: existing,
     changed: previousTrackData.slice(0, 4).some((value, index) => value !== currentTrackData[index]) ||
@@ -2040,13 +2066,14 @@ function updateMobileLyricsPreview(track){
   }
   if(track?.lyrics?.lines?.length){
     const time = (audioEl.currentTime || 0) * 1000;
-    let index = 0;
-    track.lyrics.lines.forEach((line, i)=>{ if(line.time <= time) index = i; });
+    const index = activeLyricsIndex(track.lyrics.lines, time);
     const active = track.lyrics.lines[index]?.text || "";
-    const next = track.lyrics.lines[index + 1]?.text || "";
+    const next = index >= 0 ? track.lyrics.lines[index + 1]?.text || "" : "";
+    const upcoming = index < 0 ? track.lyrics.lines[0]?.text || "" : "";
     el.innerHTML = [
       active ? `<span class="lyric-active">${escapeHtml(active)}</span>` : "",
       next ? `<span class="lyric-next">${escapeHtml(next)}</span>` : "",
+      upcoming ? `<span class="lyric-next">${escapeHtml(upcoming)}</span>` : "",
     ].filter(Boolean).join("\n") || "Lyrics are ready.";
   } else if(track?.lyrics?.text){
     const lines = track.lyrics.text.split(/\n+/).filter(Boolean).slice(0, 2);
@@ -2060,30 +2087,48 @@ function updateMobileLyricsPreview(track){
   }
 }
 
+function lyricsLookupFingerprint(track){
+  return JSON.stringify([
+    track?.title || "",
+    track?.artist || "",
+    track?.album || "",
+    Number(track?.duration) || 0,
+  ]);
+}
+
 /** Resolve lyrics for a track once (ID3 → LRCLIB). Safe to call from preview or overlay. */
 function ensureTrackLyrics(track){
   if(!track || track.lyricsResolved) return Promise.resolve(track?.lyrics || null);
   if(track.lyricsPromise) return track.lyricsPromise;
   track.lyricsLoading = true;
   const requestedTrackId = track.id;
+  const lookupTrack = {
+    title: track.title || "",
+    artist: track.artist || "",
+    album: track.album || "",
+    duration: Number(track.duration) || 0,
+  };
+  const lookupFingerprint = lyricsLookupFingerprint(lookupTrack);
+  const requestedCustomLyrics = track.customLyrics || null;
   LyricsDebug.log(`state: lyrics lookup started for "${track.title}" by ${track.artist}`);
   track.lyricsPromise = (async () => {
     const lyricsCacheKey = `lyrics:${activeAccountId || "anonymous"}:${track.id}`;
     const cached = await AuralisDB.get(lyricsCacheKey);
-    const cacheFresh = cached?.lyrics ||
-      (cached?.checkedAt && Date.now() - cached.checkedAt < 3 * 24 * 60 * 60 * 1000);
-    if(cached && cacheFresh && cached.customLyrics === (track.customLyrics || null)){
+    const cacheFresh = cached?.checkedAt &&
+      Date.now() - cached.checkedAt < 3 * 24 * 60 * 60 * 1000 &&
+      cached.lookupFingerprint === lookupFingerprint;
+    if(cached && cacheFresh && cached.customLyrics === requestedCustomLyrics){
       return cached.lyrics || null;
     }
-    let result = track.customLyrics
-      ? (LyricsEngine.fromLRC(track.customLyrics) || { source:"custom", text:track.customLyrics })
+    let result = requestedCustomLyrics
+      ? (LyricsEngine.fromLRC(requestedCustomLyrics) || { source:"custom", text:requestedCustomLyrics })
       : null;
     if(!result){
       try{
         const headRes = track.offline ? null : await fetch(`/api/tracks/${encodeURIComponent(track.id)}/tag-head`);
         const blob = track.offline && track.file ? track.file : (headRes?.ok ? await headRes.blob() : null);
         if(blob){
-          const file = track.offline && track.file ? track.file : new File([blob], `${track.title || "track"}.mp3`, { type: "audio/mpeg" });
+          const file = track.offline && track.file ? track.file : new File([blob], `${lookupTrack.title || "track"}.mp3`, { type: "audio/mpeg" });
           const meta = await parseID3(file);
           result = LyricsEngine.fromID3(meta);
           if(result) LyricsDebug.log(`state: embedded ID3 lyrics found → ${result.source}`);
@@ -2092,16 +2137,21 @@ function ensureTrackLyrics(track){
         LyricsDebug.warn("state: embedded ID3 lyrics read failed —", e.message);
       }
       if(!result){
-        result = await LyricsEngine.fromOnline(track);
+        result = await LyricsEngine.fromOnline(lookupTrack);
       }
     }
     await AuralisDB.set(lyricsCacheKey, {
-      customLyrics: track.customLyrics || null,
+      customLyrics: requestedCustomLyrics,
+      lookupFingerprint,
       lyrics: result || null,
       checkedAt: Date.now(),
     });
     return result;
   })().then(result => {
+    if(lyricsLookupFingerprint(track) !== lookupFingerprint ||
+      (track.customLyrics || null) !== requestedCustomLyrics){
+      return track.lyrics || null;
+    }
     track.lyrics = result || (track.customLyrics
       ? { source:"custom", text:track.customLyrics }
       : null);
@@ -2114,6 +2164,10 @@ function ensureTrackLyrics(track){
     if($("#lyricsOverlay").classList.contains("open")) renderLyricsStage();
     return track.lyrics;
   }).catch(e => {
+    if(lyricsLookupFingerprint(track) !== lookupFingerprint ||
+      (track.customLyrics || null) !== requestedCustomLyrics){
+      return track.lyrics || null;
+    }
     track.lyricsResolved = e.message !== "LRCLIB_UNAVAILABLE";
     track.lyricsLoading = false;
     track.lyricsPromise = null;
@@ -2195,7 +2249,7 @@ function renderLyricsStage(){
     return;
   }
   bg.style.backgroundImage = `url("${t.art}")`;
-  const sourceLabel = { sylt:"Synced lyrics", lrc:"Synced · LRC", uslt:"Lyrics", custom:"Pasted lyrics", "custom-synced":"Synced · pasted", "online-synced":"Synced · LRCLIB", "online-plain":"Lyrics · LRCLIB" };
+  const sourceLabel = { sylt:"Synced lyrics", lrc:"Synced · LRC", uslt:"Lyrics", custom:"Pasted lyrics", "custom-synced":"Synced · adjusted", "online-synced":"Synced · LRCLIB", "online-plain":"Lyrics · LRCLIB" };
   const sideMarkup = `
     <div class="lyrics-side">
       <div class="lyrics-art"><img src="${escapeHtml(t.art)}" alt=""></div>
@@ -2207,8 +2261,8 @@ function renderLyricsStage(){
     const linesHtml = t.lyrics.lines.map((ln,i) =>
       `<div class="lyrics-line" data-time="${ln.time}" data-i="${i}">${escapeHtml(ln.text) || "&nbsp;"}</div>`
     ).join("");
-    const resyncButton = t.customLyrics
-      ? `<button class="btn lyrics-resync-btn" id="btnResyncLyrics">Re-sync to audio</button>`
+    const resyncButton = t.lyrics.lines.length
+      ? `<button class="btn lyrics-resync-btn" id="btnResyncLyrics">Adjust lyric timing</button>`
       : "";
     stage.innerHTML = sideMarkup + `<div class="lyrics-viewport"><div class="lyrics-track" id="lyricsTrack">${linesHtml}</div></div>${resyncButton}`;
     // defensive: confirm lines are truly ascending — the highlight scan below
@@ -2260,16 +2314,22 @@ function timedLyricsToLrc(lines){
 }
 function openLyricsSyncEditor(track){
   const timedLines = track.lyrics?.lines;
+  const timedEntries = timedLines?.length
+    ? timedLines.filter(line => line.text.trim())
+    : null;
   const text = track.lyrics?.text || track.customLyrics || "";
-  const lines = timedLines?.length
-    ? timedLines.map(line => line.text.trim()).filter(Boolean)
+  const lines = timedEntries
+    ? timedEntries.map(line => line.text.trim())
     : text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   if(!lines.length){ toast("Paste lyrics before syncing them."); return; }
 
   // Plain lyric text contains no timing information.  Do not invent evenly
   // spaced timestamps: it looks synced, but every verse is wrong.  Instead,
   // record the audio clock when the listener taps each line.
-  const stamps = new Array(lines.length).fill(null);
+  const stamps = timedEntries
+    ? timedEntries.map(line => Math.max(0, Math.round(line.time)))
+    : new Array(lines.length).fill(null);
+  const adjustingExistingTimings = stamps.every(stamp => stamp !== null);
   const stage = $("#lyricsStage");
   const renderRows = () => lines.map((line, index) => {
     const stamp = stamps[index];
@@ -2282,7 +2342,9 @@ function openLyricsSyncEditor(track){
     <div class="lyrics-sync-editor">
       <div class="lyrics-editor-heading">
         <h3>Sync lyrics to audio</h3>
-        <p>Start the song, then tap each line when it is sung. You can tap a line again to correct it.</p>
+        <p>${adjustingExistingTimings
+          ? "Existing timestamps are preserved. Tap any line when it is sung to correct its timing."
+          : "Start the song, then tap each line when it is sung. You can tap a line again to correct it."}</p>
       </div>
       <div class="lyrics-sync-clock">Playback: <strong id="lyricsSyncTime">${fmtTime(audioEl.currentTime || 0)}</strong></div>
       <div class="lyrics-sync-lines" id="lyricsSyncLines">${renderRows()}</div>
@@ -2399,16 +2461,7 @@ function updateLyricsHighlight(instant){
   // "Active" is defined as the LAST line whose timestamp is <= current playback
   // time. Use a binary search so the animation-clock update stays cheap for
   // long transcripts and always chooses the correct line after seeking.
-  let low = 0, high = lines.length - 1, activeIdx = -1;
-  while(low <= high){
-    const middle = (low + high) >> 1;
-    if(lines[middle].time <= curMs){
-      activeIdx = middle;
-      low = middle + 1;
-    }else{
-      high = middle - 1;
-    }
-  }
+  const activeIdx = activeLyricsIndex(lines, curMs);
 
   if(LYRICS_SYNC_DEBUG && activeIdx !== _lyricsLastLoggedIdx){
     const matched = activeIdx >= 0 ? lines[activeIdx] : null;
@@ -3861,15 +3914,11 @@ async function renderAccountView(){
       <section class="acct-settings">
         <div class="acct-settings-title">Email address</div>
         <form id="emailForm" class="acct-form">
-          <input type="email" id="accountEmail" placeholder="you@example.com" autocomplete="email" maxlength="320" value="${escapeHtml(info?.pending_email || info?.email || "")}">
+          <input type="email" id="accountEmail" placeholder="you@example.com" autocomplete="email" maxlength="320" value="${escapeHtml(info?.email || "")}">
           <input type="password" id="emailCurrentPassword" placeholder="Current password" autocomplete="current-password" required>
           <button type="submit" class="btn btn-primary">Save email</button>
-          ${info?.email || info?.pending_email ? '<button type="button" class="btn" id="btnRemoveEmail">Remove email</button>' : ""}
-          <div class="acct-form-msg" id="emailMsg">${info?.pending_email
-            ? `Check ${escapeHtml(info.pending_email)} to verify the new address.`
-            : info?.email
-              ? info.email_verified ? "Verified — available for password recovery." : "Not verified — confirm it to enable password recovery."
-              : "Add and verify an email address to enable password recovery."}</div>
+          ${info?.email ? '<button type="button" class="btn" id="btnRemoveEmail">Remove email</button>' : ""}
+          <div class="acct-form-msg" id="emailMsg">Email is account information only; sign in with your username.</div>
         </form>
       </section>
 
@@ -3956,7 +4005,7 @@ async function renderAccountView(){
   const saveAccountEmail = async email => {
     const button = emailForm.querySelector("button[type='submit']");
     button.disabled = true;
-    emailMsg.textContent = email ? "Sending verification link…" : "Removing email…";
+    emailMsg.textContent = email ? "Saving email…" : "Removing email…";
     emailMsg.className = "acct-form-msg";
     try{
       const res = await fetch("/api/account/email", {
@@ -3967,16 +4016,12 @@ async function renderAccountView(){
       const data = await res.json().catch(()=>({}));
       if(!res.ok) throw new Error(data.detail || "Could not update email");
       accountInfo = {...accountInfo, ...data};
-      emailMsg.textContent = data.pending_email
-        ? `Verification link sent to ${data.pending_email}.`
-        : data.email_verified
-          ? "Email verified and available for password recovery."
-          : "Email removed.";
+      emailMsg.textContent = data.email ? "Email saved to your account." : "Email removed.";
       emailMsg.className = "acct-form-msg ok";
-      emailInput.value = data.pending_email || data.email || "";
+      emailInput.value = data.email || "";
       emailPassword.value = "";
       $("#btnRemoveEmail")?.remove();
-      if(data.email || data.pending_email){
+      if(data.email){
         const removeButton = document.createElement("button");
         removeButton.type = "button";
         removeButton.className = "btn";

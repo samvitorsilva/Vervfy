@@ -28,7 +28,7 @@ This ended up being one of the more involved parts. Vervfy checks embedded ID3 l
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
 
 **Accounts**
-Its own auth system — registration, login by username or email, logout, verified-email password recovery, account email management, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Every user gets their own isolated library.
+Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is account information only and is not used for sign-in or password recovery. Every user gets their own isolated library.
 
 **Artist info**
 Artist profiles prefer manually checked entries, then use an exact Deezer artist match tied to a title in the user's library before fetching a matching Wikipedia summary. Portraits use the same catalog/title verification, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable.

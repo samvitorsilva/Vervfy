@@ -132,10 +132,6 @@ class UserStore:
         with SessionLocal() as session:
             return session.scalar(select(User).where(User.username_key == username.lower()))
 
-    def get_by_email(self, email: str):
-        with SessionLocal() as session:
-            return session.scalar(select(User).where(func.lower(User.email) == email.lower()))
-
     def get_by_id(self, user_id: str):
         with SessionLocal() as session:
             return session.get(User, user_id)
@@ -147,48 +143,28 @@ class UserStore:
                 row.password_hash = new_password_hash
                 session.commit()
 
-    def reset_password(self, user_id: str, new_password_hash: str) -> int | None:
+    def update_email(self, user_id: str, email: str | None) -> None:
         with SessionLocal() as session:
             row = session.get(User, user_id)
             if not row:
-                return None
-            row.password_hash = new_password_hash
-            row.session_version += 1
-            session.commit()
-            return row.session_version
-
-    def set_pending_email(self, user_id: str, email: str | None) -> None:
-        with SessionLocal() as session:
-            row = session.get(User, user_id)
-            if row:
-                row.pending_email = email
-                if email is None:
-                    row.email = None
-                    row.email_verified = False
-                session.commit()
-
-    def confirm_pending_email(self, user_id: str, email: str) -> bool:
-        with SessionLocal() as session:
-            row = session.get(User, user_id)
-            if not row or row.pending_email != email:
-                return False
-            existing_user_id = session.scalar(
-                select(User.id).where(
-                    func.lower(User.email) == email.lower(),
-                    User.id != user_id,
+                return
+            if email:
+                existing_user_id = session.scalar(
+                    select(User.id).where(
+                        func.lower(User.email) == email.lower(),
+                        User.id != user_id,
+                    )
                 )
-            )
-            if existing_user_id:
-                raise ValueError("That email is already in use")
+                if existing_user_id:
+                    raise ValueError("That email is already in use")
             try:
                 row.email = email
-                row.email_verified = True
+                row.email_verified = False
                 row.pending_email = None
                 session.commit()
             except IntegrityError as exc:
                 session.rollback()
                 raise ValueError("That email is already in use") from exc
-            return True
 
     def bump_session_version(self, user_id: str) -> int:
         with SessionLocal() as session:
