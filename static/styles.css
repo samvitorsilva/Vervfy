@@ -770,6 +770,10 @@ body.mini-mode .mini-player{ display:block; }
   border-radius:22px; overflow:hidden;
   box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.08);
 }
+.playlist-name-card{ padding-bottom:18px; }
+.playlist-name-label{ margin:0 18px 7px; color:var(--text-dim); font-size:13px; font-weight:600; }
+.playlist-name-input{ margin:0 18px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--glass); color:var(--text); font:500 14px var(--font-body); }
+.playlist-name-actions{ display:flex; justify-content:flex-end; gap:8px; margin:16px 18px 0; }
 .sleep-timer-overlay{
   position:fixed; inset:0; z-index:95; display:none; align-items:center; justify-content:center;
   padding:24px; background:rgba(8,10,16,0.62); backdrop-filter:blur(10px);

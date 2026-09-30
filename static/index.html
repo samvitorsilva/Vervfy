@@ -278,6 +278,18 @@
     </div>
   </div>
 
+  <div class="queue-picker-overlay" id="playlistNameOverlay" role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
+    <form class="queue-picker-card playlist-name-card glass-surface" data-glass-priority="3">
+      <div class="queue-picker-head">
+        <h3 id="playlistNameTitle">New playlist</h3>
+        <button class="icon-btn" id="btnClosePlaylistName" type="button" title="Close">×</button>
+      </div>
+      <label class="playlist-name-label" for="playlistNameInput">Playlist name</label>
+      <input id="playlistNameInput" class="playlist-name-input" maxlength="200" autocomplete="off">
+      <div class="playlist-name-actions"><button class="btn" id="btnCancelPlaylistName" type="button">Cancel</button><button class="btn btn-primary" id="playlistNameSave" type="submit">Create</button></div>
+    </form>
+  </div>
+
   <!-- SLEEP TIMER -->
   <div class="sleep-timer-overlay" id="sleepTimerOverlay" role="dialog" aria-modal="true" aria-labelledby="sleepTimerTitle">
     <div class="sleep-timer-card glass-surface" data-glass-priority="3">

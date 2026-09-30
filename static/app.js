@@ -3167,6 +3167,9 @@ function renderTrackListView(){
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
       Add from library
     </button>` : "";
+  const playlistActions = playlist ? `<button class="btn" id="btnRenamePlaylist" type="button">Rename</button>
+    <button class="btn" id="btnDeletePlaylist" type="button">Delete</button>` : "";
+  const playlistToolbar = playlist ? `<div class="queue-toolbar">${addPlaylistBtn}${playlistActions}</div>` : "";
   if(serverLibraryLoadFailed){
     content.innerHTML = '<div class="empty"><div class="empty-orb"></div><h3>Music server unavailable</h3><p>The server may still be waking up. Try connecting again.</p><button class="btn btn-primary" id="retryLibrary">Retry connection</button></div>';
     $("#retryLibrary")?.addEventListener("click", async () => {
@@ -3190,14 +3193,14 @@ function renderTrackListView(){
       return;
     }
     if(playlist && !state.search.trim()){
-      content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>This playlist is empty</h3><p>Add songs from your library to start building it.</p><div style="margin-top:6px;">${addPlaylistBtn}</div></div>`;
-      $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
+      content.innerHTML = `${playlistToolbar}<div class="empty"><div class="empty-orb"></div><h3>This playlist is empty</h3><p>Add songs from your library to start building it.</p></div>`;
+      wirePlaylistToolbar(playlist);
       return;
     }
     content.innerHTML = `<div class="empty"><div class="empty-orb"></div><h3>No matches</h3><p>Try a different search term, or browse your full library.</p></div>`;
     return;
   }
-  const toolbar = addPlaylistBtn ? `<div class="queue-toolbar">${addPlaylistBtn}</div>` : "";
+  const toolbar = playlistToolbar;
   if(state.listMode === "grid"){
     content.innerHTML = `${toolbar}<div class="grid">${list.map(t=>cardMarkup(t)).join("")}</div>`;
   } else {
@@ -3208,8 +3211,20 @@ function renderTrackListView(){
         ${list.map((t,i)=>trackRowMarkup(t,i)).join("")}
       </div>`;
   }
-  $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
+  if(playlist) wirePlaylistToolbar(playlist);
   wireTrackInteractions(list);
+}
+
+function wirePlaylistToolbar(playlist){
+  $("#btnAddPlaylistTracks")?.addEventListener("click", ()=> openPlaylistLibraryPicker(playlist.id));
+  $("#btnRenamePlaylist")?.addEventListener("click", ()=> openPlaylistNameModal(playlist));
+  $("#btnDeletePlaylist")?.addEventListener("click", ()=>{
+    if(!confirm(`Delete “${playlist.name}”?`)) return;
+    state.playlists = state.playlists.filter(item => item.id !== playlist.id);
+    saveLibraryMeta();
+    state.view = "playlists";
+    render();
+  });
 }
 
 function emptyStateMarkup(){
@@ -3468,11 +3483,7 @@ function openPlaylistSubmenu(e, t, parentMenu){
   sub.querySelectorAll("[data-pl]").forEach(item=>{
     item.addEventListener("click", ()=>{
       if(item.dataset.pl === "new"){
-        const name = prompt("Name your playlist");
-        if(name && name.trim()){
-          const pl = {id:uid(), name:name.trim(), trackIds:[t.id]};
-          state.playlists.push(pl); saveLibraryMeta(); toast(`Created “${pl.name}” and added the track.`);
-        }
+        openPlaylistNameModal(null, t.id);
       } else {
         addTrackToPlaylist(item.dataset.pl, t);
       }
@@ -4212,15 +4223,43 @@ function renderPlaylistsView(){
     card.addEventListener("click", ()=>{ state.view = "playlist:"+card.dataset.id; render(); });
   });
   $("#plNewCard").addEventListener("click", ()=>{
-    const name = prompt("Name your playlist");
-    if(name && name.trim()){
-      const pl = {id:uid(), name:name.trim(), trackIds:[]};
-      state.playlists.push(pl);
-      saveLibraryMeta();
-      state.view = "playlist:"+pl.id;
-      render();
-    }
+    openPlaylistNameModal();
   });
+}
+
+let playlistNameTarget = null;
+let playlistNameTrackId = null;
+function openPlaylistNameModal(playlist=null, trackId=null){
+  playlistNameTarget = playlist;
+  playlistNameTrackId = trackId;
+  const overlay = $("#playlistNameOverlay");
+  const input = $("#playlistNameInput");
+  $("#playlistNameTitle").textContent = playlist ? "Rename playlist" : "New playlist";
+  $("#playlistNameSave").textContent = playlist ? "Save" : "Create";
+  input.value = playlist?.name || "";
+  overlay.classList.add("open");
+  setTimeout(()=> input.focus(), 30);
+}
+function closePlaylistNameModal(){
+  $("#playlistNameOverlay")?.classList.remove("open");
+  playlistNameTarget = null;
+  playlistNameTrackId = null;
+}
+function submitPlaylistName(){
+  const name = $("#playlistNameInput").value.trim();
+  if(!name) return;
+  if(playlistNameTarget){
+    playlistNameTarget.name = name;
+    toast(`Renamed playlist to “${name}”.`);
+  }else{
+    const pl = {id:uid(), name, trackIds:playlistNameTrackId ? [playlistNameTrackId] : []};
+    state.playlists.push(pl);
+    state.view = "playlist:" + pl.id;
+    toast(playlistNameTrackId ? `Created “${name}” and added the track.` : `Created “${name}”.`);
+  }
+  saveLibraryMeta();
+  closePlaylistNameModal();
+  render();
 }
 
 function renderArtistsView(){
@@ -4495,6 +4534,10 @@ on("#btnImportRail", "click", ()=> $("#fileInput")?.click());
 on("#homeProfileAvatar", "click", ()=>{ state.view = "account"; state.search=""; $("#searchInput").value=""; render(); });
 on("#fileInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = ""; });
 on("#folderInput", "change", (e)=>{ importFiles(e.target.files); e.target.value = ""; });
+on("#btnClosePlaylistName", "click", closePlaylistNameModal);
+on("#btnCancelPlaylistName", "click", closePlaylistNameModal);
+on("#playlistNameOverlay", "click", e=>{ if(e.target === e.currentTarget) closePlaylistNameModal(); });
+on("#playlistNameOverlay form", "submit", e=>{ e.preventDefault(); submitPlaylistName(); });
 
 $$(".rail-btn[data-view]").forEach(btn=>{
   btn.addEventListener("click", ()=>{
