@@ -33,6 +33,7 @@ import httpx
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -1440,7 +1441,11 @@ def save_library_state(
             playlist.tracks = [PlaylistTrack(track_id=track_id, position=index) for index, track_id in enumerate(ids)]
         for playlist in existing.values():
             session.delete(playlist)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise HTTPException(status_code=409, detail="Playlist id is already in use; please try again") from exc
         state = _library_state_from_session(user["id"], session)
     response.headers["ETag"] = _library_state_etag(state)
     return state
