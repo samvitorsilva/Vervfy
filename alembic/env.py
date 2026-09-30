@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import os
+
 from alembic import context
-from db import Base, DATABASE_URL
+from db import Base, DATABASE_URL, normalize_database_url
 
 config = context.config
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+migration_url = (
+    normalize_database_url(os.environ.get("MIGRATION_DATABASE_URL", "").strip()) or DATABASE_URL
+)
+config.set_main_option("sqlalchemy.url", migration_url)
 target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
-    context.configure(url=DATABASE_URL, target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=migration_url, target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 

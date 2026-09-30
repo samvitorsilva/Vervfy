@@ -9,10 +9,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "playlists",
-        sa.Column("position", sa.Integer(), nullable=False, server_default="0"),
-    )
+    bind = op.get_bind()
+    columns = {column["name"] for column in sa.inspect(bind).get_columns("playlists")}
+    if "position" not in columns:
+        op.add_column(
+            "playlists",
+            sa.Column("position", sa.Integer(), nullable=False, server_default="0"),
+        )
 
 
 def downgrade() -> None:

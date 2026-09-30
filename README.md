@@ -97,6 +97,13 @@ successfully before `uvicorn` starts. When Render terminates TLS in front of
 the application, start Uvicorn with `--proxy-headers --forwarded-allow-ips='*'`
 so forwarded HTTPS headers are trusted.
 
+If the application database role does not own the tables, set
+`MIGRATION_DATABASE_URL` to a PostgreSQL URL for a role that owns them. Alembic
+uses that URL for schema changes, while the running app continues using
+`DATABASE_URL`. In particular, PostgreSQL requires table ownership to add the
+`playlists.position` column; granting ordinary table privileges is not enough.
+If you use only `DATABASE_URL`, that role must own the existing tables.
+
 Vervfy sends a `Content-Security-Policy-Report-Only` header. Check the browser
 console for violations after deployment, then change it to an enforcing
 `Content-Security-Policy` header when the policy is confirmed to be complete.

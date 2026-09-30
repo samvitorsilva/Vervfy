@@ -23,16 +23,21 @@ from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 
+def normalize_database_url(value: str) -> str:
+    """Normalize PostgreSQL URLs to use the psycopg 3 driver."""
+    value = value.strip()
+    if value.startswith("postgres://"):
+        return "postgresql+psycopg://" + value[len("postgres://"):]
+    if value.startswith("postgresql://"):
+        return "postgresql+psycopg://" + value[len("postgresql://"):]
+    return value
+
+
 def database_url() -> str:
     value = os.environ.get("DATABASE_URL", "").strip()
     if not value:
         raise RuntimeError("DATABASE_URL must be set (use your Supabase PostgreSQL connection string).")
-    # Render/Supabase URLs are sometimes supplied with the legacy postgres:// scheme.
-    if value.startswith("postgres://"):
-        value = "postgresql+psycopg://" + value[len("postgres://"):]
-    elif value.startswith("postgresql://"):
-        value = "postgresql+psycopg://" + value[len("postgresql://"):]
-    return value
+    return normalize_database_url(value)
 
 
 DATABASE_URL = database_url()
