@@ -2866,7 +2866,13 @@ function getVisibleTracks(){
    ============================================================ */
 function render(){
   renderTopbar();
-  if(state.view === "account") renderAccountView();
+  if(state.view === "account"){
+    // Library sync and other incidental refreshes call render() often.
+    // Rebuilding the account page mid-edit clears focus and password fields.
+    // Keep the mounted form; explicit actions call renderAccountView() directly.
+    const accountMounted = $(".account-view") && !$(".account-view").classList.contains("acct-loading");
+    if(!accountMounted) renderAccountView();
+  }
   else if(state.view === "playlists") renderPlaylistsView();
   else if(state.view === "artists") renderArtistsView();
   else if(state.view.startsWith("artist:")) renderArtistDetailView();
