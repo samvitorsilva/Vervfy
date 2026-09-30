@@ -1295,14 +1295,34 @@ def _content_disposition_filename(filename: str) -> str:
     return re.sub(r'[\r\n"\\]', "_", ascii_name) or "audio"
 
 
+def verify_current_password(user: User, password: str) -> None:
+    """Verify a sensitive account action without allowing password guessing."""
+    matches = auth.verify_password(password, user.password_hash)
+    key = f"current-password:{user.id}"
+    try:
+        if matches:
+            request_throttle.discard(key)
+        elif not request_throttle.allow(key, 10, 15 * 60):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many incorrect current-password attempts. Try again later.",
+                headers={"Retry-After": "900"},
+            )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503, detail="Rate-limit service unavailable"
+        ) from None
+    if not matches:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+
 @app.put("/api/account/email")
 def change_account_email(
     payload: EmailChangeRequest,
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    if not auth.verify_password(payload.current_password, user["password_hash"]):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    verify_current_password(user, payload.current_password)
     email = payload.email.strip().lower()
     if email:
         error = auth.validate_email(email)
@@ -1322,8 +1342,7 @@ def change_password(
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    if not auth.verify_password(payload.current_password, user["password_hash"]):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    verify_current_password(user, payload.current_password)
     error = auth.validate_password(payload.new_password)
     if error:
         raise HTTPException(status_code=400, detail=error)
@@ -1353,8 +1372,7 @@ def delete_account(
     """Permanently delete the signed-in account after explicit confirmation."""
     if payload.confirmation != "DELETE":
         raise HTTPException(status_code=400, detail='Type DELETE to confirm account deletion')
-    if not auth.verify_password(payload.current_password, user["password_hash"]):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    verify_current_password(user, payload.current_password)
     storage_paths = get_library(user["id"]).storage_paths()
     user_store.delete_user(user["id"])
     audio_store.delete_many_quietly(storage_paths)

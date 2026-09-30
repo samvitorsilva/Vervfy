@@ -903,6 +903,18 @@ def test_email_is_account_information_not_an_authentication_method(app_module):
         assert client.get(path).status_code == 404
 
 
+def test_current_password_failures_are_rate_limited(app_module):
+    _, client = app_module
+    _register(client)
+    csrf = client.get("/api/csrf").json()["csrf_token"]
+    payload = {"current_password": "wrong-password", "new_password": "new-password"}
+    for _ in range(10):
+        response = client.post("/api/account/password", headers={"X-CSRF-Token": csrf}, json=payload)
+        assert response.status_code == 400
+    response = client.post("/api/account/password", headers={"X-CSRF-Token": csrf}, json=payload)
+    assert response.status_code == 429
+
+
 def test_logout_redirects_even_with_stale_csrf_token(app_module):
     server, client = app_module
     _register(client)
