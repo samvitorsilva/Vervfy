@@ -161,7 +161,9 @@ const AURA_PALETTE = [
    ============================================================ */
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
-const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36);
+const uid = () => crypto.randomUUID
+  ? crypto.randomUUID().replaceAll("-", "")
+  : Math.random().toString(36).slice(2,10) + Date.now().toString(36);
 
 function fmtTime(s){
   if(!isFinite(s) || s < 0) s = 0;
