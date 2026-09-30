@@ -3482,6 +3482,7 @@ async function clearLocalAccountSession(){
   serverLibraryLoaded = false;
   releaseOfflineObjectUrls();
   await AuralisDB.del("auralis:account-id");
+  navigator.serviceWorker?.controller?.postMessage({type: "clear-shell"});
 }
 
 // Drop one queue slot at `i`. If that slot was currently playing, advance

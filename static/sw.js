@@ -1,9 +1,10 @@
-const CACHE_NAME = "vervfy-shell-v15";
+const CACHE_NAME = "vervfy-shell-v16";
+// Keep these asset versions in sync with static/index.html.
 const SHELL = [
- "/static/index.html",
- "/static/liquid-glass.js?v=1",
- "/static/app.js?v=39",
- "/static/styles.css?v=31",
+ "/",
+ "/static/liquid-glass.js?v=3",
+ "/static/app.js?v=40",
+ "/static/styles.css?v=36",
  "/static/gemini-svg.svg",
 ];
 
@@ -23,10 +24,30 @@ self.addEventListener("fetch", event => {
  if(event.request.method !== "GET") return;
  const url = new URL(event.request.url);
  if(url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
- if(event.request.mode === "navigate") return;
+ if(event.request.mode === "navigate" && url.pathname === "/"){
+   event.respondWith(fetch(event.request).then(response => {
+     if(response.ok){
+       const copy = response.clone();
+       caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+     }
+     return response;
+   }).catch(() => caches.match(event.request)));
+   return;
+ }
  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
+   if(!response.ok) return response;
    const copy = response.clone();
    caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
    return response;
  })));
+});
+
+self.addEventListener("message", event => {
+ if(event.data?.type !== "clear-shell") return;
+ event.waitUntil(caches.open(CACHE_NAME).then(cache =>
+   cache.keys().then(keys => Promise.all(keys
+     .filter(request => new URL(request.url).pathname === "/")
+     .map(request => cache.delete(request))
+   ))
+ ));
 });
