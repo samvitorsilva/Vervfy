@@ -1898,6 +1898,14 @@ function playCurrent(){
   updateMediaSessionMetadata();
   audioEl.play().catch(error=>{
     if(request !== playbackRequest || currentTrack()?.id !== t.id || error?.name === "AbortError") return;
+    if(error?.name === "NotAllowedError"){
+      toast("Press play to start");
+      return;
+    }
+    if(error?.name === "NotSupportedError"){
+      toast("This file format isn't supported by your browser");
+      return;
+    }
     if(audioRetryPending === request) return;
     audioRetryPending = request;
     toast("Waking the music server…");
@@ -2024,6 +2032,20 @@ installMediaSessionHandlers();
 audioEl.addEventListener("ended", () => {
   if(stopAtTrackEnd()) return;
   if(audioEl.ended) playNext(true);
+});
+audioEl.addEventListener("error", () => {
+  const messages = {
+    2: "Audio network error. Check your connection and try again.",
+    3: "This audio file could not be decoded.",
+    4: "This file format isn't supported by your browser.",
+  };
+  toast(messages[audioEl.error?.code] || "Audio playback failed.");
+});
+let lastAudioStalledToastAt = 0;
+audioEl.addEventListener("stalled", () => {
+  if(Date.now() - lastAudioStalledToastAt < 10000) return;
+  lastAudioStalledToastAt = Date.now();
+  toast("Playback stalled. Trying to reconnect…");
 });
 audioEl.addEventListener("play", () => {
   syncPlayIcons(true);
