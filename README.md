@@ -89,6 +89,18 @@ Vervfy stores accounts, bcrypt password hashes, profile photos, tracks/audio,
 cover art, custom lyrics, favorites, and playlists in PostgreSQL. Profile
 photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. 
 
+### Deploying on Render
+
+Set `VERVFY_PUBLIC_URL` to the public HTTPS URL of the service. Run database
+migrations before starting the web process: `alembic upgrade head` must finish
+successfully before `uvicorn` starts. When Render terminates TLS in front of
+the application, start Uvicorn with `--proxy-headers --forwarded-allow-ips='*'`
+so forwarded HTTPS headers are trusted.
+
+Vervfy sends a `Content-Security-Policy-Report-Only` header. Check the browser
+console for violations after deployment, then change it to an enforcing
+`Content-Security-Policy` header when the policy is confirmed to be complete.
+
 ---
 
 ## Keyboard shortcuts

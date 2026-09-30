@@ -677,6 +677,22 @@ def test_hsts_only_when_https_only(tmp_path, monkeypatch):
         assert "strict-transport-security" not in client.get("/login").headers
 
 
+def test_index_uses_public_url_and_sends_csp_report_only(app_module, monkeypatch):
+    _, client = app_module
+    _register(client)
+    monkeypatch.setenv("VERVFY_PUBLIC_URL", "https://music.example.test/")
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "https://music.example.test" in response.text
+    assert response.headers["content-security-policy-report-only"] == (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "img-src 'self' data: blob: https://*.dzcdn.net; media-src 'self' blob:; "
+        "connect-src 'self' https://lrclib.net; frame-ancestors 'none'"
+    )
+
+
 def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
     server, client = app_module
     _register(client)

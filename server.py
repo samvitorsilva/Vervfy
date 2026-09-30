@@ -177,6 +177,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers.setdefault(
         "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
     )
+    response.headers.setdefault("Content-Security-Policy-Report-Only", CSP_REPORT_ONLY)
     if https_only:
         response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
     return response
@@ -204,6 +205,16 @@ USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
 MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
+CSP_REPORT_ONLY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; "
+    "img-src 'self' data: blob: https://*.dzcdn.net; "
+    "media-src 'self' blob:; "
+    "connect-src 'self' https://lrclib.net; "
+    "frame-ancestors 'none'"
+)
 
 _libraries: dict[str, Library] = {}
 _artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
@@ -923,7 +934,12 @@ def index(request: Request, user=Depends(require_page_user)) -> HTMLResponse:
     del user
     page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     page = page.replace("__CSRF_TOKEN__", auth.get_or_create_csrf_token(request))
-    page = page.replace("__API_BASE__", html_escape(str(request.base_url).rstrip("/"), quote=True))
+    api_base = os.environ.get("VERVFY_PUBLIC_URL", "").strip().rstrip("/")
+    if not api_base:
+        api_base = str(request.base_url).rstrip("/")
+        if https_only and api_base.startswith("http://"):
+            api_base = f"https://{api_base[len('http://') :]}"
+    page = page.replace("__API_BASE__", html_escape(api_base, quote=True))
     return HTMLResponse(
         page,
         headers={"Cache-Control": "no-store"},
