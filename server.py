@@ -9,6 +9,8 @@ from database import Base, engine
 from io import BytesIO
 from html import escape as html_escape
 import json
+import asyncio
+import functools
 import hashlib
 import logging
 import mimetypes
@@ -127,6 +129,16 @@ app.add_middleware(
 )
 
 UPLOADS_PER_10MIN = int(os.environ.get("VERVFY_UPLOADS_PER_10MIN", "60"))
+UPLOAD_CONCURRENCY = max(1, int(os.environ.get("VERVFY_UPLOAD_CONCURRENCY", "2")))
+upload_processing_semaphore = asyncio.Semaphore(UPLOAD_CONCURRENCY)
+
+
+def limit_upload_processing(handler):
+    @functools.wraps(handler)
+    async def limited(*args, **kwargs):
+        async with upload_processing_semaphore:
+            return await handler(*args, **kwargs)
+    return limited
 
 
 @app.middleware("http")
@@ -1488,6 +1500,7 @@ def list_tracks(user=Depends(require_api_user)) -> dict:
 
 
 @app.post("/api/library/upload")
+@limit_upload_processing
 async def upload_track(
     request: Request, file: UploadFile = File(...), user=Depends(require_api_user), _csrf=Depends(auth.verify_api_csrf)
 ) -> dict:
