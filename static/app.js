@@ -1881,7 +1881,6 @@ function playCurrent(){
   if(!t) return;
   const request = ++playbackRequest;
   audioRetryPending = null;
-  if(ensureAudioGraph() && audioCtx.state === "suspended") audioCtx.resume();
   if(currentBlobUrl){ URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
   if(t.offlineUrl){
     audioEl.src = t.offlineUrl;
@@ -1936,7 +1935,6 @@ function togglePlay(){
     return;
   }
   if(audioEl.paused){
-    if(ensureAudioGraph() && audioCtx.state==="suspended") audioCtx.resume();
     if(csrfToken?.startsWith("__")) csrfToken = null;
     // "Add to queue" on an empty queue sets queueIndex without ever assigning
     // audioEl.src — resume would call play() on an empty element and fail.
@@ -2820,7 +2818,7 @@ function openViz(){
   $("#vizOverlay").classList.add("open");
   resizeVizCanvas();
   resetVizTrack();
-  ensureAudioGraph();
+  if(ensureAudioGraph() && audioCtx.state === "suspended") audioCtx.resume();
   if(!rafViz) drawViz();
 }
 function closeViz(){
