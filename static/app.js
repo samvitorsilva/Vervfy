@@ -3581,6 +3581,7 @@ function wireTouchQueueDrag(row, getIndex, refresh, {longPress = false} = {}){
 }
 
 async function removeTrack(t){
+  if(!confirm(`Remove “${t.title}” from your library? This deletes the file.`)) return;
   const playingId = currentTrack()?.id || null;
   const wasPlaying = playingId === t.id;
   if(!await deleteTrackOnServer(t.id)){
@@ -3606,7 +3607,13 @@ async function removeTrack(t){
   } else if(state.queueIndex >= state.queue.length){
     state.queueIndex = state.queue.length ? state.queue.length - 1 : -1;
   }
-  if(t.art && t.art.startsWith("blob:")) URL.revokeObjectURL(t.art);
+  if(activeAccountId) await AuralisDB.del(`${activeAccountId}:${t.id}`, OFFLINE_STORE);
+  [t.art, t.offlineUrl].forEach(url => {
+    if(url && url.startsWith("blob:")){
+      URL.revokeObjectURL(url);
+      offlineObjectUrls.delete(url);
+    }
+  });
   saveLibraryMeta();
   toast(`Removed “${t.title}”.`);
   render();
