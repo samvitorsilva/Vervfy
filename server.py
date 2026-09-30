@@ -1472,12 +1472,22 @@ def _library_titles_for_artist(user_id: str, name: str) -> list[str]:
     return titles
 
 
+def _throttle_artist_lookup(user_id: str) -> None:
+    try:
+        allowed = request_throttle.allow(f"artist-lookup:{user_id}", 240, 60)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Rate-limit service unavailable") from exc
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many artist lookups", headers={"Retry-After": "60"})
+
+
 @app.get("/api/artists/photo")
 def artist_photo(
     name: str = Query(min_length=1, max_length=200),
     user=Depends(require_api_user),
 ) -> dict:
     """Find a verified portrait from this user's own artist catalog."""
+    _throttle_artist_lookup(user["id"])
     own = _library_titles_for_artist(user["id"], name.strip())
     picture, fans = _lookup_artist_photo(name.strip(), own)
     return {"picture": picture, "nb_fan": fans}
@@ -1489,6 +1499,7 @@ def artist_profile(
     user=Depends(require_api_user),
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
+    _throttle_artist_lookup(user["id"])
     own = _library_titles_for_artist(user["id"], name.strip())
     return {"profile": _lookup_artist_profile(name.strip(), own)}
 
