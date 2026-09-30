@@ -84,6 +84,7 @@ const state = {
   queueIndex: -1,
   playingContext: null,  // page/list that started the current queue
   shuffle: false,
+  shufflePlayed: new Set(),
   repeat: "off",         // off | all | one
   volume: 0.7,
   muted: false,
@@ -1757,6 +1758,7 @@ function currentTrack(){
 function buildQueueFrom(list, startId){
   state.queue = list.map(t=>t.id);
   state.queueIndex = Math.max(0, state.queue.indexOf(startId));
+  state.shufflePlayed = new Set(state.queueIndex >= 0 ? [state.queueIndex] : []);
 }
 
 // Moves the track at fromIndex to sit at toIndex, keeping queueIndex pointed
@@ -1920,14 +1922,30 @@ function playNext(auto=false){
     return;
   }
   if(state.shuffle){
-    let next;
-    if(state.queue.length === 1) next = 0;
-    else { do { next = Math.floor(Math.random()*state.queue.length); } while(next === state.queueIndex); }
+    state.shufflePlayed.add(state.queueIndex);
+    let choices = state.queue.map((_, index) => index).filter(index => index !== state.queueIndex);
+    if(auto && state.repeat === "off"){
+      choices = choices.filter(index => !state.shufflePlayed.has(index));
+      if(!choices.length){
+        audioEl.pause();
+        return;
+      }
+    } else if(auto && state.repeat === "all" && !choices.some(index => !state.shufflePlayed.has(index))){
+      state.shufflePlayed = new Set([state.queueIndex]);
+    }
+    if(!choices.length) choices = [state.queueIndex];
+    const next = choices[Math.floor(Math.random()*choices.length)];
     state.queueIndex = next;
+    state.shufflePlayed.add(next);
   } else {
     state.queueIndex++;
     if(state.queueIndex >= state.queue.length){
-      state.queueIndex = 0; // wrap to first track when the list ends
+      if(auto && state.repeat === "off"){
+        state.queueIndex = state.queue.length - 1;
+        audioEl.pause();
+        return;
+      }
+      state.queueIndex = 0; // manual next and repeat-all wrap at the list end
     }
   }
   playCurrent();
