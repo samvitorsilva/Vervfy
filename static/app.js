@@ -1596,7 +1596,7 @@ async function uploadFileToServer(file){
       if(status.status === "completed"){
         if(status.track) return trackFromServer(status.track);
         await loadServerLibrary(true);
-        const refreshed = state.tracks.find(t => t.id === status.track?.id);
+        const refreshed = state.tracks.find(t => t.id === status.track_id);
         if(refreshed) return refreshed;
         throw new Error("Upload completed but the track is not available yet");
       }

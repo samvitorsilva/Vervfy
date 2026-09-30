@@ -1565,6 +1565,7 @@ def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
             "attempts": job.attempts,
         }
         if job.track_id:
+            payload["track_id"] = job.track_id
             track = get_library(user["id"]).get(job.track_id)
             if track:
                 payload["track"] = _track_payload(track)
