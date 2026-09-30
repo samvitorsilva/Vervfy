@@ -1144,6 +1144,7 @@ let libraryStateLoaded = false;
 let libraryStateEtag = null;
 let libraryStateBaseline = null;
 let libraryMetaDirty = false;
+let librarySyncErrorToastAt = 0;
 
 function normalizeLibraryMeta(meta){
   const favorites = [...new Set((meta?.favorites || []).filter(id => typeof id === "string"))].sort();
@@ -1263,7 +1264,10 @@ function saveLibraryMeta(){
   libraryMetaSaveQueue = libraryMetaSaveQueue.then(save, save);
   return libraryMetaSaveQueue.catch(error => {
     console.warn("Could not sync library state", error);
-    toast("Library changes could not be synced. Please try again.");
+    if(Date.now() - librarySyncErrorToastAt >= 60000){
+      librarySyncErrorToastAt = Date.now();
+      toast("Library changes could not be synced. Please try again.");
+    }
   });
 }
 async function loadPersisted(){
@@ -1399,7 +1403,7 @@ async function loadServerLibrary(force = false){
     try{
       const [tracksRes, stateRes, accountId] = await Promise.all([
         fetchWithRetry("/api/tracks", {}, 3),
-        fetch("/api/library/state"),
+        fetchWithRetry("/api/library/state", {}, 3),
         ensureAccountIdentity(),
       ]);
       if(!tracksRes.ok) throw new Error("bad status "+tracksRes.status);
@@ -1490,6 +1494,7 @@ async function syncServerLibrary(){
       libraryStateBaseline = remoteState;
       libraryMetaDirty = !sameLibraryMeta(mergedState, remoteState);
       applyLibraryMeta(mergedState);
+      if(libraryMetaDirty && libraryStateLoaded) await saveLibraryMeta();
     }
     const added = state.tracks.filter(track => !previousIds.has(track.id));
     const availableIds = new Set(state.tracks.map(track => track.id));
