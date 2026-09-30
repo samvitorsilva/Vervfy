@@ -888,6 +888,9 @@ def startup() -> None:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
         if "storage_path" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
+        existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
+        if "position" not in existing_playlist_columns:
+            connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
         if engine.dialect.name == "postgresql":
             audio_data_col = next(
                 (c for c in inspect(engine).get_columns("tracks") if c["name"] == "audio_data"),
@@ -1211,6 +1214,7 @@ def _library_state_from_session(user_id: str, session) -> dict:
         select(Playlist)
         .options(selectinload(Playlist.tracks))
         .where(Playlist.user_id == user_id)
+        .order_by(Playlist.position, Playlist.id)
     ).all()
     return {"favorites": favorites, "playlists": [
         {"id": playlist.id, "name": playlist.name,
@@ -1227,10 +1231,7 @@ def _library_state(user_id: str) -> dict:
 def _library_state_etag(state: dict) -> str:
     canonical = {
         "favorites": sorted(state["favorites"]),
-        "playlists": sorted(
-            state["playlists"],
-            key=lambda item: item["id"],
-        ),
+        "playlists": state["playlists"],
     }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1408,7 +1409,7 @@ def save_library_state(
         session.add_all(Favorite(user_id=user["id"], track_id=track_id) for track_id in favorite_ids)
         existing = {playlist.id: playlist for playlist in session.scalars(select(Playlist).where(Playlist.user_id == user["id"])).all()}
         requested = set()
-        for item in payload.playlists:
+        for position, item in enumerate(payload.playlists):
             if item.id in requested:
                 continue
             requested.add(item.id)
@@ -1417,10 +1418,11 @@ def save_library_state(
                 raise HTTPException(status_code=422, detail="Playlist name cannot be empty")
             playlist = existing.pop(item.id, None)
             if playlist is None:
-                playlist = Playlist(id=item.id, user_id=user["id"], name=name)
+                playlist = Playlist(id=item.id, user_id=user["id"], name=name, position=position)
                 session.add(playlist)
             else:
                 playlist.name = name
+                playlist.position = position
                 playlist.tracks.clear()
             ids = list(dict.fromkeys(track_id for track_id in item.trackIds if track_id in valid_ids))
             playlist.tracks = [PlaylistTrack(track_id=track_id, position=index) for index, track_id in enumerate(ids)]

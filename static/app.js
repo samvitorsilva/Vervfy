@@ -1151,7 +1151,7 @@ function normalizeLibraryMeta(meta){
     id: playlist.id,
     name: playlist.name,
     trackIds: [...new Set(playlist.trackIds || [])],
-  })).sort((left, right) => left.id.localeCompare(right.id));
+  }));
   return {favorites, playlists};
 }
 

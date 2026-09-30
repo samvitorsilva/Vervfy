@@ -133,6 +133,7 @@ class Playlist(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     tracks: Mapped[list["PlaylistTrack"]] = relationship(cascade="all, delete-orphan", order_by="PlaylistTrack.position")
 
 
