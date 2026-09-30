@@ -1,8 +1,8 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
-import hashlib, io, logging, os, tempfile
+import base64, hashlib, io, logging, os, tempfile
 from dataclasses import dataclass
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 import audio_store
@@ -12,6 +12,7 @@ Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "25000000
 try:
     from mutagen import File as MutagenFile
     from mutagen.id3 import APIC, ID3
+    from mutagen.flac import Picture
     from mutagen.mp3 import MP3
     MUTAGEN_AVAILABLE = True
 except ImportError: MUTAGEN_AVAILABLE = False
@@ -55,6 +56,35 @@ def _tag_text(value, fallback: str, *, join_values: bool = False) -> str:
     if not normalized:
         return fallback
     return "; ".join(normalized) if join_values else normalized[0]
+
+
+def _extract_cover(path: str, ext: str) -> Image.Image | None:
+    """Read embedded artwork from the formats mutagen exposes differently."""
+    try:
+        if ext == ".mp3":
+            for tag in ID3(path).values():
+                if isinstance(tag, APIC) and tag.data:
+                    return Image.open(io.BytesIO(tag.data)).convert("RGB")
+        audio = MutagenFile(path)
+        if audio is None:
+            return None
+        if ext in {".m4a", ".mp4"}:
+            covers = (getattr(audio, "tags", None) or {}).get("covr") or []
+            if covers:
+                return Image.open(io.BytesIO(bytes(covers[0]))).convert("RGB")
+        elif ext == ".flac":
+            pictures = getattr(audio, "pictures", None) or []
+            if pictures and pictures[0].data:
+                return Image.open(io.BytesIO(pictures[0].data)).convert("RGB")
+        elif ext in {".ogg", ".oga", ".opus"}:
+            pictures = (getattr(audio, "tags", None) or {}).get("metadata_block_picture") or []
+            if pictures:
+                picture = Picture(base64.b64decode(str(pictures[0])))
+                if picture.data:
+                    return Image.open(io.BytesIO(picture.data)).convert("RGB")
+    except Exception:
+        return None
+    return None
 
 class Library:
     def __init__(self, user_id: str): self.user_id = user_id
@@ -144,7 +174,7 @@ class Library:
             if old:return self._track(old)
         meta=self._read_metadata(safe,data)
         if not meta:return None
-        title,artist,album,duration,cover,has_cover=meta; output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
+        title,artist,album,duration,cover,has_cover=meta; cover.thumbnail((1024,1024), Image.LANCZOS); output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
         storage_path=None
         if storage_path_override:
             storage_path = storage_path_override
@@ -217,7 +247,7 @@ class Library:
         cover_data = self.cover_bytes(track_id)
         if not cover_data:
             return b""
-        image=Image.open(io.BytesIO(cover_data)).convert("RGB").resize((size,size),Image.LANCZOS);out=io.BytesIO();image.save(out,format="JPEG",quality=90);return out.getvalue()
+        image=Image.open(io.BytesIO(cover_data)).convert("RGB"); image=ImageOps.fit(image,(size,size),method=Image.LANCZOS);out=io.BytesIO();image.save(out,format="JPEG",quality=90);return out.getvalue()
 
     def audio_info(self, track_id: str):
         """``(filename, size_bytes, storage_path)`` or None — never touches the audio itself."""
@@ -289,12 +319,14 @@ class Library:
                     artist=_tag_text(tags.get("artist"), artist, join_values=True)
                     album=_tag_text(tags.get("album"), album)
                 except Exception:return None
-                if path.lower().endswith(".mp3"):
-                    try:
-                        audio=MP3(path);duration=float(audio.info.length or duration)
-                        for tag in ID3(path).values():
-                            if isinstance(tag,APIC) and tag.data:cover=Image.open(io.BytesIO(tag.data)).convert("RGB");has_cover=True;break
-                    except Exception:pass
+                ext = os.path.splitext(filename)[1].lower()
+                if ext == ".mp3":
+                    try: duration=float(MP3(path).info.length or duration)
+                    except Exception: pass
+                embedded_cover = _extract_cover(path, ext)
+                if embedded_cover is not None:
+                    cover = embedded_cover
+                    has_cover = True
             return title,artist,album,duration,cover,has_cover
         finally:
             try:os.unlink(path)
