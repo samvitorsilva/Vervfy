@@ -1498,6 +1498,7 @@ body.mini-mode .mini-player{ display:block; }
 }
 .nowbar.glass{
   position:fixed;
+  overflow:hidden;
   border-radius:26px 26px 0 0;
   background:rgba(255,255,255,var(--glass-tint-alpha,.06));
 }
@@ -1548,6 +1549,9 @@ body :not(.glass){
   }
   .nowbar.glass{ border-radius:20px; }
   .mobile-player-scroll.glass{ margin:0 10px 10px; }
+}
+@media (min-width:641px) and (max-width:900px){
+  .nowbar.glass{ border-radius:26px; }
 }
 @media (prefers-reduced-transparency:reduce){
   .glass,
