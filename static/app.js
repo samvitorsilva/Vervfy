@@ -181,10 +181,15 @@ function hashStr(str){
   for(let i=0;i<str.length;i++){ h = (Math.imul(31,h) + str.charCodeAt(i))|0; }
   return Math.abs(h);
 }
-function toast(msg){
+function toast(msg, persistent=false){
   const el = document.createElement("div");
   el.className = "toast"; el.textContent = msg;
   $("#toastWrap").appendChild(el);
+  if(!persistent) setTimeout(()=>{ el.style.transition="opacity .3s"; el.style.opacity="0"; setTimeout(()=>el.remove(),300); }, 2600);
+  return el;
+}
+function finishToast(el, msg){
+  el.textContent = msg;
   setTimeout(()=>{ el.style.transition="opacity .3s"; el.style.opacity="0"; setTimeout(()=>el.remove(),300); }, 2600);
 }
 
@@ -1553,12 +1558,19 @@ async function uploadFileToServer(file){
       res = await upload(true);
     }
     if(res.status !== 429) break;
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    if(Number.isFinite(retryAfter) && retryAfter > 60){
+      const error = new Error(`Upload rate limited. Try again in ${Math.ceil(retryAfter / 60)} min.`);
+      error.status = 429;
+      error.retryAfter = retryAfter;
+      throw error;
+    }
     if(rateLimitRetries >= 3){
       const error = new Error("Upload is still rate limited. Wait a few minutes and try again.");
       error.status = 429;
+      error.retryAfter = retryAfter;
       throw error;
     }
-    const retryAfter = Number(res.headers.get("Retry-After"));
     await wait(Math.min(30000, Math.max(1000, Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000)));
     rateLimitRetries++;
   }
@@ -1689,11 +1701,14 @@ async function connectMusicFolder(){
 async function importFiles(fileList){
   const files = Array.from(fileList).filter(f => /audio\//.test(f.type) || AUDIO_EXT_RE.test(f.name));
   if(files.length === 0){ toast("No audio files found in that selection."); return; }
-  toast(`Saving ${files.length} track${files.length>1?"s":""}…`);
+  const progressToast = toast(`Saving 0/${files.length}…`, true);
 
   let added = 0, failed = 0;
   const failures = [];
-  for(const file of files){
+  let rateLimited = null;
+  for(let index = 0; index < files.length; index++){
+    const file = files[index];
+    progressToast.textContent = `Saving ${index + 1}/${files.length}…`;
     try{
       const track = await uploadFileToServer(file);
       if(state.tracks.some(t=>t.id === track.id)) continue;
@@ -1703,20 +1718,31 @@ async function importFiles(fileList){
       failed++;
       failures.push(e?.message || "Upload failed");
       console.warn("Upload failed for", file.name, e);
+      if(e?.status === 429){
+        rateLimited = e;
+        break;
+      }
     }
   }
   relinkPersistedLibrary();
   saveLibraryMeta();
+  if(rateLimited){
+    const notUploaded = files.length - added;
+    const minutes = Math.max(1, Math.ceil((rateLimited.retryAfter || 60) / 60));
+    finishToast(progressToast, `${added} uploaded, ${notUploaded} not uploaded (rate limited, try again in ${minutes} min).`);
+    render();
+    return;
+  }
   if(added && failed){
     const reason = failures[0] || "Upload failed";
-    toast(`Saved ${added} track${added!==1?"s":""}; ${failed} couldn't be saved: ${reason}`);
-  } else if(added) toast(`Saved ${added} track${added!==1?"s":""} to your library.`);
+    finishToast(progressToast, `Saved ${added} track${added!==1?"s":""}; ${failed} couldn't be saved: ${reason}`);
+  } else if(added) finishToast(progressToast, `Saved ${added} track${added!==1?"s":""} to your library.`);
   else if(failed){
     const reason = failures[0] || "Upload failed";
-    toast(files.length === 1 ? `Couldn't save the file: ${reason}` :
+    finishToast(progressToast, files.length === 1 ? `Couldn't save the file: ${reason}` :
       `Couldn't save those files: ${reason}${failed > 1 ? ` (+${failed - 1} more)` : ""}`);
   }
-  else toast("Those tracks were already in your library.");
+  else finishToast(progressToast, "Those tracks were already in your library.");
   render();
 }
 
