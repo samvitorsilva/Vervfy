@@ -955,7 +955,7 @@ def login_submit(
     ip = auth.client_ip(request)
     identifier = identifier.strip()
 
-    def fail(message: str) -> HTMLResponse:
+    def fail(message: str, status_code: int = 400) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "login.html",
@@ -964,12 +964,15 @@ def login_submit(
                 "error": message,
                 "username": identifier,
             },
-            status_code=400,
+            status_code=status_code,
             headers={"Cache-Control": "no-store"},
         )
 
-    if login_throttle.is_locked(ip, identifier):
-        return fail("Too many attempts. Please wait a few minutes and try again.")
+    try:
+        if login_throttle.is_locked(ip, identifier):
+            return fail("Too many attempts. Please wait a few minutes and try again.")
+    except RuntimeError:
+        return fail("Service temporarily unavailable, try again shortly", status_code=503)
 
     row = user_store.get_by_username(identifier)
     password_matches = (
@@ -978,10 +981,16 @@ def login_submit(
         else auth.verify_password(password, auth._DUMMY_HASH)
     )
     if row is None or not password_matches:
-        login_throttle.record_failure(ip, identifier)
+        try:
+            login_throttle.record_failure(ip, identifier)
+        except RuntimeError:
+            return fail("Service temporarily unavailable, try again shortly", status_code=503)
         return fail("Incorrect username or password")
 
-    login_throttle.clear(ip, identifier)
+    try:
+        login_throttle.clear(ip, identifier)
+    except RuntimeError:
+        return fail("Service temporarily unavailable, try again shortly", status_code=503)
     request.session.clear()
     request.session["user_id"] = row["id"]
     request.session["sv"] = row["session_version"]

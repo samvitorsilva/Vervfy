@@ -686,6 +686,19 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
     assert len(calls) == 1
 
 
+def test_login_returns_503_when_login_rate_limit_backend_is_unavailable(app_module, monkeypatch):
+    server, client = app_module
+    _register(client)
+
+    def unavailable(*_args):
+        raise RuntimeError("rate-limit backend unavailable")
+
+    monkeypatch.setattr(server.login_throttle, "is_locked", unavailable)
+    response = _login(client)
+    assert response.status_code == 503
+    assert "Service temporarily unavailable, try again shortly" in response.text
+
+
 def test_login_requires_username_even_when_account_has_email(app_module):
     server, client = app_module
     _register(client, email="alice@example.com")
