@@ -3113,14 +3113,14 @@ function trackRowMarkup(t, idx, showAlbum=true){
     <div class="row-title-wrap">
       <img class="row-art media-image" ${artAttrs(t, 160)} alt="">
       <div class="row-title-stack">
-        <div class="row-title" title="${escapeHtml(title)}">${title}</div>
-        <div class="row-meta" title="${escapeHtml(metaTitle)}">
+        <div class="row-title" title="${title}">${title}</div>
+        <div class="row-meta" title="${metaTitle}">
           <div class="row-artist">${artistLinksMarkup(t)}</div>
-          ${showAlbum ? `<span class="row-meta-sep" aria-hidden="true">·</span><div class="row-album" title="${escapeHtml(albumText)}">${albumText}</div>` : ""}
+          ${showAlbum ? `<span class="row-meta-sep" aria-hidden="true">·</span><div class="row-album" title="${albumText}">${albumText}</div>` : ""}
         </div>
       </div>
     </div>
-    <div class="row-album-cell" title="${escapeHtml(albumText)}">${showAlbum ? albumText : ""}</div>
+    <div class="row-album-cell" title="${albumText}">${showAlbum ? albumText : ""}</div>
     <div class="row-time" data-track-time="${escapeHtml(t.id)}">${t.duration?fmtTime(t.duration):"--:--"}</div>
     <div class="row-actions">
       <button data-action="queue" title="Add to queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16M4 12h10M4 17.5h10"/><path d="M16.5 14.2l4 2.3-4 2.3z" fill="currentColor" stroke="none"/></svg></button>
