@@ -23,8 +23,7 @@
   const reducedTransparency = matchMedia("(prefers-reduced-transparency: reduce)");
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const supportsSvgBackdropFilter =
-    CSS.supports("backdrop-filter", "blur(2px) url(#liquid-glass-test) saturate(1.5)") ||
-    Boolean(window.chrome);
+    CSS.supports("backdrop-filter", "blur(2px) url(#liquid-glass-test) saturate(1.5)");
   let nextFilterId = 0;
   let lastPointerSurface = null;
 

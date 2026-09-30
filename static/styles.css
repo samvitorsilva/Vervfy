@@ -1001,7 +1001,6 @@ body.mini-mode .mini-player{ display:block; }
 }
 .lyrics-plain p{ font-size:18px; line-height:1.8; color:rgba(242,243,247,.72); white-space:pre-wrap; max-width:680px; }
 .lyrics-sync-btn{ display:block; margin:24px 0 0; }
-.lyrics-resync-btn{ align-self:center; margin-top:12px; }
 .lyrics-empty{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; text-align:center; color:var(--text-dim); }
 .lyrics-empty h3{ font-size:18px; color:var(--text); font-weight:700; }
 .lyrics-empty p{ font-size:13px; max-width:300px; line-height:1.5; }
@@ -1346,7 +1345,7 @@ body.mini-mode .mini-player{ display:block; }
   }
   .lyrics-plain{ position:relative; inset:auto; flex:1; min-height:0; padding:8px 2px 28%; }
   .lyrics-empty{ padding:40px 12px; }
-  .lyrics-resync-btn, .lyrics-paste-btn, .lyrics-sync-btn{ margin-top:10px; }
+  .lyrics-paste-btn, .lyrics-sync-btn{ margin-top:10px; }
   .lyrics-close{ top:max(14px, env(safe-area-inset-top, 0px)); right:14px; }
   .shortcuts-card{ width:calc(100% - 24px); padding:22px; }
   .photo-editor-overlay{ padding:12px; align-items:flex-end; }
@@ -1452,7 +1451,6 @@ body.mini-mode .mini-player{ display:block; }
     inset 0 -1px 0 rgba(0,0,0,.16),
     0 14px 38px rgba(0,0,0,.28);
   transition:
-    transform .48s cubic-bezier(.34,1.42,.64,1),
     background-color .2s ease,
     box-shadow .2s ease;
 }
@@ -1487,8 +1485,11 @@ body.mini-mode .mini-player{ display:block; }
   -webkit-backdrop-filter:blur(var(--glass-blur,3px)) var(--glass-filter-url) saturate(var(--glass-saturation,1.65)) brightness(1.05);
 }
 .glass.glass-pressed{
-  transform:scale(1.04);
   --glass-rim-brightness:1.45;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.2),
+    inset 0 -1px 0 rgba(0,0,0,.16),
+    0 14px 38px rgba(0,0,0,.28);
 }
 .rail.glass{
   position:relative;
@@ -1556,13 +1557,11 @@ body :not(.glass){
     -webkit-backdrop-filter:none !important;
   }
   .glass::before{ display:none; }
-  .glass.glass-pressed{ transform:none; }
 }
 @media (prefers-reduced-motion:reduce){
   .artwork-backdrop img{ transition:none; }
   .glass,
   .glass::before{ transition:none !important; }
-  .glass.glass-pressed{ transform:none; }
 }
 
 :focus-visible{ outline:2px solid var(--cyan); outline-offset:2px; }

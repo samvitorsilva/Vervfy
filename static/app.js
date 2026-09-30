@@ -93,6 +93,7 @@ const state = {
 
 let audioEl = new Audio();
 audioEl.preload = "metadata";
+let activeSeekDrag = null;
 let audioCtx = null, analyser = null, sourceNode = null, freqData = null, waveData = null;
 let rafViz = null;
 let vizLastFrameAt = 0;
@@ -2088,6 +2089,7 @@ function syncPlayIcons(playing){
 }
 
 function updateSeekUI(){
+  if(activeSeekDrag) return;
   const dur = audioEl.duration || 0;
   const cur = audioEl.currentTime || 0;
   const pct = dur ? (cur/dur*100) : 0;
@@ -2332,10 +2334,7 @@ function renderLyricsStage(){
     const linesHtml = t.lyrics.lines.map((ln,i) =>
       `<div class="lyrics-line" data-time="${ln.time}" data-i="${i}">${escapeHtml(ln.text) || "&nbsp;"}</div>`
     ).join("");
-    const resyncButton = t.lyrics.lines.length
-      ? `<button class="btn lyrics-resync-btn" id="btnResyncLyrics">Adjust lyric timing</button>`
-      : "";
-    stage.innerHTML = sideMarkup + `<div class="lyrics-viewport"><div class="lyrics-track" id="lyricsTrack">${linesHtml}</div></div>${resyncButton}`;
+    stage.innerHTML = sideMarkup + `<div class="lyrics-viewport"><div class="lyrics-track" id="lyricsTrack">${linesHtml}</div></div>`;
     // defensive: confirm lines are truly ascending — the highlight scan below
     // assumes this and only re-sorts here if something upstream ever regresses.
     const linesRef = t.lyrics.lines;
@@ -2355,7 +2354,6 @@ function renderLyricsStage(){
         if(isFinite(time)) audioEl.currentTime = time;
       });
     });
-    $("#btnResyncLyrics")?.addEventListener("click", () => openLyricsSyncEditor(t));
     updateLyricsHighlight(true);
   } else if(t.lyrics && t.lyrics.text){
     const paragraphs = t.lyrics.text.split(/\n{2,}/).map(p => `<p>${escapeHtml(p)}</p>`).join("");
@@ -4688,7 +4686,6 @@ function commitSeek(pct){
 function bindSeek(seekEl){
   if(!seekEl) return;
   let dragging = false;
-  let wasPlaying = false;
   let pendingPercent = 0;
   const updateFromPointer = e => {
     pendingPercent = seekPercent(e.clientX, seekEl);
@@ -4697,8 +4694,7 @@ function bindSeek(seekEl){
   seekEl.addEventListener("pointerdown", e=>{
     if(e.button !== undefined && e.button !== 0) return;
     dragging = true;
-    wasPlaying = !audioEl.paused;
-    if(wasPlaying) audioEl.pause();
+    activeSeekDrag = seekEl;
     seekEl.setPointerCapture?.(e.pointerId);
     updateFromPointer(e);
     e.preventDefault();
@@ -4709,18 +4705,18 @@ function bindSeek(seekEl){
   const stopDragging = e=>{
     if(!dragging) return;
     updateFromPointer(e);
-    commitSeek(pendingPercent);
     dragging = false;
+    activeSeekDrag = null;
+    commitSeek(pendingPercent);
     if(seekEl.hasPointerCapture?.(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
-    if(wasPlaying) audioEl.play().catch(()=>{});
   };
   seekEl.addEventListener("pointerup", stopDragging);
   seekEl.addEventListener("pointercancel", e=>{
     if(!dragging) return;
     dragging = false;
+    activeSeekDrag = null;
     updateSeekUI();
     if(seekEl.hasPointerCapture?.(e.pointerId)) seekEl.releasePointerCapture(e.pointerId);
-    if(wasPlaying) audioEl.play().catch(()=>{});
   });
   seekEl.addEventListener("keydown", e=>{
     if(!audioEl.duration) return;

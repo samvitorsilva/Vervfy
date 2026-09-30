@@ -1,10 +1,10 @@
-const CACHE_NAME = "vervfy-shell-v16";
+const CACHE_NAME = "vervfy-shell-v17";
 // Keep these asset versions in sync with static/index.html.
 const SHELL = [
  "/",
- "/static/liquid-glass.js?v=3",
- "/static/app.js?v=40",
- "/static/styles.css?v=36",
+ "/static/liquid-glass.js?v=4",
+ "/static/app.js?v=41",
+ "/static/styles.css?v=37",
  "/static/gemini-svg.svg",
 ];
 
