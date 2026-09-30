@@ -104,6 +104,17 @@ def test_redis_throttle_keeps_first_hit_window(app_module):
     assert fake.expirations == [("vervfy:ratelimit:login:ip:user", 60)]
 
 
+def test_parse_range_header_handles_valid_malformed_and_unsatisfiable_ranges(app_module):
+    server, _ = app_module
+    assert server._parse_range_header("bytes=2-5", 10) == (2, 5)
+    assert server._parse_range_header("bytes=2-", 10) == (2, 9)
+    assert server._parse_range_header("bytes=-3", 10) == (7, 9)
+    assert server._parse_range_header("bytes=wat", 10) is None
+    assert server._parse_range_header("bytes=0-1,3-4", 10) is None
+    with pytest.raises(server.RangeNotSatisfiable):
+        server._parse_range_header("bytes=10-", 10)
+
+
 @pytest.mark.parametrize("backend", ["memory", "redis"])
 def test_auth_throttles_count_only_successes_and_failures(app_module, backend):
     server, client = app_module

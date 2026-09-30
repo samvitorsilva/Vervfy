@@ -546,6 +546,11 @@ def test_stream_relays_only_requested_range(env):
     r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": f"bytes={len(data) + 5}-"})
     assert r.status_code == 416
 
+    for malformed in ("bytes=wat", "bytes=0-1,3-4"):
+        r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": malformed})
+        assert r.status_code == 200
+        assert r.content == data
+
 
 def test_stream_slices_when_storage_ignores_range(env):
     server, client, fake, headers, _ = env

@@ -1261,31 +1261,35 @@ def _library_state_etag(state: dict) -> str:
     return f'"{digest}"'
 
 
+class RangeNotSatisfiable(ValueError):
+    """A syntactically valid byte range that has no bytes in the resource."""
+
+
 def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
+    """Return one requested byte range, or None when the header is malformed."""
     if not range_header or not range_header.startswith("bytes="):
         return None
     spec = range_header[6:].strip()
     if not spec or "," in spec:
         return None
-    if spec.startswith("-"):
-        try:
-            suffix = int(spec[1:])
-        except ValueError:
-            return None
-        if suffix <= 0 or suffix > size:
-            return None
+    match = re.fullmatch(r"(\d*)-(\d*)", spec)
+    if match is None:
+        return None
+    start_str, end_str = match.groups()
+    if not start_str and not end_str:
+        return None
+    if not start_str:
+        suffix = int(end_str)
+        if suffix <= 0 or size <= 0:
+            raise RangeNotSatisfiable
         return max(0, size - suffix), size - 1
-    start_str, _, end_str = spec.partition("-")
-    try:
-        start = int(start_str)
-        end = int(end_str) if end_str else size - 1
-    except ValueError:
-        return None
-    if start < 0 or start >= size:
-        return None
+    start = int(start_str)
+    if start >= size:
+        raise RangeNotSatisfiable
+    end = int(end_str) if end_str else size - 1
     end = min(end, size - 1)
     if end < start:
-        return None
+        raise RangeNotSatisfiable
     return start, end
 
 
@@ -1684,7 +1688,7 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
         raise HTTPException(status_code=404, detail="Track not found")
     filename, size, storage_path = info.filename, info.size_bytes, info.storage_path
 
-    media_type = mimetypes.guess_type(filename)[0] or "audio/mpeg"
+    media_type = "audio/webm" if filename.lower().endswith(".weba") else mimetypes.guess_type(filename)[0] or "audio/mpeg"
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Disposition": (
@@ -1695,12 +1699,16 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
     }
     range_header = request.headers.get("range")
     if range_header:
-        range_match = _parse_range_header(range_header, size)
-        if range_match is None:
+        try:
+            range_match = _parse_range_header(range_header, size)
+        except RangeNotSatisfiable:
             return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
-        start, end = range_match
-        status_code = 206
-        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        if range_match is None:
+            start, end, status_code = 0, size - 1, 200
+        else:
+            start, end = range_match
+            status_code = 206
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     else:
         start, end, status_code = 0, size - 1, 200
     headers["Content-Length"] = str(end - start + 1)
@@ -1737,6 +1745,7 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
 
     # Legacy track whose audio is still in Postgres: fetch just the slice.
     payload = library.read_range(track_id, start, end) or b""
+    headers["Content-Length"] = str(len(payload))
     return Response(content=payload, status_code=status_code, media_type=media_type, headers=headers)
 
 
