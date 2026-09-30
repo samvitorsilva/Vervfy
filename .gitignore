@@ -14,6 +14,7 @@ env/
 !.env.example
 
 # Vervfy user/library data
+/app.js
 data/*
 !data/.gitkeep
 

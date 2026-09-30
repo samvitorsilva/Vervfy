@@ -101,6 +101,20 @@ Vervfy sends a `Content-Security-Policy-Report-Only` header. Check the browser
 console for violations after deployment, then change it to an enforcing
 `Content-Security-Policy` header when the policy is confirmed to be complete.
 
+### Manual release checks
+
+- **Repeat:** play a queue, cycle repeat through all, one, and off, then confirm
+  repeat-one restarts the current track, repeat-all advances from the last track
+  to the first, and repeat-off stops at the end.
+- **iOS lock screen:** start playback in Safari on an iPhone, lock the screen,
+  and verify audio continues and lock-screen play/pause and track controls work.
+- **Offline app shell:** load the app once, disconnect the device, and verify
+  the cached shell still opens. Confirm audio playback and online lyrics remain
+  unavailable while offline.
+- **Rate-limited bulk upload:** upload a batch of at least 60 files and confirm
+  rate-limited requests retry within their advertised delay, then either
+  complete or report a visible failure without silently dropping files.
+
 ---
 
 ## Keyboard shortcuts

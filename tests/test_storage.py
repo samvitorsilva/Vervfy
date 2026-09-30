@@ -336,6 +336,49 @@ def test_upload_preserves_multiple_artist_tags(env, monkeypatch):
     assert metadata[0:3] == ("Song", "Singer One; Singer Two", "Album")
 
 
+@pytest.fixture
+def embedded_cover_png():
+    from PIL import Image
+    image = Image.new("RGB", (8, 8), color=(40, 120, 200))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("extension", [".mp3", ".flac", ".m4a"])
+def test_extracts_embedded_covers_from_mp3_flac_and_m4a(
+    env, tmp_path, monkeypatch, embedded_cover_png, extension
+):
+    _, _, _, _, _ = env
+    import library
+    from types import SimpleNamespace
+
+    path = tmp_path / f"tagged{extension}"
+    if extension == ".mp3":
+        tags = library.ID3()
+        tags.add(library.APIC(
+            encoding=3,
+            mime="image/png",
+            type=3,
+            desc="Cover",
+            data=embedded_cover_png,
+        ))
+        tags.save(path)
+    else:
+        path.write_bytes(b"fixture")
+        if extension == ".flac":
+            parsed = SimpleNamespace(pictures=[SimpleNamespace(data=embedded_cover_png)])
+        else:
+            parsed = SimpleNamespace(tags={"covr": [embedded_cover_png]})
+        monkeypatch.setattr(library, "MutagenFile", lambda *_args, **_kwargs: parsed)
+
+    cover = library._extract_cover(str(path), extension)
+
+    assert cover is not None
+    assert cover.size == (8, 8)
+    assert cover.getpixel((0, 0)) == (40, 120, 200)
+
+
 def test_async_upload_runs_under_the_job_tenant(env):
     server, client, fake, headers, monkeypatch = env
     import upload_queue
@@ -552,6 +595,16 @@ def test_stream_relays_only_requested_range(env):
         assert r.content == data
 
 
+def test_weba_stream_uses_webm_media_type(env):
+    _, client, _, headers, _ = env
+    track_id = upload(client, headers, make_wav(), name="song.weba").json()["id"]
+
+    response = client.get(f"/api/tracks/{track_id}/stream")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/webm")
+
+
 def test_stream_slices_when_storage_ignores_range(env):
     server, client, fake, headers, _ = env
     data = make_wav(seconds=2)
@@ -724,6 +777,7 @@ def test_legacy_rows_still_stream_by_slice_and_migrate(env, tmp_path):
         assert row.storage_path is None and bytes(row.audio_data) == data
     r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": "bytes=10-19"})
     assert r.status_code == 206 and r.content == data[10:20]
+    assert r.headers["content-length"] == "10"
     assert client.get(f"/api/tracks/{track_id}/tag-head").content == data[:10]
     assert fake.objects == {}
 
@@ -747,6 +801,7 @@ def test_legacy_rows_still_stream_by_slice_and_migrate(env, tmp_path):
     fake.bytes_served = 0
     r = client.get(f"/api/tracks/{track_id}/stream", headers={"Range": "bytes=10-19"})
     assert r.status_code == 206 and r.content == data[10:20]
+    assert r.headers["content-length"] == "10"
     assert fake.bytes_served == 10
 
 

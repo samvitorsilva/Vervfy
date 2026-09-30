@@ -236,6 +236,59 @@ const response = (status, retryAfter = null) => ({
     assert result.returncode == 0, result.stderr
 
 
+def test_repeat_mode_cycle_and_auto_advance():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is required to exercise browser repeat behavior")
+    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    start = app_js.index("function playNext(auto=false){")
+    end = app_js.index("\nfunction playPrev", start)
+    play_next = app_js[start:end]
+    start = app_js.index("function cycleRepeat(){")
+    end = app_js.index("\n}", start) + 2
+    cycle_repeat = app_js[start:end]
+    script = """
+const assert = require("node:assert/strict");
+const state = {queue:[{id:"one"},{id:"two"}], queueIndex:0, repeat:"off", shuffle:false,
+  shufflePlayed:new Set()};
+let currentPlays = 0, pauses = 0;
+let audioEl = {currentTime:12, paused:false, play(){ return Promise.resolve(); }, pause(){ pauses++; }};
+let playbackRequest = 0;
+function playCurrent(){ currentPlays++; }
+function updateTransportModeUI(){}
+function saveSettings(){}
+function toast(){}
+""" + play_next + "\n" + cycle_repeat + """
+cycleRepeat();
+assert.equal(state.repeat, "all");
+cycleRepeat();
+assert.equal(state.repeat, "one");
+cycleRepeat();
+assert.equal(state.repeat, "off");
+
+state.repeat = "one";
+state.queueIndex = 0;
+playNext(true);
+assert.equal(state.queueIndex, 0);
+assert.equal(audioEl.currentTime, 0);
+assert.equal(currentPlays, 0);
+
+state.repeat = "all";
+state.queueIndex = 1;
+playNext(true);
+assert.equal(state.queueIndex, 0);
+assert.equal(currentPlays, 1);
+
+state.repeat = "off";
+state.queueIndex = 1;
+playNext(true);
+assert.equal(state.queueIndex, 1);
+assert.equal(pauses, 1);
+""";
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_server_track_sync_preserves_resolved_lyrics_state():
     node = shutil.which("node")
     if node is None:
@@ -716,12 +769,18 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
 def test_login_returns_503_when_login_rate_limit_backend_is_unavailable(app_module, monkeypatch):
     server, client = app_module
     _register(client)
+    login_client = TestClient(server.app)
+    csrf_token = _csrf(login_client)
 
     def unavailable(*_args):
         raise RuntimeError("rate-limit backend unavailable")
 
     monkeypatch.setattr(server.login_throttle, "is_locked", unavailable)
-    response = _login(client)
+    response = login_client.post(
+        "/login",
+        data={"username": "alice", "password": "old-password", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
     assert response.status_code == 503
     assert "Service temporarily unavailable, try again shortly" in response.text
 
@@ -820,6 +879,60 @@ def test_library_state_etag_rejects_stale_and_missing_preconditions(app_module):
     assert stale.status_code == 409
     assert stale.headers["etag"] == first.headers["etag"]
     assert client.get("/api/library/state").json()["playlists"][0]["id"] == "new-list"
+
+
+def test_playlist_order_and_etag_round_trip(app_module):
+    _, client = app_module
+    _register(client)
+    headers = _library_state_headers(client)
+    playlists = [
+        {"id": "second-list", "name": "Second", "trackIds": []},
+        {"id": "first-list", "name": "First", "trackIds": []},
+    ]
+
+    saved = client.put(
+        "/api/library/state",
+        headers=headers,
+        json={"favorites": [], "playlists": playlists},
+    )
+    assert saved.status_code == 200
+    assert [item["id"] for item in saved.json()["playlists"]] == [
+        "second-list",
+        "first-list",
+    ]
+
+    fetched = client.get("/api/library/state")
+    assert fetched.json()["playlists"] == saved.json()["playlists"]
+    assert fetched.headers["etag"] == saved.headers["etag"]
+
+
+def test_playlist_id_collision_between_users_is_rejected(app_module):
+    server, client_a = app_module
+    _register(client_a, username="alice")
+    client_b = TestClient(server.app)
+    _register(client_b, username="bob")
+
+    first = client_a.put(
+        "/api/library/state",
+        headers=_library_state_headers(client_a),
+        json={"favorites": [], "playlists": [
+            {"id": "shared-list-id", "name": "Alice's list", "trackIds": []},
+        ]},
+    )
+    assert first.status_code == 200
+    before = client_b.get("/api/library/state")
+
+    collision = client_b.put(
+        "/api/library/state",
+        headers=_library_state_headers(client_b),
+        json={"favorites": [], "playlists": [
+            {"id": "shared-list-id", "name": "Bob's list", "trackIds": []},
+        ]},
+    )
+    assert collision.status_code == 409
+    assert client_b.get("/api/library/state").json()["playlists"] == []
+    assert client_b.get("/api/library/state").headers["etag"] == before.headers["etag"]
+    assert client_a.get("/api/library/state").json()["playlists"][0]["name"] == "Alice's list"
 
 
 def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypatch):
