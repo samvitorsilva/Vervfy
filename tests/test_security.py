@@ -353,7 +353,7 @@ assert.equal(legacyExisting.lyricsResolved, true);
 assert.equal(legacyExisting.lyrics.lines[0].text, "cached lyric");
 const metadataExisting = {
   id:"metadata", title:"Old title", artist:"Artist", album:"Album", duration:10, art:"cover",
-  customLyrics:null, lyrics:{source:"online-synced", lines:[{time:0,text:"stale"}]},
+  customLyrics:null, lyrics:{source:"sylt", lines:[{time:0,text:"embedded timed line"}]},
   lyricsResolved:true, lyricsLoading:false,
 };
 const metadataMerged = mergeServerTrack(metadataExisting, {
@@ -361,8 +361,9 @@ const metadataMerged = mergeServerTrack(metadataExisting, {
   custom_lyrics:null,
 });
 assert.equal(metadataMerged.track, metadataExisting);
-assert.equal(metadataExisting.lyrics, null);
-assert.equal(metadataExisting.lyricsResolved, false);
+assert.equal(metadataExisting.lyrics.source, "sylt");
+assert.equal(metadataExisting.lyrics.lines[0].text, "embedded timed line");
+assert.equal(metadataExisting.lyricsResolved, true);
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

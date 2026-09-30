@@ -1495,12 +1495,19 @@ body.mini-mode .mini-player{ display:block; }
   position:relative;
   border-radius:0 26px 26px 0;
   border-left:0;
+  /* Keep the translucent fill inside the antialiased border without clipping
+     rail tooltips or the rail's own shadow. */
+  background-clip:padding-box;
 }
 .nowbar.glass{
   position:fixed;
-  overflow:hidden;
+  /* This is a paint clip, not a scrolling container.  It clips player
+     contents to the rounded surface without adding a scrolling/compositing
+     layer at the corners. */
+  overflow:clip;
   border-radius:26px 26px 0 0;
   background:rgba(255,255,255,var(--glass-tint-alpha,.06));
+  background-clip:padding-box;
 }
 .mini-player.glass{ position:fixed; }
 .lyrics-player.glass{ position:absolute; }

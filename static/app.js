@@ -1057,7 +1057,12 @@ function mergeServerTrack(existing, payload){
   const metadataChanged = previousTrackData.slice(0, 4).some((value, index) => value !== currentTrackData[index]);
   if(previousCustomLyrics === customLyrics){
     existing.customLyrics = previousCustomLyrics;
-    if(metadataChanged && !customLyrics){
+    // A track id is derived from the audio bytes, so a server-side metadata
+    // correction does not make its embedded/LRC timing belong to another
+    // recording.  Dropping these lines here forced the next resolver pass to
+    // accept a plain online lyric result, losing highlighting and seek-to-line.
+    // Re-resolve only when there is no timing data to preserve.
+    if(metadataChanged && !customLyrics && !previousLyrics?.lines?.length){
       existing.lyrics = null;
       existing.lyricsResolved = false;
       existing.lyricsLoading = false;
@@ -1086,6 +1091,27 @@ async function loadOfflineTracks(accountId = activeAccountId){
   return records
     .filter(record => record.accountId === accountId)
     .map(offlineTrackFromRecord);
+}
+
+// A desktop renderer can be suspended while the machine sleeps.  Re-read the
+// durable downloads when it wakes before the server reconciliation runs; the
+// latter only knows about the in-memory `offline` flag.
+async function restoreOfflineTracks(accountId = activeAccountId){
+  if(!accountId) return false;
+  const records = (await AuralisDB.getAll(OFFLINE_STORE))
+    .filter(record => record.accountId === accountId);
+  let restored = false;
+  for(const record of records){
+    const trackId = record.trackId || record.id;
+    const existing = state.tracks.find(track => track.id === trackId);
+    if(existing?.offline) continue;
+    const offlineTrack = offlineTrackFromRecord(record);
+    if(existing) Object.assign(existing, offlineTrack, {favorite:existing.favorite});
+    else state.tracks.push(offlineTrack);
+    restored = true;
+  }
+  if(restored) render();
+  return restored;
 }
 
 async function fetchBlob(url){
@@ -3900,8 +3926,12 @@ async function ensureAccountIdentity(){
       return null;
     }
     if(!response.ok){
-      activeAccountId = null;
-      return null;
+      // A renderer waking from sleep can see a transient gateway/rate-limit
+      // response before the network stack recovers. Keep the locally scoped
+      // identity in that case so its IndexedDB downloads remain available.
+      const cachedId = await AuralisDB.get("auralis:account-id");
+      activeAccountId = typeof cachedId === "string" ? cachedId : null;
+      return activeAccountId;
     }
     try{
       accountInfo = await response.json();
@@ -4914,7 +4944,11 @@ document.addEventListener("visibilitychange", ()=>{
   if(document.hidden){ if(rafViz){ cancelAnimationFrame(rafViz); rafViz=null; } }
   else {
     if($("#vizOverlay")?.classList.contains("open") && !rafViz) drawViz();
-    syncServerLibrary();
+    // Wake can resume with a stale or reclaimed renderer state. Restore the
+    // locally persisted tracks first, then merge any server changes into it.
+    ensureAccountIdentity()
+      .then(accountId => restoreOfflineTracks(accountId))
+      .finally(syncServerLibrary);
   }
 });
 

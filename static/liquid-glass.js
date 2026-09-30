@@ -22,10 +22,20 @@
   const filterStates = new WeakMap();
   const reducedTransparency = matchMedia("(prefers-reduced-transparency: reduce)");
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  const desktopLayout = matchMedia("(min-width: 641px)");
   const supportsSvgBackdropFilter =
     CSS.supports("backdrop-filter", "blur(2px) url(#liquid-glass-test) saturate(1.5)");
   let nextFilterId = 0;
   let lastPointerSurface = null;
+
+  // SVG displacement is useful on small floating glass controls, but it makes
+  // the browser resample the backdrop at the viewport-bound rounded edges of
+  // the desktop rail and player.  Keep those stable surfaces on the native
+  // backdrop path so their antialiased corners stay in the same compositing
+  // layer as their background while scrolling or resizing.
+  function usesRefractiveBackdrop(element) {
+    return !desktopLayout.matches || !element.matches(".rail, .nowbar");
+  }
 
   function updateArtworkBackdrop() {
     if (!backdrop || !backdropImage || !nowArt) return;
@@ -279,6 +289,7 @@
     const radius = getRadius(element, rect.width, rect.height);
 
     if (
+      usesRefractiveBackdrop(element) &&
       supportsSvgBackdropFilter &&
       !reducedTransparency.matches &&
       (state.mapWidth !== width || state.mapHeight !== height || !state.maps[0].hasAttribute("href"))
@@ -291,7 +302,7 @@
     }
 
     makeSpecularImage(element, state, rect.width, rect.height, radius);
-    if (supportsSvgBackdropFilter && !reducedTransparency.matches) {
+    if (usesRefractiveBackdrop(element) && supportsSvgBackdropFilter && !reducedTransparency.matches) {
       element.style.setProperty("--glass-filter-url", `url(#${state.filter.id})`);
       element.classList.add("refract");
     } else {
@@ -346,7 +357,7 @@
       }
 
       element.classList.add("glass");
-      if (reducedTransparency.matches) {
+      if (reducedTransparency.matches || !usesRefractiveBackdrop(element)) {
         element.classList.remove("refract");
         element.style.removeProperty("--glass-filter-url");
         const state = filterStates.get(element);
@@ -452,4 +463,5 @@
 
   reducedTransparency.addEventListener?.("change", syncGlassSurfaces);
   reducedMotion.addEventListener?.("change", releasePressed);
+  desktopLayout.addEventListener?.("change", syncGlassSurfaces);
 })();
