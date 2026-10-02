@@ -2,11 +2,7 @@ import base64
 from contextvars import ContextVar
 import importlib
 import json
-import re
-import shutil
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 from fastapi import Depends, FastAPI
@@ -30,8 +26,7 @@ def app_module(tmp_path, monkeypatch):
 
 
 def _csrf(client):
-    response = client.get("/login")
-    return re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
+    return client.get("/api/csrf").json()["csrf_token"]
 
 
 def _register(client, username="alice", passphrase="old-password", email=""):
@@ -168,6 +163,8 @@ def test_auth_throttles_count_only_successes_and_failures(app_module, backend):
             follow_redirects=False,
         )
         assert response.status_code == 400
+        assert response.headers["cache-control"] == "no-store"
+        assert isinstance(response.json()["detail"], str)
     response = signup_client.post(
         "/register",
         data={
@@ -191,403 +188,6 @@ def test_production_requires_stable_session_secret(app_module, monkeypatch):
         server._load_or_create_secret_key()
 
 
-def test_browser_upload_retries_429_and_caps_retry_wait():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise the browser upload helper")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("async function uploadFileToServer(file){")
-    end = app_js.index("\nasync function deleteTrackOnServer", start)
-    upload_function = app_js[start:end]
-    script = upload_function + """
-const assert = require("node:assert/strict");
-const waits = [];
-let responses = [];
-let calls = 0;
-globalThis.FormData = class { append() {} };
-globalThis.ensureCsrfToken = async () => "csrf";
-globalThis.wait = async ms => waits.push(ms);
-globalThis.trackFromServer = value => value;
-globalThis.fetch = async () => { calls++; return responses.shift(); };
-const response = (status, retryAfter = null) => ({
-  status,
-  ok: status >= 200 && status < 300,
-  headers: { get: name => name === "Retry-After" ? retryAfter : null },
-  json: async () => ({ id: "track" }),
-});
-(async () => {
-  responses = [response(429, "2"), response(429, "60"), response(200)];
-  assert.equal((await uploadFileToServer({ name: "song.mp3" })).id, "track");
-  assert.equal(calls, 3);
-  assert.deepEqual(waits, [2000, 30000]);
-
-  calls = 0;
-  waits.length = 0;
-  responses = [response(429), response(429), response(429), response(429)];
-  await assert.rejects(
-    uploadFileToServer({ name: "song.mp3" }),
-    error => error.status === 429 && error.message.includes("rate limited"),
-  );
-  assert.equal(calls, 4);
-  assert.deepEqual(waits, [1000, 1000, 1000]);
-})().catch(error => { console.error(error); process.exitCode = 1; });
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_repeat_mode_cycle_and_auto_advance():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise browser repeat behavior")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("function playNext(auto=false){")
-    end = app_js.index("\nfunction playPrev", start)
-    play_next = app_js[start:end]
-    start = app_js.index("function cycleRepeat(){")
-    end = app_js.index("\n}", start) + 2
-    cycle_repeat = app_js[start:end]
-    script = """
-const assert = require("node:assert/strict");
-const state = {queue:[{id:"one"},{id:"two"}], queueIndex:0, repeat:"off", shuffle:false,
-  shufflePlayed:new Set()};
-let currentPlays = 0, pauses = 0;
-let audioEl = {currentTime:12, paused:false, play(){ return Promise.resolve(); }, pause(){ pauses++; }};
-let playbackRequest = 0;
-function playCurrent(){ currentPlays++; }
-function updateTransportModeUI(){}
-function saveSettings(){}
-function toast(){}
-""" + play_next + "\n" + cycle_repeat + """
-cycleRepeat();
-assert.equal(state.repeat, "all");
-cycleRepeat();
-assert.equal(state.repeat, "one");
-cycleRepeat();
-assert.equal(state.repeat, "off");
-
-state.repeat = "one";
-state.queueIndex = 0;
-playNext(true);
-assert.equal(state.queueIndex, 0);
-assert.equal(audioEl.currentTime, 0);
-assert.equal(currentPlays, 0);
-
-state.repeat = "all";
-state.queueIndex = 1;
-playNext(true);
-assert.equal(state.queueIndex, 0);
-assert.equal(currentPlays, 1);
-
-state.repeat = "off";
-state.queueIndex = 1;
-playNext(true);
-assert.equal(state.queueIndex, 1);
-assert.equal(pauses, 1);
-""";
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_server_track_sync_preserves_resolved_lyrics_state():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise the browser lyrics sync helper")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("function applyServerCustomLyrics(track, payload){")
-    end = app_js.index("\nasync function loadOfflineTracks", start)
-    helpers = app_js[start:end]
-    script = """
-const LyricsEngine = {fromLRC: value => ({source:"custom", text:value})};
-const normalizeSyncedLyrics = value => value;
-function trackFromServer(payload){
-  return {
-    id: payload.id, title: payload.title, artist: payload.artist,
-    album: payload.album, duration: payload.duration, art: payload.art,
-    fallbackArt: payload.art, streamUrl: payload.stream_url,
-    customLyrics: payload.custom_lyrics || null,
-    lyrics: payload.custom_lyrics ? {source:"custom", text:payload.custom_lyrics} : null,
-    lyricsResolved: !!payload.custom_lyrics, lyricsLoading: false,
-    lyricsPromise: null, fingerprint: payload.id,
-  };
-}
-""" + helpers + """
-const assert = require("node:assert/strict");
-const pending = Promise.resolve("pending");
-const existing = {
-  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
-  customLyrics:null, lyrics:{source:"online-synced", lines:[{time:0,text:"line"}]},
-  lyricsResolved:true, lyricsLoading:true, lyricsPromise:pending, favorite:true,
-};
-const merged = mergeServerTrack(existing, {
-  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
-  custom_lyrics:null,
-});
-assert.equal(merged.track, existing);
-assert.equal(existing.lyricsResolved, true);
-assert.equal(existing.lyricsLoading, true);
-assert.equal(existing.lyricsPromise, pending);
-assert.equal(existing.lyrics.source, "online-synced");
-assert.equal(merged.changed, false);
-const changed = mergeServerTrack(existing, {
-  id:"track", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
-  custom_lyrics:"new lyrics",
-});
-assert.equal(changed.track, existing);
-assert.equal(changed.changed, true);
-assert.equal(existing.lyricsResolved, true);
-assert.equal(existing.lyricsLoading, false);
-assert.equal(existing.lyricsPromise, null);
-assert.equal(existing.lyrics.text, "new lyrics");
-const legacyExisting = {
-  id:"legacy", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
-  lyrics:{source:"online-synced", lines:[{time:0,text:"cached lyric"}]},
-  lyricsResolved:true, lyricsLoading:false,
-};
-const legacyMerged = mergeServerTrack(legacyExisting, {
-  id:"legacy", title:"Song", artist:"Artist", album:"Album", duration:10, art:"cover",
-  custom_lyrics:null,
-});
-assert.equal(legacyMerged.changed, false);
-assert.equal(legacyExisting.lyricsResolved, true);
-assert.equal(legacyExisting.lyrics.lines[0].text, "cached lyric");
-const metadataExisting = {
-  id:"metadata", title:"Old title", artist:"Artist", album:"Album", duration:10, art:"cover",
-  customLyrics:null, lyrics:{source:"sylt", lines:[{time:0,text:"embedded timed line"}]},
-  lyricsResolved:true, lyricsLoading:false,
-};
-const metadataMerged = mergeServerTrack(metadataExisting, {
-  id:"metadata", title:"New title", artist:"Artist", album:"Album", duration:10, art:"cover",
-  custom_lyrics:null,
-});
-assert.equal(metadataMerged.track, metadataExisting);
-assert.equal(metadataExisting.lyrics.source, "sylt");
-assert.equal(metadataExisting.lyrics.lines[0].text, "embedded timed line");
-assert.equal(metadataExisting.lyricsResolved, true);
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_artist_without_portrait_uses_track_artwork():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise artist artwork selection")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("function getArtists(){")
-    end = app_js.index("\nfunction artistViewKey", start)
-    get_artists = app_js[start:end]
-    script = """
-const state = {tracks:[
-  {
-    id:"collab", artist:"Main Artist", artists:["Main Artist", "Featured Artist"],
-    title:"Collaboration", album:"Shared", duration:180,
-    art:"shared-cover", fallbackArt:"shared-fallback",
-  },
-  {
-    id:"featured-own", artist:"Featured Artist", artists:["Featured Artist"],
-    title:"Solo", album:"Solo", duration:200,
-    art:"featured-cover", fallbackArt:"featured-fallback",
-  },
-]};
-const artistsOf = track => track.artists;
-const artistKey = name => String(name || "").toLowerCase();
-const splitArtistCreditList = artist => [artist];
-const artistNameOf = track => track.artist;
-""" + get_artists + """
-const assert = require("node:assert/strict");
-const artists = Object.fromEntries(getArtists().map(artist => [artist.name, artist]));
-assert.equal(artists["Featured Artist"].art, "featured-cover");
-assert.equal(artists["Featured Artist"].fallbackArt, "featured-fallback");
-assert.equal(artists["Main Artist"].art, "shared-cover");
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_library_state_refresh_keeps_local_edits_and_remote_changes():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise browser library-state merging")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("let libraryMetaSaveQueue = Promise.resolve();")
-    end = app_js.index("\nasync function persistLibraryMeta", start)
-    helpers = app_js[start:end]
-    script = """
-const state = {tracks:[], playlists:[]};
-const window = {};
-""" + helpers + """
-const assert = require("node:assert/strict");
-const baseline = {
-  favorites:["favorite-before"],
-  playlists:[{id:"local-list", name:"Original", trackIds:["one"]}],
-};
-const remote = {
-  favorites:["favorite-before", "favorite-remote"],
-  playlists:[
-    {id:"local-list", name:"Original", trackIds:["one"]},
-    {id:"remote-list", name:"Remote", trackIds:["two"]},
-  ],
-};
-const local = {
-  favorites:[],
-  playlists:[{id:"local-list", name:"Edited locally", trackIds:["one","three"]}],
-};
-const merged = mergeUnsavedLibraryMeta(remote, baseline, local);
-assert.deepEqual(merged.favorites, ["favorite-remote"]);
-assert.deepEqual(merged.playlists, [
-  {id:"local-list", name:"Edited locally", trackIds:["one","three"]},
-  {id:"remote-list", name:"Remote", trackIds:["two"]},
-]);
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_lrclib_rejects_distant_duration_candidates():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise LRCLIB lookup")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("const LyricsEngine = (() => {")
-    end = app_js.index("\nfunction normalizeSyncedLyrics", start)
-    engine = app_js[start:end]
-    script = """
-const LyricsDebug = {log(){}, warn(){}};
-function splitArtistCreditList(artist){ return String(artist || "").split(/,\\s*/); }
-let candidates = [];
-let calls = 0;
-globalThis.fetch = async (url, options) => {
-  calls++;
-  assert.ok(options.signal instanceof AbortSignal);
-  if(url.includes("/get?")) return {status:404, ok:false};
-  return {status:200, ok:true, json:async () => candidates};
-};
-""" + engine + """
-const assert = require("node:assert/strict");
-(async () => {
-  const track = {title:"Song", artist:"Artist", album:"Album", duration:180};
-  candidates = [{trackName:"Song", artistName:"Artist", duration:195, plainLyrics:"wrong"}];
-  assert.equal(await LyricsEngine.fromOnline(track), null);
-  assert.equal(calls, 3);
-  candidates = [{trackName:"Song", artistName:"Artist", duration:183, plainLyrics:"right"}];
-  calls = 0;
-  assert.deepEqual(await LyricsEngine.fromOnline(track), {source:"online-plain", text:"right"});
-  assert.equal(calls, 2);
-
-  // Unknown duration still requires an exact title/artist identity match.
-  candidates = [
-    {trackName:"Other", artistName:"Artist", duration:180, plainLyrics:"wrong"},
-    {trackName:"Song (Remastered 2011)", artistName:"Artist", duration:181, syncedLyrics:"[00:01.00]right"},
-  ];
-  calls = 0;
-  const undated = {title:"Song", artist:"Artist", album:"Album", duration:0};
-  const synced = await LyricsEngine.fromOnline(undated);
-  assert.equal(synced.source, "online-synced");
-  assert.equal(synced.lines[0].text, "right");
-  assert.equal(calls, 1);
-
-  // Ignore a bogus short result but accept the correct collaboration match
-  // when release runtimes differ slightly from the uploaded file.
-  candidates = [
-    {trackName:"Raindance", artistName:"Dave, Tems", duration:3, syncedLyrics:"[00:01.00]wrong"},
-    {trackName:"Raindance", artistName:"Dave, Tems", duration:221, syncedLyrics:"[00:17.86]opening line"},
-  ];
-  calls = 0;
-  const raindance = await LyricsEngine.fromOnline({
-    title:"Raindance", artist:"Dave, Tems", album:"Album", duration:234,
-  });
-  assert.equal(raindance.source, "online-synced");
-  assert.equal(raindance.lines[0].time, 17860);
-  assert.equal(raindance.lines[0].text.trim(), "opening line");
-  assert.equal(calls, 2);
-})().catch(error => { console.error(error); process.exitCode = 1; });
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_synced_lyrics_active_line_uses_timestamp_boundaries():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise browser lyrics synchronization")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("function activeLyricsIndex(lines, timeMs){")
-    end = app_js.index("\nasync function fetchArtistCatalog", start)
-    helper = app_js[start:end]
-    script = helper + """
-const assert = require("node:assert/strict");
-const lines = [
-  {time:17860, text:"first"},
-  {time:19370, text:"second"},
-  {time:21740, text:"third"},
-];
-assert.equal(activeLyricsIndex(lines, 0), -1);
-assert.equal(activeLyricsIndex(lines, 17859), -1);
-assert.equal(activeLyricsIndex(lines, 17860), 0);
-assert.equal(activeLyricsIndex(lines, 20000), 1);
-assert.equal(activeLyricsIndex(lines, 30000), 2);
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_lyrics_cache_includes_not_found_results():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise browser lyrics caching")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("function ensureTrackLyrics(track){")
-    end = app_js.index("\nfunction updateNowPlayingUI", start)
-    resolver = app_js[start:end]
-    script = """
-const LyricsDebug = {log(){}, warn(){}};
-const activeAccountId = "account";
-const entries = new Map();
-const AuralisDB = {
-  get: async key => entries.get(key) || null,
-  set: async (key, value) => { entries.set(key, value); return true; },
-};
-const LyricsEngine = {fromID3(){return null;}, fromOnline:async () => {onlineLookups++; return null;}};
-const lyricsLookupFingerprint = track => JSON.stringify([
-  track?.title || "", track?.artist || "", track?.album || "", Number(track?.duration) || 0,
-]);
-let onlineLookups = 0, headRequests = 0;
-globalThis.fetch = async () => {headRequests++; return {ok:false};};
-let track;
-const currentTrack = () => track;
-const updateMobileLyricsPreview = () => {};
-const $ = () => ({classList:{contains:()=>false}});
-""" + resolver + """
-const assert = require("node:assert/strict");
-(async () => {
-  track = {id:"track", title:"Song", artist:"Artist", album:"Album", duration:10,
-    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
-  await ensureTrackLyrics(track);
-  track = {id:"track", title:"Song", artist:"Artist", album:"Album", duration:10,
-    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
-  await ensureTrackLyrics(track);
-  assert.equal(headRequests, 1);
-  assert.equal(onlineLookups, 1);
-  assert.equal(track.lyricsResolved, true);
-  assert.equal(entries.get("lyrics:account:track").lyrics, null);
-  track = {id:"track", title:"Updated Song", artist:"Artist", album:"Album", duration:10,
-    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
-  await ensureTrackLyrics(track);
-  assert.equal(headRequests, 2);
-  assert.equal(onlineLookups, 2);
-  entries.get("lyrics:account:track").checkedAt = Date.now() - 4 * 24 * 60 * 60 * 1000;
-  track = {id:"track", title:"Updated Song", artist:"Artist", album:"Album", duration:10,
-    customLyrics:null, lyrics:null, lyricsResolved:false, lyricsLoading:false};
-  await ensureTrackLyrics(track);
-  assert.equal(headRequests, 3);
-  assert.equal(onlineLookups, 3);
-})().catch(error => { console.error(error); process.exitCode = 1; });
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
 def _reload_server(tmp_path, monkeypatch, env_name, env_value):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / (env_name + '.db')}")
     monkeypatch.setenv("VERVFY_SECRET_KEY", env_name + "-secret")
@@ -595,64 +195,6 @@ def _reload_server(tmp_path, monkeypatch, env_name, env_value):
     for name in ("server", "auth", "db", "database"):
         sys.modules.pop(name, None)
     return importlib.import_module("server")
-
-
-def test_sleep_timer_stops_playback_and_can_be_canceled():
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node.js is required to exercise the browser sleep timer")
-    app_js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
-    start = app_js.index("let sleepTimer = null;")
-    end = app_js.index("\nfunction playCurrent(){", start)
-    timer_code = app_js[start:end]
-    script = """
-const assert = require("node:assert/strict");
-const timers = new Map();
-let nextTimerId = 0;
-let paused = 0, stopped = 0, lastToast = "";
-const audioEl = {pause(){ paused++; }};
-const syncPlayIcons = () => {};
-const toast = message => { lastToast = message; };
-const currentTrack = () => ({id:"track"});
-const fmtTime = value => `${value}s`;
-const $ = selector => ({
-  classList:{remove(){}},
-  textContent:"",
-  hidden:false,
-  focus(){},
-  ...(selector === "#sleepTimerStatus" ? {set textContent(value){this.value=value;}, get textContent(){return this.value;}} : {}),
-});
-const setTimeout = (callback, delay) => {
-  const id = ++nextTimerId;
-  timers.set(id, {callback, delay});
-  return id;
-};
-const clearTimeout = id => timers.delete(id);
-""" + timer_code + """
-startSleepTimer(5);
-assert.equal(timers.size, 1);
-const [timerId, timer] = [...timers.entries()][0];
-assert.equal(timer.delay, 5 * 60 * 1000);
-timers.delete(timerId);
-timer.callback();
-assert.equal(paused, 1);
-assert.match(lastToast, /Sleep timer ended/);
-assert.equal(sleepTimer, null);
-
-startSleepTimer(10);
-const [cancelId, canceled] = [...timers.entries()][0];
-clearSleepTimer();
-canceled.callback();
-assert.equal(paused, 1);
-assert.equal(timers.has(cancelId), false);
-
-setSleepTimerForTrackEnd();
-assert.equal(stopAtTrackEnd(), true);
-assert.equal(paused, 2);
-assert.equal(stopAtTrackEnd(), false);
-"""
-    result = subprocess.run([node, "-e", script], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
 
 
 def test_sync_dependency_contextvar_is_not_visible_to_endpoint_or_sqlalchemy(tmp_path):
@@ -723,28 +265,22 @@ def test_production_can_use_synchronous_uploads_without_worker(tmp_path, monkeyp
 def test_hsts_only_when_https_only(tmp_path, monkeypatch):
     server = _reload_server(tmp_path, monkeypatch, "VERVFY_HTTPS_ONLY", "1")
     with TestClient(server.app) as client:
-        assert client.get("/login").headers["strict-transport-security"] == "max-age=15552000"
+        assert client.get("/api/csrf").headers["strict-transport-security"] == "max-age=15552000"
 
     monkeypatch.setenv("VERVFY_HTTPS_ONLY", "0")
     server = importlib.reload(server)
     with TestClient(server.app) as client:
-        assert "strict-transport-security" not in client.get("/login").headers
+        assert "strict-transport-security" not in client.get("/api/csrf").headers
 
 
-def test_index_uses_public_url_and_sends_csp_report_only(app_module, monkeypatch):
+def test_backend_does_not_serve_legacy_ui(app_module):
     _, client = app_module
-    _register(client)
-    monkeypatch.setenv("VERVFY_PUBLIC_URL", "https://music.example.test/")
-    response = client.get("/")
-    assert response.status_code == 200
-    assert "https://music.example.test" in response.text
-    assert response.headers["content-security-policy-report-only"] == (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; "
-        "img-src 'self' data: blob: https://*.dzcdn.net; media-src 'self' blob:; "
-        "connect-src 'self' https://lrclib.net; frame-ancestors 'none'"
-    )
+    assert client.get("/").status_code == 404
+    assert client.get("/login").status_code == 405
+    assert client.get("/register").status_code == 405
+    assert client.get("/logout").status_code == 405
+    assert client.get("/sw.js").status_code == 404
+    assert client.get("/static/app.js").status_code == 404
 
 
 def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
@@ -762,8 +298,7 @@ def test_unknown_username_verifies_dummy_hash_once(app_module, monkeypatch):
     monkeypatch.setattr(server.auth, "verify_password", spy)
     unknown = _login(login_client, username="nobody")
     assert unknown.status_code == real.status_code == 400
-    assert "Incorrect username or password" in unknown.text
-    assert "Incorrect username or password" in real.text
+    assert unknown.json()["detail"] == real.json()["detail"] == "Incorrect username or password"
     assert len(calls) == 1
 
 
@@ -783,7 +318,7 @@ def test_login_returns_503_when_login_rate_limit_backend_is_unavailable(app_modu
         follow_redirects=False,
     )
     assert response.status_code == 503
-    assert "Service temporarily unavailable, try again shortly" in response.text
+    assert response.json()["detail"] == "Service temporarily unavailable, try again shortly"
 
 
 def test_login_requires_username_even_when_account_has_email(app_module):
@@ -793,7 +328,7 @@ def test_login_requires_username_even_when_account_has_email(app_module):
 
     failed = _login(login_client, username="ALICE@example.com", passphrase="wrong-password")
     assert failed.status_code == 400
-    assert 'value="ALICE@example.com"' in failed.text
+    assert failed.json()["detail"] == "Incorrect username or password"
 
     email_login = _login(login_client, username="alice@example.com")
     assert email_login.status_code == 400
@@ -1071,11 +606,12 @@ def test_logout_redirects_even_with_stale_csrf_token(app_module):
     assert client.get("/api/me").status_code == 401
 
 
-def test_login_form_is_not_cached(app_module):
+def test_anonymous_csrf_bootstrap_is_json_and_not_cached(app_module):
     _, client = app_module
-    response = client.get("/login")
+    response = client.get("/api/csrf")
 
     assert response.headers["cache-control"] == "no-store"
+    assert isinstance(response.json()["csrf_token"], str)
 
 
 def test_cookie_without_session_version_is_valid_at_zero(app_module):

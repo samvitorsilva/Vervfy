@@ -103,8 +103,7 @@ def env(tmp_path, monkeypatch):
     audio_store._transport = httpx.MockTransport(fake.handler)
     server = importlib.import_module("server")
     with TestClient(server.app) as client:
-        csrf = client.get("/login")
-        token = re.search(r'name="csrf_token" value="([^"]+)"', csrf.text).group(1)
+        token = client.get("/api/csrf").json()["csrf_token"]
         r = client.post("/register", data={"username": "alice", "password": "old-password", "email": "", "csrf_token": token},
                         follow_redirects=False)
         assert r.status_code == 303
@@ -118,8 +117,7 @@ def upload(client, headers, data, name="song.wav"):
 
 def register_another_user(server, username="bob"):
     client = TestClient(server.app)
-    csrf_response = client.get("/login")
-    token = re.search(r'name="csrf_token" value="([^"]+)"', csrf_response.text).group(1)
+    token = client.get("/api/csrf").json()["csrf_token"]
     response = client.post(
         "/register",
         data={

@@ -1,6 +1,6 @@
 # Vervfy
 
-A self-hosted music player for the web, built with a modern design that feels unique and user-friendly. 
+A self-hosted music player for the web, built with a modern design that feels unique and user-friendly.
 
 Upload your own files, organize them into playlists, look up lyrics and artist bio, and listen through a player that doesn't feel like an afterthought.
 
@@ -8,7 +8,9 @@ Upload your own files, organize them into playlists, look up lyrics and artist b
 
 ## What it does
 
-Vervfy is a small FastAPI backend paired with a vanilla JS frontend — no framework, no build step, just HTML, CSS, and JavaScript doing the work. 
+Vervfy is a self-hosted music player with a Next.js App Router frontend in
+`web/` and a FastAPI backend for authentication, library data, uploads, and
+audio streaming. Next.js is the only user-facing frontend.
 
 Here's roughly what's in there:
 
@@ -40,11 +42,11 @@ It's built to feel like an app, not a website: responsive on desktop, tablet, an
 
 ## Stack
 
-**Backend** — Python, FastAPI, Uvicorn, SQLAlchemy, PostgreSQL (Supabase), Alembic, bcrypt, Starlette sessions, Jinja2, python-multipart
+**Backend** — Python, FastAPI, Uvicorn, SQLAlchemy, PostgreSQL (Supabase), Alembic, bcrypt, Starlette sessions, python-multipart
 
 **Audio/media** — Mutagen for metadata and ID3 handling, Pillow for artwork
 
-**Frontend** — HTML5, CSS3, vanilla JS, Web Audio API, IndexedDB — no framework required
+**Frontend** — Next.js App Router, React, TypeScript, Zustand, CSS, Web Audio API
 
 ---
 
@@ -57,18 +59,12 @@ vervfy/
 ├── server.py           # the FastAPI app itself — routes, streaming, uploads
 ├── requirements.txt
 │
-├── static/
-│   ├── index.html
-│   ├── app.js
-│   ├── styles.css
-│   ├── auth.css
-│   ├── sw.js
-│   └── gemini-svg.svg
+├── web/               # Next.js app; proxies same-origin requests to FastAPI
+│   ├── src/app/
+│   ├── src/components/
+│   └── public/
 │
-├── templates/
-│   ├── login.html
-│   └── register.html
-│
+├── render.yaml        # Separate Next.js Render web service
 ├── data/
 │
 └── README.md
@@ -78,8 +74,9 @@ vervfy/
 
 ## Hosted app
 
-Vervfy is deployed globally at https://vervfy-app.onrender.com. The free Render
-service may show a starting page while it wakes.
+The FastAPI backend is deployed at
+https://vervfy-app.onrender.com. The Next.js frontend is deployed as a separate
+Render web service and proxies browser API requests to that backend.
 
 ---
 
@@ -91,11 +88,49 @@ photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
 
 ### Deploying on Render
 
-Set `VERVFY_PUBLIC_URL` to the public HTTPS URL of the service. Run database
-migrations before starting the web process: `alembic upgrade head` must finish
-successfully before `uvicorn` starts. When Render terminates TLS in front of
-the application, start Uvicorn with `--proxy-headers --forwarded-allow-ips='*'`
-so forwarded HTTPS headers are trusted.
+The root `render.yaml` defines the `vervfy-next` Node web service. Create or
+update a Render Blueprint from this repository to deploy it. It uses
+`web/` as its root directory and sets `BACKEND_URL` to the existing FastAPI
+service. Render assigns the Next.js service its own public URL; use that URL
+for the new frontend rather than the FastAPI service URL.
+
+For local development, copy `web/.env.example` to `web/.env.local`, set
+`BACKEND_URL` to the FastAPI URL, then run:
+
+```sh
+cd web
+npm ci
+npm run dev
+```
+
+`BACKEND_URL` is required at build and runtime. Requests from the browser stay
+same-origin through Next.js rewrites; audio streams and uploads still go
+directly through those rewrites to FastAPI.
+
+#### Next.js browser smoke tests
+
+Install the Playwright browser once with `cd web && npx playwright install chromium`,
+then run `npm run test:e2e`. The login UI, offline fallback/API exclusion, and
+authenticated full flow run by default against a deterministic local mock
+backend, including playlist creation, repeat-mode cycling, a 60-file upload
+with a simulated `429 Retry-After`, playback, seeking, and byte-range streaming.
+To run the full flow against FastAPI, set `PLAYWRIGHT_BACKEND_URL` to the
+backend URL and `PLAYWRIGHT_USERNAME` / `PLAYWRIGHT_PASSWORD` to a disposable
+account; the mock-only full flow is skipped. To test a deployed Next.js service,
+set `PLAYWRIGHT_BASE_URL` to its URL; otherwise Playwright starts the local app
+on port 3100.
+
+The Next.js service sends a `Content-Security-Policy-Report-Only` policy that
+includes Next.js scripts/styles, Google Fonts, same-origin API/audio requests,
+and LRCLIB. The FastAPI security-header configuration has not been changed;
+its existing report-only header remains in effect until separately approved
+and reviewed for enforcement.
+
+Run database migrations before starting the backend: `alembic upgrade head`
+must finish successfully before `uvicorn` starts. When Render terminates TLS
+in front of the application, start Uvicorn with
+`--proxy-headers --forwarded-allow-ips='*'` so forwarded HTTPS headers are
+trusted.
 
 If the application database role does not own the tables, set
 `MIGRATION_DATABASE_URL` to a PostgreSQL URL for a role that owns them. Alembic
@@ -104,9 +139,9 @@ uses that URL for schema changes, while the running app continues using
 `playlists.position` column; granting ordinary table privileges is not enough.
 If you use only `DATABASE_URL`, that role must own the existing tables.
 
-Vervfy sends a `Content-Security-Policy-Report-Only` header. Check the browser
-console for violations after deployment, then change it to an enforcing
-`Content-Security-Policy` header when the policy is confirmed to be complete.
+Check both services' browser console reports for CSP violations after
+deployment. The policy is report-only intentionally; enforcing CSP requires a
+separate review of both the Next.js and FastAPI response paths.
 
 ### Manual release checks
 
@@ -115,12 +150,18 @@ console for violations after deployment, then change it to an enforcing
   to the first, and repeat-off stops at the end.
 - **iOS lock screen:** start playback in Safari on an iPhone, lock the screen,
   and verify audio continues and lock-screen play/pause and track controls work.
-- **Offline app shell:** load the app once, disconnect the device, and verify
-  the cached shell still opens. Confirm audio playback and online lyrics remain
-  unavailable while offline.
+- **Offline app shell:** load the Next.js app online, reload once so the
+  service worker takes control, then disconnect and reload. The offline shell
+  should open; account data, library API calls, audio/range requests, uploads,
+  and online lyrics must not be served from the service-worker cache.
 - **Rate-limited bulk upload:** upload a batch of at least 60 files and confirm
   rate-limited requests retry within their advertised delay, then either
   complete or report a visible failure without silently dropping files.
+
+The mock-backed 60-file test verifies the frontend retry flow, not the live
+backend's rate limits or persistence. Confirm upload behavior against FastAPI
+with a prepared batch before release. The iOS lock-screen check still requires
+a physical iPhone and Safari.
 
 ---
 

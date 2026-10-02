@@ -1,7 +1,6 @@
 """PostgreSQL RLS integration test; set VERVFY_TEST_POSTGRES_URL to run."""
 import importlib
 import os
-import re
 import sys
 import uuid
 
@@ -87,8 +86,7 @@ def postgres_app(monkeypatch):
 
 
 def _login(client, username, password):
-    response = client.get("/login")
-    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
+    csrf_token = client.get("/api/csrf").json()["csrf_token"]
     response = client.post(
         "/login",
         data={"username": username, "password": password, "csrf_token": csrf_token},

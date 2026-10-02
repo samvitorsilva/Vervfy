@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vervfy — local music player server."""
+"""Vervfy — music library and playback API."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from database import Base, engine
 
 
 from io import BytesIO
-from html import escape as html_escape
 import json
 import asyncio
 import functools
@@ -26,9 +25,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 import httpx
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
@@ -46,7 +43,6 @@ import upload_queue
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
-STATIC_DIR = ROOT / "static"
 SECRET_KEY_PATH = DATA_DIR / ".secret_key"
 
 
@@ -121,8 +117,7 @@ if is_production and configured_same_site == "none" and not https_only:
     raise RuntimeError("SameSite=None requires HTTPS in production")
 app.add_middleware(
     CORSMiddleware,
-    # CORS only — never use this value as an auth redirect Location (open
-    # redirect / broken static hosts caused post-login 404s).
+    # CORS only — never use this value as an auth redirect Location.
     allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:8000")],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -167,9 +162,17 @@ async def add_security_headers(request: Request, call_next):
                     f"auth:{auth.client_ip(request)}:{path}", 30, 15 * 60
                 )
             except RuntimeError:
-                return Response("Rate-limit service unavailable", status_code=503)
+                return JSONResponse(
+                    {"detail": "Rate-limit service unavailable"},
+                    status_code=503,
+                    headers={"Cache-Control": "no-store"},
+                )
             if not allowed:
-                return Response("Too many requests", status_code=429, headers={"Retry-After": "900"})
+                return JSONResponse(
+                    {"detail": "Too many requests"},
+                    status_code=429,
+                    headers={"Retry-After": "900", "Cache-Control": "no-store"},
+                )
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -194,7 +197,6 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 30,  # 30 days
 )
 
-templates = Jinja2Templates(directory=str(ROOT / "templates"))
 user_store = auth.UserStore()
 request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
@@ -840,24 +842,6 @@ def current_user_row(request: Request):
     return row
 
 
-class LoginRequired(Exception):
-    """Raised by HTML page deps so we can return a real redirect, not JSON."""
-
-
-@app.exception_handler(LoginRequired)
-async def _login_required_handler(request: Request, exc: LoginRequired) -> RedirectResponse:
-    del request, exc
-    return RedirectResponse("/login", status_code=303)
-
-
-def require_page_user(request: Request):
-    """For HTML page routes: bounce to /login instead of a bare 401."""
-    row = current_user_row(request)
-    if row is None:
-        raise LoginRequired()
-    return row
-
-
 def require_api_user(request: Request):
     """For JSON API routes: a clean 401 the frontend can react to."""
     row = current_user_row(request)
@@ -929,36 +913,7 @@ def startup() -> None:
     app.state.is_first_account = user_store.count() == 0
 
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request, user=Depends(require_page_user)) -> HTMLResponse:
-    del user
-    page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    page = page.replace("__CSRF_TOKEN__", auth.get_or_create_csrf_token(request))
-    api_base = os.environ.get("VERVFY_PUBLIC_URL", "").strip().rstrip("/")
-    if not api_base:
-        api_base = str(request.base_url).rstrip("/")
-        if https_only and api_base.startswith("http://"):
-            api_base = f"https://{api_base[len('http://') :]}"
-    page = page.replace("__API_BASE__", html_escape(api_base, quote=True))
-    return HTMLResponse(
-        page,
-        headers={"Cache-Control": "no-store"},
-    )
-
-
 # ------------------------------------------------------------------ accounts
-
-@app.get("/login", response_class=HTMLResponse)
-def login_form(request: Request) -> HTMLResponse:
-    if current_user_row(request) is not None:
-        return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(
-        request,
-        "login.html",
-        {"csrf_token": auth.get_or_create_csrf_token(request)},
-        headers={"Cache-Control": "no-store"},
-    )
-
 
 @app.post("/login")
 def login_submit(
@@ -971,15 +926,9 @@ def login_submit(
     ip = auth.client_ip(request)
     identifier = identifier.strip()
 
-    def fail(message: str, status_code: int = 400) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {
-                "csrf_token": auth.get_or_create_csrf_token(request),
-                "error": message,
-                "username": identifier,
-            },
+    def fail(message: str, status_code: int = 400) -> JSONResponse:
+        return JSONResponse(
+            {"detail": message},
             status_code=status_code,
             headers={"Cache-Control": "no-store"},
         )
@@ -1013,15 +962,6 @@ def login_submit(
     return RedirectResponse("/", status_code=303)
 
 
-@app.get("/register", response_class=HTMLResponse)
-def register_form(request: Request) -> HTMLResponse:
-    if current_user_row(request) is not None:
-        return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(
-        request, "register.html", {"csrf_token": auth.get_or_create_csrf_token(request)}
-    )
-
-
 @app.post("/register")
 def register_submit(
     request: Request,
@@ -1032,17 +972,11 @@ def register_submit(
 ) -> Response:
     auth.verify_csrf(request, csrf_token)
 
-    def fail(message: str, status_code: int = 400) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request,
-            "register.html",
-            {
-                "csrf_token": auth.get_or_create_csrf_token(request),
-                "error": message,
-                "username": username,
-                "email": email,
-            },
+    def fail(message: str, status_code: int = 400) -> JSONResponse:
+        return JSONResponse(
+            {"detail": message},
             status_code=status_code,
+            headers={"Cache-Control": "no-store"},
         )
 
     username_error = auth.validate_username(username)
@@ -1077,8 +1011,8 @@ def register_submit(
 def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
     # Logging out is safe to repeat.  A stale page may submit an old token
-    # after another login/logout cycle; do not expose a JSON CSRF error page
-    # when the desired outcome is simply to end the current session.
+    # after another login/logout cycle; avoid surfacing a CSRF error when the
+    # desired outcome is simply to end the current session.
     try:
         auth.verify_csrf(request, submitted_token)
     except HTTPException as exc:
@@ -1087,14 +1021,6 @@ def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     # A copied cookie stays valid after a plain logout until the password
     # changes or logout-all is used.
     request.session.clear()
-    return RedirectResponse("/login", status_code=303)
-
-
-@app.get("/logout")
-def logout_get(request: Request) -> Response:
-    # A GET must not change authentication state. Keep this route as a
-    # compatibility redirect for old bookmarks and links.
-    del request
     return RedirectResponse("/login", status_code=303)
 
 
@@ -1170,10 +1096,12 @@ def delete_account_photo(request: Request, user=Depends(require_api_user)) -> di
 
 
 @app.get("/api/csrf")
-def api_csrf(request: Request, user=Depends(require_api_user)) -> dict:
-    """SPA fetches this once and sends the token back as X-CSRF-Token on
-    any state-changing call (upload, delete, password change)."""
-    return {"csrf_token": auth.get_or_create_csrf_token(request)}
+def api_csrf(request: Request) -> Response:
+    """Issue the session-bound token used by login and authenticated API calls."""
+    return JSONResponse(
+        {"csrf_token": auth.get_or_create_csrf_token(request)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 class PasswordChangeRequest(BaseModel):
@@ -1400,19 +1328,6 @@ def delete_account(
     request.session.clear()
     request.app.state.is_first_account = user_store.count() == 0
     return {"ok": True}
-
-
-@app.get("/sw.js")
-def service_worker() -> FileResponse:
-    """Serve the worker that keeps the app shell available offline."""
-    path = STATIC_DIR / "sw.js"
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(
-        path,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-store", "Service-Worker-Allowed": "/"},
-    )
 
 
 @app.get("/api/health")
@@ -1807,7 +1722,3 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
             "Content-Length": str(len(data or b"")),
         },
     )
-
-
-if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

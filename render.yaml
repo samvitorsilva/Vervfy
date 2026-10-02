@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: vervfy-next
+    runtime: node
+    plan: free
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /manifest.webmanifest
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: BACKEND_URL
+        value: https://vervfy-app.onrender.com
