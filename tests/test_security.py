@@ -518,6 +518,86 @@ def test_artist_photo_fetches_exact_deezer_match_and_caches(app_module, monkeypa
     assert sum("/artist/2/top" in url for url in calls) == 1
 
 
+def test_artist_route_caches_exact_deezer_match(app_module, monkeypatch):
+    server, client = app_module
+    _register(client)
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [
+                {"id": 1, "name": "Tate McRae Tribute"},
+                {
+                    "id": 2,
+                    "name": "Tate McRae",
+                    "picture_medium": "https://cdn.dzcdn.net/tate.jpg",
+                    "nb_fan": 123,
+                },
+            ]}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+
+    first = client.get("/artists/Tate%20McRae")
+    second = client.get("/artists/Tate%20McRae")
+
+    assert first.status_code == 200
+    assert first.json()["deezer_id"] == 2
+    assert first.json()["picture"] == "https://cdn.dzcdn.net/tate.jpg"
+    assert first.json()["fans"] == 123
+    assert second.json() == first.json()
+    assert len(calls) == 1
+
+
+def test_deezer_quota_error_retries_once(app_module, monkeypatch):
+    server, _ = app_module
+    calls = []
+    sleeps = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            if len(calls) == 1:
+                return FakeResponse({"error": {"code": 4, "message": "quota"}})
+            return FakeResponse({"data": [{"id": 2, "name": "Tate McRae"}]})
+
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(server.time, "sleep", sleeps.append)
+
+    assert server._fetch_deezer_artist("Tate McRae")["id"] == 2
+    assert len(calls) == 2
+    assert sleeps == [1]
+
+
 def test_postgres_psycopg_disables_prepared_statements(app_module):
     server, _ = app_module
     import db
@@ -704,6 +784,22 @@ def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatc
     )
 
 
+def test_tate_mcrae_profile_includes_verified_bio_and_official_website(app_module, monkeypatch):
+    server, _ = app_module
+
+    def unexpected_client(**kwargs):
+        pytest.fail("A manually verified artist profile should not require network lookup")
+
+    monkeypatch.setattr(server.httpx, "Client", unexpected_client)
+    profile = server._lookup_artist_profile("Tate McRae", [])
+
+    assert profile["bio"].startswith("Tate McRae is a Canadian singer, songwriter, and dancer")
+    assert profile["website"] == "https://www.tatemcrae.com/"
+    assert profile["website_label"] == "Official artist website"
+    assert profile["source"] == "Wikipedia"
+    assert profile["source_url"] == "https://en.wikipedia.org/wiki/Tate_McRae"
+
+
 def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_module, monkeypatch):
     server, _ = app_module
     calls = []
@@ -757,6 +853,52 @@ def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_mod
     assert profile["bio"] == "Example Artist is an American rapper."
     assert profile["source"] == "Wikipedia"
     assert any(url.endswith("/w/api.php") for url in calls)
+
+
+def test_artist_profile_uses_exact_wikipedia_match_without_deezer_title_match(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+            self.status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            if url.endswith("/search/artist"):
+                return FakeResponse({"data": [{"id": 44, "name": "SZA"}]})
+            if url.endswith("/artist/44/top"):
+                return FakeResponse({"data": [{"title": "Another Song"}]})
+            if url.endswith("/artist/44/albums"):
+                return FakeResponse({"data": []})
+            if url.endswith("/page/summary/SZA"):
+                return FakeResponse({
+                    "type": "standard",
+                    "title": "SZA",
+                    "description": "American singer and songwriter",
+                    "extract": "SZA is an American singer and songwriter.",
+                    "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/SZA"}},
+                })
+            pytest.fail(f"Unexpected request: {url}")
+
+    server._artist_profile_cache.clear()
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+    profile = server._lookup_artist_profile("SZA", ["Different Song"])
+
+    assert profile["bio"] == "SZA is an American singer and songwriter."
+    assert profile["source"] == "Wikipedia"
 
 
 def test_artist_profile_rejects_mismatched_wikipedia_summary(app_module, monkeypatch):

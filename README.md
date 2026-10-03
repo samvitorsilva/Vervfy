@@ -33,7 +33,7 @@ A Web Audio API–based visualizer that reacts to whatever's currently playing.
 Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is account information only and is not used for sign-in or password recovery. Every user gets their own isolated library.
 
 **Artist info**
-Artist profiles prefer manually checked entries, then use an exact Deezer artist match tied to a title in the user's library before fetching a matching Wikipedia summary. Portraits use the same catalog/title verification, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable.
+Artist profiles prefer manually checked entries, then use an exact Deezer artist match tied to a title in the user's library before fetching a matching Wikipedia summary. Verified profiles can also link directly to an artist's official website. Portraits use the same catalog/title verification, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.

@@ -117,6 +117,11 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
   const artistPhoto = page.locator(".artist-photo");
+  await expect(page.locator(".artist-info")).toContainText("10 Deezer fans");
+  await expect(page.getByRole("link", { name: "Deezer artist profile" })).toHaveAttribute(
+    "href",
+    "https://www.deezer.com/artist/123",
+  );
   await expect(artistPhoto).toHaveAttribute("src", "/api/artists/test-photo-image");
   await expect
     .poll(() => artistPhoto.evaluate((image) => (image as HTMLImageElement).naturalWidth))

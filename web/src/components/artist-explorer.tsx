@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { usePlayerStore, type ListMode, type TrackRecord } from "@/store/player-store";
@@ -10,9 +10,15 @@ interface Artist {
   tracks: TrackRecord[];
   albums: Set<string>;
   duration: number;
-  art: string;
-  photo: string | null;
-  profile: Record<string, unknown> | null;
+}
+
+interface ArtistData {
+  deezer_id: number;
+  name: string;
+  picture: string | null;
+  fans: number | null;
+  url: string;
+  fetched_at: string;
 }
 
 export function artistNames(track: TrackRecord): string[] {
@@ -44,11 +50,10 @@ function artistKey(name: string): string {
   return name.toLocaleLowerCase();
 }
 
-async function fetchArtistPhoto(name: string): Promise<string | null> {
-  const response = await apiFetch(`/api/artists/photo?${new URLSearchParams({ name })}`);
-  if (!response.ok) throw new Error(`Photo lookup failed (${response.status})`);
-  const payload = (await response.json()) as { picture: string | null };
-  return payload.picture ?? null;
+async function fetchArtistData(name: string): Promise<ArtistData> {
+  const response = await apiFetch(`/api/artists/${encodeURIComponent(name)}`);
+  if (!response.ok) throw new Error(`Artist lookup failed (${response.status})`);
+  return (await response.json()) as ArtistData;
 }
 
 export default function ArtistExplorer({
@@ -66,15 +71,30 @@ export default function ArtistExplorer({
 }) {
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
-  const [photoByArtist, setPhotoByArtist] = useState<Record<string, string | null>>({});
+  const [artistDataByName, setArtistDataByName] = useState<Record<string, ArtistData>>({});
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
   const [loadedArtist, setLoadedArtist] = useState<string | null>(null);
-  const photoByArtistRef = useRef(photoByArtist);
-  const photoRequestsRef = useRef(new Set<string>());
+  const artistDataRef = useRef(artistDataByName);
+  const artistRequestsRef = useRef(new Map<string, Promise<ArtistData>>());
 
   useEffect(() => {
-    photoByArtistRef.current = photoByArtist;
-  }, [photoByArtist]);
+    artistDataRef.current = artistDataByName;
+  }, [artistDataByName]);
+
+  const loadArtistData = useCallback((name: string): Promise<ArtistData> => {
+    const key = artistKey(name);
+    const pending = artistRequestsRef.current.get(key);
+    if (pending) return pending;
+    const request = fetchArtistData(name).finally(() => {
+      artistRequestsRef.current.delete(key);
+    });
+    artistRequestsRef.current.set(key, request);
+    return request;
+  }, []);
+
+  const saveArtistData = useCallback((key: string, data: ArtistData) => {
+    setArtistDataByName((current) => ({ ...current, [key]: data }));
+  }, []);
 
   const artists = useMemo(() => {
     const map = new Map<string, Artist>();
@@ -93,9 +113,6 @@ export default function ArtistExplorer({
           tracks: [track],
           albums: new Set(track.album && !/^unknown album$/i.test(track.album) ? [track.album.toLocaleLowerCase()] : []),
           duration: Math.max(0, track.duration),
-          art: track.coverUrl,
-          photo: null,
-          profile: null,
         });
       }
     }
@@ -128,77 +145,56 @@ export default function ArtistExplorer({
 
     const pending = visibleArtists.filter((artist) => {
       const key = artistKey(artist.name);
-      return !(key in photoByArtistRef.current) && !photoRequestsRef.current.has(key);
+      return !(key in artistDataRef.current);
     });
-    if (!pending.length) return;
-
     for (const artist of pending) {
-      photoRequestsRef.current.add(artistKey(artist.name));
+      const key = artistKey(artist.name);
+      void loadArtistData(artist.name)
+        .then((data) => saveArtistData(key, data))
+        .catch((error) => console.warn("Artist lookup unavailable", error));
     }
-
-    void Promise.all(
-      pending.map(async (artist) => {
-        const key = artistKey(artist.name);
-        try {
-          const picture = await fetchArtistPhoto(artist.name);
-          setPhotoByArtist((current) =>
-            key in current ? current : { ...current, [key]: picture },
-          );
-        } catch (error) {
-          console.warn("Artist photo unavailable", error);
-          setPhotoByArtist((current) =>
-            key in current ? current : { ...current, [key]: null },
-          );
-        } finally {
-          photoRequestsRef.current.delete(key);
-        }
-      }),
-    );
-  }, [view, visibleArtistNames, visibleArtists]);
+  }, [loadArtistData, saveArtistData, view, visibleArtistNames, visibleArtists]);
 
   useEffect(() => {
     if (!currentArtist) return;
     let cancelled = false;
     const key = artistKey(currentArtist.name);
-    const cachedPhoto = key in photoByArtistRef.current ? photoByArtistRef.current[key] : undefined;
-    const needsPhoto = cachedPhoto === undefined && !photoRequestsRef.current.has(key);
     const query = new URLSearchParams({ name: currentArtist.name });
+    const artistDataRequest =
+      artistDataRef.current[key]
+        ? Promise.resolve(artistDataRef.current[key])
+        : loadArtistData(currentArtist.name);
 
-    if (needsPhoto) {
-      photoRequestsRef.current.add(key);
-    }
-
-    Promise.allSettled([
-      needsPhoto
-        ? fetchArtistPhoto(currentArtist.name).finally(() => {
-            photoRequestsRef.current.delete(key);
-          })
-        : Promise.resolve(cachedPhoto ?? null),
-      apiFetch(`/api/artists/profile?${query}`).then(async (response) => {
+    void artistDataRequest
+      .then((data) => {
+        saveArtistData(key, data);
+        if (!cancelled) setLoadedArtist(currentArtist.name);
+      })
+      .catch((error) => {
+        console.warn("Artist lookup unavailable", error);
+        if (!cancelled) setLoadedArtist(currentArtist.name);
+      });
+    void apiFetch(`/api/artists/profile?${query}`)
+      .then(async (response) => {
         if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
         return (await response.json()) as { profile: Record<string, unknown> | null };
-      }),
-    ])
-      .then(([photoResult, profileResult]) => {
-        if (needsPhoto) {
-          const photo = photoResult.status === "fulfilled" ? photoResult.value : null;
-          if (photoResult.status === "rejected") {
-            console.warn("Artist photo unavailable", photoResult.reason);
-          }
-          setPhotoByArtist((current) => (key in current ? current : { ...current, [key]: photo }));
-        }
+      })
+      .then(({ profile: nextProfile }) => {
         if (cancelled) return;
-        const nextProfile = profileResult.status === "fulfilled" ? profileResult.value.profile : null;
-        if (profileResult.status === "rejected") {
-          console.warn("Artist profile unavailable", profileResult.reason);
-        }
         setProfile(nextProfile);
         setLoadedArtist(currentArtist.name);
+      })
+      .catch((error) => {
+        console.warn("Artist profile unavailable", error);
+        if (!cancelled) {
+          setProfile(null);
+          setLoadedArtist(currentArtist.name);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [currentArtist]);
+  }, [currentArtist, loadArtistData, saveArtistData]);
 
   if (view === "artists") {
     if (tracks.length === 0) {
@@ -211,9 +207,8 @@ export default function ArtistExplorer({
       <div className={`artist-grid${listMode === "list" ? " list-mode" : ""}`}>
         {visibleArtists.map((artist) => {
           const key = artistKey(artist.name);
-          const lookupDone = key in photoByArtist;
-          const photo = photoByArtist[key];
-          const src = photo || (lookupDone ? artist.art : null);
+          const artistData = artistDataByName[key];
+          const src = artistData?.picture;
           return (
             <article className={`artist-card${listMode === "list" ? " list-mode" : ""}`} key={artist.name}>
               <button
@@ -227,12 +222,17 @@ export default function ArtistExplorer({
                     className="artist-card-photo"
                     src={src}
                     alt=""
-                    onError={(event) => {
-                      if (event.currentTarget.src !== artist.art) event.currentTarget.src = artist.art;
+                    onError={() => {
+                      setArtistDataByName((current) => {
+                        const data = current[key];
+                        return data
+                          ? { ...current, [key]: { ...data, picture: null } }
+                          : current;
+                      });
                     }}
                   />
                 ) : (
-                  <span className="artist-card-photo artist-card-photo-loading" aria-hidden="true" />
+                  <span className={`artist-card-photo${artistData ? " artist-card-photo-empty" : " artist-card-photo-loading"}`} aria-hidden="true" />
                 )}
                 <span className="artist-card-name">{artist.name}</span>
                 <span className="artist-card-count">{artist.tracks.length} song{artist.tracks.length === 1 ? "" : "s"}</span>
@@ -260,21 +260,27 @@ export default function ArtistExplorer({
 
   const loading = loadedArtist !== currentArtist.name;
   const activeProfile = loading ? null : profile;
-  const photoLookupDone = artistKey(currentArtist.name) in photoByArtist;
-  const photo = photoByArtist[artistKey(currentArtist.name)] ?? null;
-  const heroSrc = photo || (photoLookupDone ? currentArtist.art : null);
+  const currentArtistData = artistDataByName[artistKey(currentArtist.name)];
+  const heroSrc = currentArtistData?.picture ?? null;
+  const fallbackBio = currentArtistData
+    ? currentArtistData.fans !== null
+      ? `${currentArtistData.name} is a music artist with ${new Intl.NumberFormat().format(currentArtistData.fans)} Deezer fans.`
+      : `${currentArtistData.name} has an artist profile on Deezer.`
+    : "Artist information is not available right now.";
   const facts = ([
     ["Genre", activeProfile?.genre],
     ["Style", activeProfile?.style],
     ["Mood", activeProfile?.mood],
     ["Formed", activeProfile?.formed_year],
     ["Label", activeProfile?.label],
-    ["Followers", activeProfile?.followers],
+    ["Deezer fans", activeProfile?.followers ?? currentArtistData?.fans],
     ["Popularity", activeProfile?.popularity],
   ] satisfies Array<[string, unknown]>).filter(
     (entry): entry is [string, unknown] => Boolean(entry[1]),
   );
   const sourceUrl = safeExternalUrl(activeProfile?.source_url);
+  const websiteUrl = safeExternalUrl(activeProfile?.website);
+  const websiteLabel = String(activeProfile?.website_label ?? "Official website");
 
   return (
     <div className="artist-page">
@@ -284,12 +290,18 @@ export default function ArtistExplorer({
             className="artist-photo"
             src={heroSrc}
             alt={currentArtist.name}
-            onError={(event) => {
-              if (event.currentTarget.src !== currentArtist.art) event.currentTarget.src = currentArtist.art;
+            onError={() => {
+              const key = artistKey(currentArtist.name);
+              setArtistDataByName((current) => {
+                const data = current[key];
+                return data
+                  ? { ...current, [key]: { ...data, picture: null } }
+                  : current;
+              });
             }}
           />
         ) : (
-          <span className="artist-photo artist-photo-loading" aria-hidden="true" />
+          <span className={`artist-photo${currentArtistData ? " artist-photo-empty" : " artist-photo-loading"}`} aria-hidden="true" />
         )}
         <div className="artist-hero-meta">
           <div className="artist-kicker">Artist</div>
@@ -314,9 +326,11 @@ export default function ArtistExplorer({
       </section>
       <section className="artist-info" aria-busy={loading}>
         <h2>About</h2>
-        <p className="artist-bio">{loading ? "Looking up artist details…" : String(activeProfile?.bio ?? "No verified artist information is available yet.")}</p>
+        <p className="artist-bio">{loading ? "Looking up artist details…" : String(activeProfile?.bio ?? fallbackBio)}</p>
         {facts.length ? <div className="artist-tags">{facts.map(([label, value]) => <span className="artist-tag" key={label}>{label}: {String(value)}</span>)}</div> : null}
+        {websiteUrl ? <a className="artist-website" href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteLabel} ↗</a> : null}
         {sourceUrl ? <><p className="artist-source">Source: {String(activeProfile?.source ?? "Verified artist information")}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">Source page ↗</a></> : null}
+        {currentArtistData?.url ? <><p className="artist-source">Artist data: Deezer</p><a className="artist-website" href={currentArtistData.url} target="_blank" rel="noopener noreferrer">Deezer artist profile ↗</a></> : null}
       </section>
       {artistTracks.length ? (
         listMode === "grid" ? (

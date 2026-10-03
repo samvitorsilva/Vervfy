@@ -130,8 +130,15 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (url.pathname === "/api/artists/photo" && request.method === "GET") {
-    json(response, 200, { picture: "/api/artists/test-photo-image" });
+  if (url.pathname.startsWith("/artists/") && request.method === "GET") {
+    json(response, 200, {
+      deezer_id: 123,
+      name: decodeURIComponent(url.pathname.slice("/artists/".length)),
+      picture: "/api/artists/test-photo-image",
+      fans: 10,
+      url: "https://www.deezer.com/artist/123",
+      fetched_at: "2026-10-03T00:00:00+00:00",
+    });
     return;
   }
 

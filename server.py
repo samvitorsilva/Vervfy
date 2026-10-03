@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-from database import Base, engine
-
-
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 import asyncio
@@ -35,9 +33,10 @@ from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.concurrency import run_in_threadpool
 
+from database import Base, engine
 import audio_store
 import auth
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from db import Artist, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -283,6 +282,18 @@ def _artist_name_candidates(name: str) -> list[str]:
 # used before a catalog lookup. Do not add an entry without a source that
 # unambiguously identifies the performer.
 _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
+    "tatemcrae": {
+        "bio": (
+            "Tate McRae is a Canadian singer, songwriter, and dancer who first "
+            "rose to prominence as a dancer before launching her music career."
+        ),
+        "genre": "Pop",
+        "highlights": "Canadian singer, songwriter, and dancer.",
+        "website": "https://www.tatemcrae.com/",
+        "website_label": "Official artist website",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/Tate_McRae",
+    },
     "morada": {
         "bio": (
             "MORADA is a Brazilian contemporary Christian band formed in 2009 "
@@ -785,16 +796,14 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
 
 
 def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
-    """Return verified Wikipedia biography and Deezer audience information."""
+    """Return an exact-name Wikipedia biography and verified Deezer audience information."""
     manual = _verified_artist_profile(name)
     if manual:
         return manual
-    artist = _verified_deezer_artist(name, titles)
-    if not artist:
-        return None
     key = _artist_search_key(name)
     if not key:
         return None
+    artist = _verified_deezer_artist(name, titles) if titles else None
     now = time.monotonic()
     cached = _artist_profile_cache.get(key)
     if cached and cached[0] > now:
@@ -814,7 +823,7 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
             _artist_profile_cache, key, profile or None,
             now + (60 * 60 * 24 if profile else 10 * 60),
         )
-    fans = artist.get("nb_fan")
+    fans = artist.get("nb_fan") if artist else None
     if isinstance(fans, int):
         profile["followers"] = str(fans)
     return profile or None
@@ -1446,6 +1455,112 @@ def _throttle_artist_lookup(user_id: str) -> None:
         raise HTTPException(status_code=503, detail="Rate-limit service unavailable") from exc
     if not allowed:
         raise HTTPException(status_code=429, detail="Too many artist lookups", headers={"Retry-After": "60"})
+
+
+def _deezer_error_is_quota(error: object) -> bool:
+    if not isinstance(error, dict):
+        return False
+    code = str(error.get("code", "")).lower()
+    error_type = str(error.get("type", "")).lower()
+    message = str(error.get("message", "")).lower()
+    return code in {"4", "quota"} or "quota" in error_type or "quota" in message
+
+
+def _fetch_deezer_artist(name: str) -> dict:
+    try:
+        with httpx.Client(timeout=6.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
+            for attempt in range(2):
+                response = client.get(
+                    "https://api.deezer.com/search/artist",
+                    params={"q": name, "limit": 10},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
+                error = payload.get("error")
+                if error is not None:
+                    if attempt == 0 and _deezer_error_is_quota(error):
+                        time.sleep(1)
+                        continue
+                    raise HTTPException(status_code=502, detail="Artist provider lookup failed")
+                results = payload.get("data")
+                if not isinstance(results, list):
+                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
+                artist = next(
+                    (
+                        result
+                        for result in results
+                        if isinstance(result, dict)
+                        and _artist_search_key(str(result.get("name", "")))
+                        == _artist_search_key(name)
+                    ),
+                    results[0] if results else None,
+                )
+                if not isinstance(artist, dict) or not isinstance(artist.get("id"), int):
+                    raise HTTPException(status_code=404, detail="Artist not found")
+                return artist
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        log.warning("Deezer artist lookup failed for %r: %s", name, exc)
+        raise HTTPException(status_code=502, detail="Artist provider lookup failed") from exc
+    raise HTTPException(status_code=502, detail="Artist provider lookup failed")
+
+
+@app.get("/artists/{name}")
+def get_artist(name: str, user=Depends(require_api_user)) -> dict:
+    """Return cached artist data, refreshing it from Deezer every 30 days."""
+    normalized_name = name.strip()
+    if not normalized_name or len(normalized_name) > 200:
+        raise HTTPException(status_code=422, detail="Artist name must be 1 to 200 characters")
+    _throttle_artist_lookup(user["id"])
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        artist = next(
+            (
+                cached
+                for cached in session.scalars(select(Artist)).all()
+                if _artist_search_key(cached.name) == _artist_search_key(normalized_name)
+            ),
+            None,
+        )
+        if artist and artist.fetched_at:
+            fetched_at = artist.fetched_at
+            if fetched_at.tzinfo is None:
+                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+            if now - fetched_at < timedelta(days=30):
+                return {
+                    "deezer_id": artist.deezer_id,
+                    "name": artist.name,
+                    "picture": artist.picture,
+                    "fans": artist.fans,
+                    "url": f"https://www.deezer.com/artist/{artist.deezer_id}",
+                    "fetched_at": fetched_at.astimezone(timezone.utc).isoformat(),
+                }
+
+        result = _fetch_deezer_artist(normalized_name)
+        deezer_id = result["id"]
+        if artist and artist.deezer_id != deezer_id:
+            session.delete(artist)
+            session.flush()
+        artist = session.get(Artist, deezer_id)
+        if artist is None:
+            artist = Artist(deezer_id=deezer_id, name=str(result.get("name") or normalized_name))
+            session.add(artist)
+        artist.name = str(result.get("name") or normalized_name)
+        artist.picture = _deezer_portrait_url(result)
+        artist.fans = result.get("nb_fan") if isinstance(result.get("nb_fan"), int) else None
+        artist.fetched_at = now
+        session.commit()
+        return {
+            "deezer_id": artist.deezer_id,
+            "name": artist.name,
+            "picture": artist.picture,
+            "fans": artist.fans,
+            "url": f"https://www.deezer.com/artist/{artist.deezer_id}",
+            "fetched_at": artist.fetched_at.astimezone(timezone.utc).isoformat(),
+        }
 
 
 @app.get("/api/artists/photo")

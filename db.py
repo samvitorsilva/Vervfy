@@ -6,9 +6,12 @@ URL in tests without changing application code.
 """
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from sqlalchemy import (
     Boolean,
+    BigInteger,
+    DateTime,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -160,3 +163,12 @@ class UploadJob(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class Artist(Base):
+    __tablename__ = "artists"
+    deezer_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    picture: Mapped[str | None] = mapped_column(Text)
+    fans: Mapped[int | None] = mapped_column(BigInteger)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
