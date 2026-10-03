@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 import httpx
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
@@ -796,14 +796,13 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
 
 
 def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
-    """Return an exact-name Wikipedia biography and verified Deezer audience information."""
+    """Return an exact-name Wikipedia biography without waiting on Deezer catalog checks."""
     manual = _verified_artist_profile(name)
     if manual:
         return manual
     key = _artist_search_key(name)
     if not key:
         return None
-    artist = _verified_deezer_artist(name, titles) if titles else None
     now = time.monotonic()
     cached = _artist_profile_cache.get(key)
     if cached and cached[0] > now:
@@ -823,9 +822,6 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
             _artist_profile_cache, key, profile or None,
             now + (60 * 60 * 24 if profile else 10 * 60),
         )
-    fans = artist.get("nb_fan") if artist else None
-    if isinstance(fans, int):
-        profile["followers"] = str(fans)
     return profile or None
 
 
@@ -1517,13 +1513,8 @@ def get_artist(name: str, user=Depends(require_api_user)) -> dict:
     _throttle_artist_lookup(user["id"])
     now = datetime.now(timezone.utc)
     with SessionLocal() as session:
-        artist = next(
-            (
-                cached
-                for cached in session.scalars(select(Artist)).all()
-                if _artist_search_key(cached.name) == _artist_search_key(normalized_name)
-            ),
-            None,
+        artist = session.scalar(
+            select(Artist).where(func.lower(Artist.name) == normalized_name.lower())
         )
         if artist and artist.fetched_at:
             fetched_at = artist.fetched_at

@@ -776,7 +776,7 @@ def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatc
     assert profile["bio"] == (
         "Example Artist is a British rapper known for influential recordings. More details."
     )
-    assert profile["followers"] == "42"
+    assert "followers" not in profile
     assert profile["source"] == "Wikipedia"
     assert server._lookup_artist_photo("Example Artist", ["Example Song"]) == (
         "https://cdn-images.dzcdn.net/images/artist/example/250x250-000000-80-0-0.jpg",

@@ -76,6 +76,9 @@ export default function ArtistExplorer({
   const [loadedArtist, setLoadedArtist] = useState<string | null>(null);
   const artistDataRef = useRef(artistDataByName);
   const artistRequestsRef = useRef(new Map<string, Promise<ArtistData>>());
+  const artistQueueRef = useRef<string[]>([]);
+  const queuedArtistNamesRef = useRef(new Set<string>());
+  const activeArtistRequestsRef = useRef(0);
 
   useEffect(() => {
     artistDataRef.current = artistDataByName;
@@ -83,6 +86,11 @@ export default function ArtistExplorer({
 
   const loadArtistData = useCallback((name: string): Promise<ArtistData> => {
     const key = artistKey(name);
+    if (queuedArtistNamesRef.current.delete(key)) {
+      artistQueueRef.current = artistQueueRef.current.filter(
+        (queuedName) => artistKey(queuedName) !== key,
+      );
+    }
     const pending = artistRequestsRef.current.get(key);
     if (pending) return pending;
     const request = fetchArtistData(name).finally(() => {
@@ -95,6 +103,34 @@ export default function ArtistExplorer({
   const saveArtistData = useCallback((key: string, data: ArtistData) => {
     setArtistDataByName((current) => ({ ...current, [key]: data }));
   }, []);
+
+  const enqueueArtistData = useCallback((name: string) => {
+    const key = artistKey(name);
+    if (key in artistDataRef.current || artistRequestsRef.current.has(key) || queuedArtistNamesRef.current.has(key)) {
+      return;
+    }
+    artistQueueRef.current.push(name);
+    queuedArtistNamesRef.current.add(key);
+
+    const startNext = () => {
+      while (activeArtistRequestsRef.current < 4 && artistQueueRef.current.length) {
+        const nextName = artistQueueRef.current.shift();
+        if (!nextName) continue;
+        const nextKey = artistKey(nextName);
+        queuedArtistNamesRef.current.delete(nextKey);
+        activeArtistRequestsRef.current += 1;
+        void loadArtistData(nextName)
+          .then((data) => saveArtistData(nextKey, data))
+          .catch((error) => console.warn("Artist lookup unavailable", error))
+          .finally(() => {
+            activeArtistRequestsRef.current -= 1;
+            startNext();
+          });
+      }
+    };
+
+    startNext();
+  }, [loadArtistData, saveArtistData]);
 
   const artists = useMemo(() => {
     const map = new Map<string, Artist>();
@@ -142,18 +178,27 @@ export default function ArtistExplorer({
 
   useEffect(() => {
     if (view !== "artists") return;
-
-    const pending = visibleArtists.filter((artist) => {
-      const key = artistKey(artist.name);
-      return !(key in artistDataRef.current);
-    });
-    for (const artist of pending) {
-      const key = artistKey(artist.name);
-      void loadArtistData(artist.name)
-        .then((data) => saveArtistData(key, data))
-        .catch((error) => console.warn("Artist lookup unavailable", error));
+    if (!("IntersectionObserver" in window)) {
+      visibleArtists.slice(0, 12).forEach((artist) => enqueueArtistData(artist.name));
+      return;
     }
-  }, [loadArtistData, saveArtistData, view, visibleArtistNames, visibleArtists]);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          const name = (entry.target as HTMLElement).dataset.artistName;
+          if (!name) continue;
+          enqueueArtistData(name);
+        }
+      },
+      { root: document.querySelector(".content"), rootMargin: "500px 0px" },
+    );
+    document.querySelectorAll<HTMLElement>(".artist-card[data-artist-name]").forEach((card) => {
+      observer.observe(card);
+    });
+    return () => observer.disconnect();
+  }, [enqueueArtistData, view, visibleArtistNames, visibleArtists]);
 
   useEffect(() => {
     if (!currentArtist) return;
@@ -210,7 +255,11 @@ export default function ArtistExplorer({
           const artistData = artistDataByName[key];
           const src = artistData?.picture;
           return (
-            <article className={`artist-card${listMode === "list" ? " list-mode" : ""}`} key={artist.name}>
+            <article
+              className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
+              key={artist.name}
+              data-artist-name={artist.name}
+            >
               <button
                 className="artist-card-open"
                 type="button"
