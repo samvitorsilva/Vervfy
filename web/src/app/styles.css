@@ -225,7 +225,7 @@ input{ background:none; border:none; }
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.15);
 }
 
-.content{ flex:1; min-height:0; overflow-y:auto; padding:20px 24px calc(var(--player-height) + 38px); scroll-padding-bottom:calc(var(--player-height) + 38px); }
+.content{ flex:1; min-height:0; overflow-y:auto; overscroll-behavior-y:contain; padding:20px 24px calc(var(--player-height) + 38px); scroll-padding-bottom:calc(var(--player-height) + 38px); }
 
 /* empty */
 .empty{
@@ -250,10 +250,10 @@ input{ background:none; border:none; }
 /* library grid */
 .grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(164px,1fr)); gap:16px; }
 .card{
-  border-radius:var(--radius-m); padding:10px; position:relative;
+  border-radius:var(--radius-m); padding:10px; position:relative; isolation:isolate; z-index:0;
   transition:background var(--dur-fast) var(--ease);
 }
-.grid > .card{ position:relative; }
+.grid > .card{ position:relative; content-visibility:auto; contain-intrinsic-size:auto 240px; }
 .card:hover{ background:var(--surface-control); }
 .card:hover .card-art img{ transform:scale(1.03); }
 .card-art{
@@ -293,7 +293,7 @@ input{ background:none; border:none; }
   display:flex; align-items:center; justify-content:center;
   color:#fff;
   border:1px solid rgba(255,255,255,0.12);
-  z-index:2;
+  z-index:1;
 }
 .card-queue{
   position:absolute; top:16px; left:16px; width:28px; height:28px; border-radius:50%;
@@ -301,7 +301,7 @@ input{ background:none; border:none; }
   display:flex; align-items:center; justify-content:center;
   color:#fff;
   border:1px solid rgba(255,255,255,0.12);
-  z-index:2;
+  z-index:1;
 }
 .grid > .card > .card-queue,
 .grid > .card > .card-fav,
@@ -322,6 +322,7 @@ input{ background:none; border:none; }
   padding:9px 14px; border-radius:14px; cursor:pointer; position:relative;
   transition:background var(--dur-fast) var(--ease);
 }
+.list > .row{ content-visibility:auto; contain-intrinsic-size:auto 58px; }
 .list-head > div, .row > div{ min-width:0; }
 .row:hover{ background:var(--surface-control); }
 .row.playing{ background:rgba(139,127,255,0.1); }
@@ -394,6 +395,8 @@ input{ background:none; border:none; }
   box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
   transition:transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
+.pl-grid > .pl-card{ content-visibility:auto; contain-intrinsic-size:auto 130px; }
+.pl-grid.list-mode > .pl-card{ contain-intrinsic-size:auto 106px; }
 .pl-card:hover{
   transform:translateY(-2px); border-color:var(--border-hi);
   background:linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.04));
@@ -484,6 +487,8 @@ input{ background:none; border:none; }
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.08);
   color:inherit; font:inherit; transition:all var(--dur-fast) var(--ease);
 }
+.artist-grid > .artist-card{ content-visibility:auto; contain-intrinsic-size:auto 240px; }
+.artist-grid.list-mode > .artist-card{ contain-intrinsic-size:auto 80px; }
 .artist-card:hover{
   border-color:var(--border-hi); transform:translateY(-2px);
   box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.12);
@@ -503,12 +508,12 @@ input{ background:none; border:none; }
   background-size:220% 100%; animation:skeletonShimmer 1.45s ease-in-out infinite;
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
 }
+.artist-card-photo-empty{ display:block; flex:0 0 auto; background:rgba(255,255,255,.06); }
 .artist-card-name{
   font-weight:700; font-size:14px; letter-spacing:-0.01em;
   max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .artist-card-count{ font-size:12px; color:var(--text-dim); }
-.artist-card-photo-empty{ display:block; flex:0 0 auto; background:rgba(255,255,255,.06); }
 .artist-card-play{
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   margin-top:2px; padding:7px 14px; border:1px solid rgba(84,232,212,.32);
@@ -750,7 +755,7 @@ input{ background:none; border:none; }
   height:var(--player-height);
   min-width:0;
   overflow:hidden;
-  z-index:40;
+  z-index:1000;
   display:flex; align-items:center; padding:0 22px; gap:24px;
   border-radius:0;
   background:#10121b;
@@ -759,6 +764,7 @@ input{ background:none; border:none; }
   transition:transform var(--dur-med) var(--ease), opacity var(--dur-med) var(--ease);
 }
 .nowbar.hidden{ transform:translateY(120%); opacity:0; pointer-events:none; }
+.nowbar.lyrics-open{ display:none; }
 .now-track{ display:flex; align-items:center; gap:12px; width:300px; min-width:0; }
 .now-track-open{
   display:flex; align-items:center; width:100%; min-width:0;
@@ -1364,8 +1370,8 @@ body.mini-mode .mini-player{ display:block; }
   .mobile-play{ width:52px; height:52px; border-radius:50%; color:#0c0e14; background:var(--text); box-shadow:0 8px 24px rgba(0,0,0,.3); }
   .mobile-play svg{ width:19px; height:19px; }
   .mobile-play:hover{ transform:scale(1.04); }
-  .mobile-secondary-actions{ display:flex; gap:10px; margin-top:14px;     body.expanded-player-open{ overflow:hidden; overscroll-behavior:none; }
-  }
+  .mobile-secondary-actions{ display:flex; gap:10px; margin-top:14px; }
+  body.expanded-player-open{ overflow:hidden; overscroll-behavior:none; }
   .mobile-secondary{ display:flex; align-items:center; gap:7px; padding:8px 11px; border:1px solid var(--border); border-radius:10px; color:var(--text-mid); font-size:11px; background:var(--surface-control); }
   .mobile-secondary:hover{ color:var(--text); background:var(--surface-control-hover); }
   .mobile-secondary svg{ width:15px; height:15px; }
@@ -1567,7 +1573,7 @@ body.mini-mode .mini-player{ display:block; }
   .lyrics-player-track,.lyrics-edit-control{ display:none; }
   .lyrics-player-seek{ gap:8px; }
   .lyrics-player-time{ flex-basis:32px; font-size:9px; }
-  .lyrics-player-controls{ justify-content:space-around; gap:12px; }
+  .lyrics-player-controls{ justify-content:space-around; gap:6px; }
   .lyrics-player-controls .tbtn{ width:34px; height:34px; }
   .lyrics-player-controls .tbtn-play{ width:42px; height:42px; }
   .lyrics-side{
@@ -1782,6 +1788,7 @@ button:focus-visible{
 }
 .nowbar.glass{
   position:fixed;
+  z-index:1000;
   border-radius:24px;
   border:1px solid rgba(255,255,255,.22);
   background:rgba(18,20,31,.20);
@@ -1825,7 +1832,7 @@ button:focus-visible{
   .artwork-backdrop img{ transition:none; }
 }
 @media (max-width:640px){
-  .rail.glass{ margin:0; border-radius:22px; }
+  .rail.glass{ position:fixed; margin:0; border-radius:22px; }
   .nowbar.glass{ border-radius:20px; }
   .mobile-player-info.glass{ padding:14px; border-radius:20px; }
 }

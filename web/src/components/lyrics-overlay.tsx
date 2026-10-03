@@ -444,7 +444,7 @@ export default function LyricsOverlay({
     ? audioElement.duration
     : 0;
   const progress = duration > 0
-    ? Math.max(0, Math.min(100, (currentTime / duration) * 100))
+    ? Math.max(0, Math.min(100, (lyricCurrentTime / duration) * 100))
     : 0;
 
   function seekTo(event: MouseEvent<HTMLDivElement>) {
@@ -604,7 +604,7 @@ export default function LyricsOverlay({
           {syncLines ? (
             <div className="lyrics-sync-editor">
               <div className="lyrics-editor-heading"><h3>Sync lyrics to audio</h3><p>Start playback, then tap each line when it is sung.</p></div>
-              <div className="lyrics-sync-clock">Playback: <strong>{formatTime(currentTime)}</strong></div>
+              <div className="lyrics-sync-clock">Playback: <strong>{formatTime(lyricCurrentTime)}</strong></div>
               <div className="lyrics-sync-lines">
                 {syncLines.map((line, index) => <button type="button" className={`lyrics-sync-line${line.time >= 0 ? " stamped" : ""}`} key={`${index}-${line.text}`} onClick={() => stampLine(index)}><span className="lyrics-sync-line-time">{line.time < 0 ? "Tap at this line" : formatTime(line.time / 1000)}</span><span>{syncText[index]}</span></button>)}
               </div>
@@ -644,7 +644,7 @@ export default function LyricsOverlay({
           <span><strong>{activeTrack.title}</strong><small>{activeTrack.artist}</small></span>
         </div>
         <div className="lyrics-player-seek">
-          <span className="lyrics-player-time">{formatTime(currentTime)}</span>
+          <span className="lyrics-player-time">{formatTime(lyricCurrentTime)}</span>
           <div
             className="seek"
             role="slider"
@@ -652,8 +652,8 @@ export default function LyricsOverlay({
             aria-label="Track progress"
             aria-valuemin={0}
             aria-valuemax={duration}
-            aria-valuenow={currentTime}
-            aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
+            aria-valuenow={lyricCurrentTime}
+            aria-valuetext={`${formatTime(lyricCurrentTime)} of ${formatTime(duration)}`}
             onClick={seekTo}
             onKeyDown={seekByKeyboard}
           >

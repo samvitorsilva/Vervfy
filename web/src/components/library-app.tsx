@@ -1,7 +1,12 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { apiFetch, expectOk, fetchWithRetry, uploadWithRetry } from "@/lib/api/client";
 import type { Account, LibraryState } from "@/lib/api/types";
@@ -85,6 +90,113 @@ function normalizeMeta(value: LibraryState): LibraryMeta {
       trackIds: [...new Set(playlist.trackIds)],
     })),
   };
+}
+
+const TrackImage = memo(function TrackImage({
+  track,
+  className = "",
+}: {
+  track: TrackRecord;
+  className?: string;
+}) {
+  return (
+    <img
+      className={className}
+      src={track.coverUrl || FALLBACK_ART}
+      alt=""
+      loading="lazy"
+      onError={(event) => {
+        if (event.currentTarget.src !== new URL(FALLBACK_ART, window.location.href).href) {
+          event.currentTarget.src = FALLBACK_ART;
+        }
+      }}
+    />
+  );
+});
+
+function PlaybackSeek({
+  audioElement,
+  duration,
+  onSeek,
+  className = "",
+  variant,
+}: {
+  audioElement: HTMLAudioElement | null;
+  duration: number;
+  onSeek: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  className?: string;
+  variant: "mobile" | "player";
+}) {
+  const [currentTime, setCurrentTime] = useState(0);
+
+  useEffect(() => {
+    if (!audioElement) return;
+    const update = () => setCurrentTime(audioElement.currentTime || 0);
+    audioElement.addEventListener("timeupdate", update);
+    audioElement.addEventListener("loadedmetadata", update);
+    audioElement.addEventListener("durationchange", update);
+    audioElement.addEventListener("seeked", update);
+    update();
+    return () => {
+      audioElement.removeEventListener("timeupdate", update);
+      audioElement.removeEventListener("loadedmetadata", update);
+      audioElement.removeEventListener("durationchange", update);
+      audioElement.removeEventListener("seeked", update);
+    };
+  }, [audioElement]);
+
+  const progress = duration ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const seekBar = (
+    <div
+      className={`seek${variant === "mobile" ? " mobile-seek" : ""}`}
+      role="slider"
+      tabIndex={duration ? 0 : -1}
+      aria-label="Track progress"
+      aria-valuemin={0}
+      aria-valuemax={duration}
+      aria-valuenow={currentTime}
+      aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
+      onClick={onSeek}
+      onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (!audioElement || !duration) return;
+        const offsets: Record<string, number> = {
+          ArrowRight: 5,
+          ArrowLeft: -5,
+          Home: -duration,
+          End: duration,
+        };
+        const offset = offsets[event.key];
+        if (offset === undefined) return;
+        event.preventDefault();
+        seekAudio(audioElement, offset);
+      }}
+    >
+      <div className="seek-track">
+        <div className="seek-fill" style={{ width: `${progress}%` }} />
+      </div>
+      <div className="seek-thumb" style={{ left: `${progress}%` }} />
+    </div>
+  );
+
+  if (variant === "mobile") {
+    return (
+      <div className="mobile-seek-row">
+        {seekBar}
+        <div className="mobile-times">
+          <span>{formatTime(currentTime)}</span>
+          <span>{formatTime(duration)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`seek-row${className ? ` ${className}` : ""}`}>
+      <span className="time">{formatTime(currentTime)}</span>
+      {seekBar}
+      <span className="time right">{formatTime(duration)}</span>
+    </div>
+  );
 }
 
 function parseLegacyMeta(value: unknown): LibraryMeta | null {
@@ -282,6 +394,12 @@ function mergeUnsavedMeta(
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
+
+function seekAudio(audio: HTMLAudioElement | null, offset: number): void {
+  if (!audio) return;
+  const duration = Number.isFinite(audio.duration) ? audio.duration : Infinity;
+  audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + offset));
 }
 
 function viewName(view: LibraryView, playlists: PlaylistRecord[]): string {
@@ -550,88 +668,100 @@ export default function LibraryApp() {
       let failed = 0;
       let firstFailure = "";
       let rateLimited = false;
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        setUploadStatus(`Saving ${index + 1}/${files.length}…`);
-        try {
-          const response = await uploadWithRetry("/api/library/upload", file);
-          const uploadResult = (await response.json()) as
-            | ServerTrack
-            | { id: string; status: "processing" };
-          let uploadedTrack: ServerTrack | undefined;
-          let resolvedFromReload = false;
+      let nextFileIndex = 0;
+      let completedFiles = 0;
+      const knownTrackIds = new Set(
+        usePlayerStore.getState().tracks.map((track) => track.id),
+      );
+      setUploadStatus(`Uploading 0/${files.length}…`);
+      const uploadNext = async () => {
+        while (!rateLimited) {
+          const index = nextFileIndex;
+          nextFileIndex += 1;
+          if (index >= files.length) return;
+          const file = files[index];
+          try {
+            const response = await uploadWithRetry("/api/library/upload", file);
+            const uploadResult = (await response.json()) as
+              | ServerTrack
+              | { id: string; status: "processing" };
+            let uploadedTrack: ServerTrack | undefined;
+            let resolvedFromReload = false;
 
-          if ("status" in uploadResult && uploadResult.status === "processing") {
-            for (let attempt = 0; attempt < 60; attempt += 1) {
-              await new Promise((resolve) => setTimeout(resolve, 1000));
-              const statusResponse = await expectOk(
-                await apiFetch(
-                  `/api/library/upload/${encodeURIComponent(uploadResult.id)}`,
-                ),
-              );
-              const status = (await statusResponse.json()) as {
-                status: string;
-                error?: string | null;
-                track?: ServerTrack;
-                track_id?: string;
-              };
-              if (status.status === "completed") {
-                uploadedTrack = status.track;
-                if (!uploadedTrack) {
-                  await reloadTracks();
-                  const refreshedTrack = usePlayerStore.getState().tracks.find(
-                    (track) => track.id === status.track_id,
-                  );
-                  if (!refreshedTrack) {
-                    throw new Error("Upload completed but the track is not available yet.");
+            if ("status" in uploadResult && uploadResult.status === "processing") {
+              for (let attempt = 0; attempt < 60; attempt += 1) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                const statusResponse = await expectOk(
+                  await apiFetch(
+                    `/api/library/upload/${encodeURIComponent(uploadResult.id)}`,
+                  ),
+                );
+                const status = (await statusResponse.json()) as {
+                  status: string;
+                  error?: string | null;
+                  track?: ServerTrack;
+                  track_id?: string;
+                };
+                if (status.status === "completed") {
+                  uploadedTrack = status.track;
+                  if (!uploadedTrack) {
+                    await reloadTracks();
+                    const refreshedTrack = usePlayerStore.getState().tracks.find(
+                      (track) => track.id === status.track_id,
+                    );
+                    if (!refreshedTrack) {
+                      throw new Error("Upload completed but the track is not available yet.");
+                    }
+                    resolvedFromReload = true;
                   }
-                  resolvedFromReload = true;
+                  break;
                 }
-                break;
+                if (status.status === "failed") {
+                  throw new Error(status.error || "Upload processing failed.");
+                }
               }
-              if (status.status === "failed") {
-                throw new Error(status.error || "Upload processing failed.");
+              if (!uploadedTrack && !resolvedFromReload) {
+                throw new Error("Upload is still processing; refresh the library shortly.");
               }
+            } else if ("title" in uploadResult && "stream_url" in uploadResult) {
+              uploadedTrack = uploadResult;
+            } else {
+              throw new Error("The upload response was not recognized.");
             }
-            if (!uploadedTrack && !resolvedFromReload) {
-              throw new Error("Upload is still processing; refresh the library shortly.");
-            }
-          } else if ("title" in uploadResult && "stream_url" in uploadResult) {
-            uploadedTrack = uploadResult;
-          } else {
-            throw new Error("The upload response was not recognized.");
-          }
 
-          if (uploadedTrack) {
-            const current = usePlayerStore.getState().tracks;
-            if (!current.some((track) => track.id === uploadedTrack?.id)) {
-              const nextTrack: TrackRecord = {
-                id: uploadedTrack.id,
-                title: uploadedTrack.title || "Unknown title",
-                artist: uploadedTrack.artist || "Unknown artist",
-                album: uploadedTrack.album || "Unknown album",
-                duration: uploadedTrack.duration || 0,
-                coverUrl: uploadedTrack.has_cover
-                  ? uploadedTrack.cover_url
-                  : generateAura(`${uploadedTrack.artist}|${uploadedTrack.album}|${uploadedTrack.title}`),
-                streamUrl: uploadedTrack.stream_url,
-                favorite: false,
-              };
-              setTracks([...current, nextTrack]);
+            if (uploadedTrack) {
+              if (!knownTrackIds.has(uploadedTrack.id)) {
+                knownTrackIds.add(uploadedTrack.id);
+                added += 1;
+              }
+            } else if (resolvedFromReload) {
               added += 1;
             }
-          } else if (resolvedFromReload) {
-            added += 1;
-          }
-        } catch (error) {
-          failed += 1;
-          firstFailure = firstFailure || (error instanceof Error ? error.message : "Upload failed.");
-          if (error && typeof error === "object" && "status" in error && error.status === 429) {
-            rateLimited = true;
-            break;
+          } catch (error) {
+            failed += 1;
+            firstFailure =
+              firstFailure ||
+              (error instanceof Error ? error.message : "Upload failed.");
+            if (
+              error &&
+              typeof error === "object" &&
+              "status" in error &&
+              error.status === 429
+            ) {
+              rateLimited = true;
+              return;
+            }
+          } finally {
+            completedFiles += 1;
+            if (completedFiles % 4 === 0 || completedFiles === files.length) {
+              setUploadStatus(`Uploading ${completedFiles}/${files.length}…`);
+            }
           }
         }
-      }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(3, files.length) }, () => uploadNext()),
+      );
 
       if (added > 0) await reloadTracks();
       setUploadStatus("");
@@ -647,7 +777,7 @@ export default function LibraryApp() {
         notify("Those tracks were already in your library.");
       }
     },
-    [notify, reloadTracks, setTracks],
+    [notify, reloadTracks],
   );
 
   const applyMeta = useCallback(
@@ -913,8 +1043,16 @@ export default function LibraryApp() {
       ["pause", () => usePlayerStore.getState().audioElement?.pause()],
       ["previoustrack", () => playPrevious()],
       ["nexttrack", () => nextRef.current(false)],
-      ["seekbackward", (details) => seekBy(-(Number(details.seekOffset) || 10))],
-      ["seekforward", (details) => seekBy(Number(details.seekOffset) || 10)],
+      ["seekbackward", (details) =>
+        seekAudio(
+          usePlayerStore.getState().audioElement,
+          -(Number(details.seekOffset) || 10),
+        )],
+      ["seekforward", (details) =>
+        seekAudio(
+          usePlayerStore.getState().audioElement,
+          Number(details.seekOffset) || 10,
+        )],
       ["seekto", (details) => {
         const audio = usePlayerStore.getState().audioElement;
         if (audio && Number.isFinite(details.seekTime)) {
@@ -978,11 +1116,11 @@ export default function LibraryApp() {
           break;
         case "ArrowRight":
           if (event.shiftKey) nextRef.current(false);
-          else seekBy(5);
+          else seekAudio(usePlayerStore.getState().audioElement, 5);
           break;
         case "ArrowLeft":
           if (event.shiftKey) playPrevious();
-          else seekBy(-5);
+          else seekAudio(usePlayerStore.getState().audioElement, -5);
           break;
         case "ArrowUp":
           event.preventDefault();
@@ -1107,8 +1245,12 @@ export default function LibraryApp() {
   useEffect(() => {
     if (!audioElement) return;
     const updatePlayback = () => {
-      setCurrentTime(audioElement.currentTime || 0);
-      setDuration(Number.isFinite(audioElement.duration) ? audioElement.duration : 0);
+      const nextDuration = Number.isFinite(audioElement.duration)
+        ? audioElement.duration
+        : 0;
+      setDuration((currentDuration) =>
+        currentDuration === nextDuration ? currentDuration : nextDuration,
+      );
       const session = navigator.mediaSession;
       if (
         session?.setPositionState &&
@@ -1127,11 +1269,16 @@ export default function LibraryApp() {
         }
       }
     };
+    const updatePlaybackPosition = () => {
+      setCurrentTime(audioElement.currentTime || 0);
+      updatePlayback();
+    };
     const onPlay = () => {
       setPlaying(true);
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing";
     };
     const onPause = () => {
+      updatePlaybackPosition();
       setPlaying(false);
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "paused";
     };
@@ -1141,19 +1288,19 @@ export default function LibraryApp() {
       notify("This track could not be played. Check the file format or your connection.");
     };
     audioElement.addEventListener("timeupdate", updatePlayback);
-    audioElement.addEventListener("loadedmetadata", updatePlayback);
-    audioElement.addEventListener("durationchange", updatePlayback);
-    audioElement.addEventListener("seeked", updatePlayback);
+    audioElement.addEventListener("loadedmetadata", updatePlaybackPosition);
+    audioElement.addEventListener("durationchange", updatePlaybackPosition);
+    audioElement.addEventListener("seeked", updatePlaybackPosition);
     audioElement.addEventListener("play", onPlay);
     audioElement.addEventListener("pause", onPause);
     audioElement.addEventListener("ended", onEnded);
     audioElement.addEventListener("error", onError);
-    updatePlayback();
+    updatePlaybackPosition();
     return () => {
       audioElement.removeEventListener("timeupdate", updatePlayback);
-      audioElement.removeEventListener("loadedmetadata", updatePlayback);
-      audioElement.removeEventListener("durationchange", updatePlayback);
-      audioElement.removeEventListener("seeked", updatePlayback);
+      audioElement.removeEventListener("loadedmetadata", updatePlaybackPosition);
+      audioElement.removeEventListener("durationchange", updatePlaybackPosition);
+      audioElement.removeEventListener("seeked", updatePlaybackPosition);
       audioElement.removeEventListener("play", onPlay);
       audioElement.removeEventListener("pause", onPause);
       audioElement.removeEventListener("ended", onEnded);
@@ -1444,21 +1591,19 @@ export default function LibraryApp() {
   }
 
   function updateVolume(event: ReactMouseEvent<HTMLDivElement>) {
-    const audio = usePlayerStore.getState().audioElement;
-    if (!audio) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const nextVolume = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    setVolume(nextVolume);
-    setMuted(nextVolume === 0);
-    audio.volume = nextVolume;
-    audio.muted = nextVolume === 0;
+    setPlayerVolume(nextVolume);
   }
 
-  function seekBy(offset: number) {
+  function setPlayerVolume(nextVolume: number) {
     const audio = usePlayerStore.getState().audioElement;
-    if (!audio) return;
-    const audioDuration = Number.isFinite(audio.duration) ? audio.duration : Infinity;
-    audio.currentTime = Math.max(0, Math.min(audioDuration, audio.currentTime + offset));
+    setVolume(nextVolume);
+    setMuted(nextVolume === 0);
+    if (audio) {
+      audio.volume = nextVolume;
+      audio.muted = nextVolume === 0;
+    }
   }
 
   function toggleShuffle() {
@@ -1504,7 +1649,6 @@ export default function LibraryApp() {
   const playlistViewCovers = playlistForView
     ? playlistCoverTracks(playlistForView)
     : [];
-  const progress = duration ? Math.min(100, (currentTime / duration) * 100) : 0;
   const filteredQueueTracks = tracks.filter((track) =>
     `${track.title} ${track.artist}`.toLowerCase().includes(queueSearch.trim().toLowerCase()),
   );
@@ -1512,20 +1656,6 @@ export default function LibraryApp() {
   const tracksAvailableToAdd = playlistTarget
     ? tracks.filter((track) => !playlistTarget.trackIds.includes(track.id))
     : [];
-
-  const TrackImage = ({ track, className = "" }: { track: TrackRecord; className?: string }) => (
-    <img
-      className={className}
-      src={track.coverUrl || FALLBACK_ART}
-      alt=""
-      loading="lazy"
-      onError={(event) => {
-        if (event.currentTarget.src !== new URL(FALLBACK_ART, window.location.href).href) {
-          event.currentTarget.src = FALLBACK_ART;
-        }
-      }}
-    />
-  );
 
   function toggleTrackMenu(track: TrackRecord, event: ReactMouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -1862,46 +1992,12 @@ export default function LibraryApp() {
                   <Icon name="heart" />
                 </button>
               </div>
-              <div className="mobile-seek-row">
-                <div
-                  className="seek mobile-seek"
-                  role="slider"
-                  tabIndex={duration ? 0 : -1}
-                  aria-label="Track progress"
-                  aria-valuemin={0}
-                  aria-valuemax={duration}
-                  aria-valuenow={currentTime}
-                  aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
-                  onClick={seekTo}
-                  onKeyDown={(event) => {
-                    if (event.key === "ArrowRight") {
-                      event.preventDefault();
-                      seekBy(5);
-                    }
-                    if (event.key === "ArrowLeft") {
-                      event.preventDefault();
-                      seekBy(-5);
-                    }
-                    if (event.key === "Home") {
-                      event.preventDefault();
-                      seekBy(-duration);
-                    }
-                    if (event.key === "End") {
-                      event.preventDefault();
-                      seekBy(duration);
-                    }
-                  }}
-                >
-                  <div className="seek-track">
-                    <div className="seek-fill" style={{ width: `${progress}%` }} />
-                  </div>
-                  <div className="seek-thumb" style={{ left: `${progress}%` }} />
-                </div>
-                <div className="mobile-times">
-                  <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(duration)}</span>
-                </div>
-              </div>
+              <PlaybackSeek
+                audioElement={audioElement}
+                duration={duration}
+                onSeek={seekTo}
+                variant="mobile"
+              />
               <div className="mobile-transport">
                 <button
                   className={`mobile-control${shuffle ? " on" : ""}`}
@@ -2134,7 +2230,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}`} role="region" aria-label="Now playing" aria-hidden={!currentTrack} inert={!currentTrack}
+      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label="Now playing" aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
@@ -2180,16 +2276,12 @@ export default function LibraryApp() {
             <button className="tbtn" type="button" title="Next" onClick={() => playNext(false)}><Icon name="next" /></button>
             <button className={`tbtn${repeat !== "off" ? " on" : ""}`} type="button" title={`Repeat: ${repeat}`} aria-label={`Repeat: ${repeat}`} aria-pressed={repeat !== "off"} onClick={toggleRepeat}><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
           </div>
-          <div className="seek-row">
-            <span className="time">{formatTime(currentTime)}</span>
-            <div className="seek" role="slider" tabIndex={0} aria-label="Track progress" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={currentTime} onClick={seekTo} onKeyDown={(event) => {
-              if (event.key === "ArrowRight") seekBy(5);
-              if (event.key === "ArrowLeft") seekBy(-5);
-            }}>
-              <div className="seek-track"><div className="seek-fill" style={{ width: `${progress}%` }} /></div><div className="seek-thumb" style={{ left: `${progress}%` }} />
-            </div>
-            <span className="time right">{formatTime(duration)}</span>
-          </div>
+          <PlaybackSeek
+            audioElement={audioElement}
+            duration={duration}
+            onSeek={seekTo}
+            variant="player"
+          />
         </div>
         <div className="now-extra">
           <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title="Lyrics (L)" aria-label="Lyrics" aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
@@ -2245,7 +2337,13 @@ export default function LibraryApp() {
         <div className="mini-body">
           <div className="mini-art-wrap"><div className="mini-art"><img src={currentTrack?.coverUrl ?? FALLBACK_ART} alt="" /></div></div>
           <div className="mini-meta"><div className="mini-title">{currentTrack?.title ?? "Nothing playing"}</div><div className="mini-artist">{currentTrack?.artist ?? "Pick a track"}</div></div>
-          <div className="seek-row mini-seek"><span className="time">{formatTime(currentTime)}</span><div className="seek" role="slider" tabIndex={0} aria-label="Track progress" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={currentTime} onClick={seekTo}><div className="seek-track"><div className="seek-fill" style={{ width: `${progress}%` }} /></div><div className="seek-thumb" style={{ left: `${progress}%` }} /></div><span className="time right">{formatTime(duration)}</span></div>
+          <PlaybackSeek
+            audioElement={audioElement}
+            duration={duration}
+            onSeek={seekTo}
+            variant="player"
+            className="mini-seek"
+          />
           <div className="mini-btns"><button className="tbtn" type="button" aria-label="Previous track" onClick={playPrevious}><Icon name="prev" /></button><button className="tbtn tbtn-play" type="button" aria-label="Play or pause" onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button><button className="tbtn" type="button" aria-label="Next track" onClick={() => playNext(false)}><Icon name="next" /></button></div>
         </div>
       </div>

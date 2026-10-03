@@ -233,9 +233,23 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   await expect(page.getByRole("heading", { name: "No playlists found" })).toBeVisible();
   await page.getByRole("button", { name: "Clear search" }).click();
   await page.getByRole("button", { name: `Open playlist ${playlistName}` }).click();
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  ).toBe(true);
+  const horizontalOverflow = await page.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    elements: [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((element) => ({
+        tag: element.tagName,
+        className: element.className,
+        left: Math.round(element.getBoundingClientRect().left),
+        right: Math.round(element.getBoundingClientRect().right),
+        width: Math.round(element.getBoundingClientRect().width),
+      }))
+      .filter((element) => element.right > window.innerWidth + 1 || element.left < -1)
+      .slice(0, 10),
+  }));
+  expect(horizontalOverflow.documentWidth, JSON.stringify(horizontalOverflow)).toBeLessThanOrEqual(
+    horizontalOverflow.viewportWidth,
+  );
 });
 
 test("liquid glass stays translucent and limits active surfaces", async ({ page }) => {
@@ -254,7 +268,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBe("rgba(255, 255, 255, 0.1)");
+    .toBe("rgba(15, 18, 28, 0.3)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
@@ -281,7 +295,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(255, 255, 255, 0.1)");
+  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
@@ -377,7 +391,11 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   );
   await trackCard.getByRole("button", { name: "More options for pw-batch-01" }).click();
   await expect(page.getByRole("menuitem", { name: "Download for offline" })).toBeVisible();
-  await page.getByRole("menuitem", { name: "View artist: Vervfy Test Artist" }).click();
+  const savedArtistMenuItem = page
+    .getByRole("menu", { name: "Options for pw-batch-01" })
+    .getByRole("menuitem", { name: "View artist: Vervfy Test Artist" });
+  await expect(savedArtistMenuItem).toBeVisible();
+  await savedArtistMenuItem.click();
   await expect(page.getByRole("heading", { name: "Vervfy Test Artist" })).toBeVisible();
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(trackCard).toBeVisible();
@@ -409,6 +427,12 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(0);
+  const content = page.locator(".content");
+  await content.evaluate((element) => element.scrollTo(0, 500));
+  const scrollPosition = await content.evaluate((element) => element.scrollTop);
+  expect(scrollPosition).toBeGreaterThan(0);
+  await page.waitForTimeout(750);
+  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(scrollPosition);
   await audio.evaluate((element) => (element as HTMLAudioElement).pause());
   await page.setViewportSize({ width: 360, height: 812 });
   await page.locator('.nowbar button[aria-label="Lyrics"]').click();
