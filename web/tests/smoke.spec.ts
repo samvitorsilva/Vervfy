@@ -94,6 +94,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     const player = page.getByRole("dialog", { name: "Now playing" });
     await expect(player).toBeVisible();
     await expect(player.locator(".mobile-player-art img")).toBeVisible();
+    await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
     for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {
       await expect(player.getByRole("button", { name: label, exact: true })).toBeVisible();
     }
@@ -102,6 +103,12 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     await expect(player).toHaveCount(0);
     await expect(nowPlayingButton).toBeFocused();
   }
+
+  await page.getByRole("button", { name: "Artists" }).click();
+  await nowPlayingButton.click();
+  await expect(page.locator(".mobile-player-context strong")).toHaveText("Library");
+  await page.getByRole("button", { name: "Close player" }).click();
+  await page.getByRole("button", { name: "Library" }).click();
 
   await nowPlayingButton.click();
   const playerArtist = page.locator(".mobile-player-title-row .artist-link").first();

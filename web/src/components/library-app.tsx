@@ -524,6 +524,7 @@ export default function LibraryApp() {
   const [playlistPicker, setPlaylistPicker] = useState<string | null>(null);
   const [miniMode, setMiniMode] = useState(false);
   const [expandedPlayerOpen, setExpandedPlayerOpen] = useState(false);
+  const [playingFromView, setPlayingFromView] = useState<LibraryView | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.7);
@@ -877,11 +878,12 @@ export default function LibraryApp() {
       const ids = list.map((track) => track.id);
       const index = ids.indexOf(trackId);
       if (index < 0) return;
+      setPlayingFromView(view);
       shufflePlayedRef.current = new Set([index]);
       setQueue(ids, index);
       startTrack(trackId);
     },
-    [setQueue, startTrack],
+    [setQueue, startTrack, view],
   );
 
   const playQueueIndex = useCallback(
@@ -1975,7 +1977,7 @@ export default function LibraryApp() {
             </button>
             <div className="mobile-player-context">
               <span>PLAYING FROM</span>
-              <strong>{title}</strong>
+              <strong>{viewName(playingFromView ?? view, playlists)}</strong>
             </div>
             <button
               className="mobile-player-icon"
