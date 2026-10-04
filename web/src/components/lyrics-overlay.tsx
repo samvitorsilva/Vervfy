@@ -8,7 +8,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { apiFetch, expectOk } from "@/lib/api/client";
 import { artistNames } from "@/components/artist-explorer";
@@ -371,6 +371,7 @@ export default function LyricsOverlay({
   const [syncText, setSyncText] = useState<string[]>([]);
   const lyricsViewportRef = useRef<HTMLDivElement>(null);
   const lyricsTrackRef = useRef<HTMLDivElement>(null);
+  const seekingPointerIdRef = useRef<number | null>(null);
   const smoothTimeRef = useRef(currentTime);
   const [smoothCurrentTime, setSmoothCurrentTime] = useState(currentTime);
   const activeTrack = track;
@@ -448,12 +449,31 @@ export default function LyricsOverlay({
     ? Math.max(0, Math.min(100, (lyricCurrentTime / duration) * 100))
     : 0;
 
-  function seekTo(event: MouseEvent<HTMLDivElement>) {
+  function seekToPosition(clientX: number, element: HTMLDivElement) {
     const audio = usePlayerStore.getState().audioElement;
     if (!audio || !duration) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    const bounds = element.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
     audio.currentTime = ratio * duration;
+  }
+
+  function beginSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!duration) return;
+    event.preventDefault();
+    seekingPointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    seekToPosition(event.clientX, event.currentTarget);
+  }
+
+  function continueSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (seekingPointerIdRef.current !== event.pointerId) return;
+    seekToPosition(event.clientX, event.currentTarget);
+  }
+
+  function finishSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (seekingPointerIdRef.current !== event.pointerId) return;
+    seekToPosition(event.clientX, event.currentTarget);
+    seekingPointerIdRef.current = null;
   }
 
   function seekByKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -655,7 +675,10 @@ export default function LyricsOverlay({
             aria-valuemax={duration}
             aria-valuenow={lyricCurrentTime}
             aria-valuetext={`${formatTime(lyricCurrentTime)} of ${formatTime(duration)}`}
-            onClick={seekTo}
+            onPointerDown={beginSeek}
+            onPointerMove={continueSeek}
+            onPointerUp={finishSeek}
+            onPointerCancel={finishSeek}
             onKeyDown={seekByKeyboard}
           >
             <div className="seek-track"><div className="seek-fill" style={{ width: `${progress}%` }} /></div>

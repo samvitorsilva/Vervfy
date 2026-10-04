@@ -53,10 +53,6 @@ async function fetchArtistPhoto(name: string): Promise<ArtistPhotoData> {
   return (await response.json()) as ArtistPhotoData;
 }
 
-function artistCoverFallback(tracks: TrackRecord[]): string | null {
-  return tracks.find((track) => track.coverUrl)?.coverUrl ?? null;
-}
-
 export default function ArtistExplorer({
   view,
   search,
@@ -258,7 +254,7 @@ export default function ArtistExplorer({
         {visibleArtists.map((artist) => {
           const key = artistKey(artist.name);
           const artistPhoto = photoByArtist[key];
-          const src = artistPhoto?.picture || artistCoverFallback(artist.tracks);
+          const src = artistPhoto?.picture;
           return (
             <article
               className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
@@ -319,7 +315,7 @@ export default function ArtistExplorer({
   const loading = !loadedProfiles[currentArtistKey];
   const activeProfile = loading ? null : profileByArtist[currentArtistKey];
   const currentArtistPhoto = photoByArtist[currentArtistKey];
-  const heroSrc = currentArtistPhoto?.picture || artistCoverFallback(currentArtist.tracks);
+  const heroSrc = currentArtistPhoto?.picture;
   const facts = ([
     ["Genre", activeProfile?.genre],
     ["Style", activeProfile?.style],
