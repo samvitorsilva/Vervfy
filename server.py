@@ -224,11 +224,44 @@ _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 MAX_ARTIST_CACHE_ENTRIES = 1024
 
 
+# Bust portraits cached before the current process started (wrong namesake matches,
+# stylized-credit misses). Fresh lookups remain cached for 30 days as usual.
+_ARTIST_CACHE_EPOCH = datetime.now(timezone.utc)
+
+
 def _artist_search_key(name: str) -> str:
     """Normalize names before comparing a public catalog search result."""
     normalized = unicodedata.normalize("NFKD", name)
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
+    # Stylized credits: A$AP↔ASAP, Florence + The Machine↔Florence and the Machine.
+    normalized = normalized.replace("$", "s")
+    normalized = re.sub(r"(?<=[A-Za-z])!(?=[A-Za-z])", "i", normalized)
+    normalized = re.sub(r"\s*[&+]\s*", " and ", normalized)
     return "".join(c.lower() for c in normalized if c.isalnum())
+
+
+def _deezer_artist_rank(artist: dict) -> tuple[int, int]:
+    """Prefer portraits, then the catalog entry with the largest audience."""
+    portrait = 1 if _deezer_portrait_url(artist) else 0
+    fans = artist.get("nb_fan")
+    return (portrait, fans if isinstance(fans, int) else 0)
+
+
+def _pick_deezer_artist_match(results: list, name: str) -> dict | None:
+    """Return the best exact-name Deezer artist, ignoring weaker namesakes."""
+    key = _artist_search_key(name)
+    if not key:
+        return None
+    matches = [
+        result
+        for result in results
+        if isinstance(result, dict)
+        and isinstance(result.get("id"), int)
+        and _artist_search_key(str(result.get("name", ""))) == key
+    ]
+    if not matches:
+        return None
+    return max(matches, key=_deezer_artist_rank)
 
 
 def _cache_artist_result(cache, key: str, value, expires_at: float) -> None:
@@ -524,12 +557,24 @@ _VERIFIED_ARTIST_PHOTOS = {
 def _matching_catalog_artist(
     results: list[dict], candidates: list[str], name_field: str
 ) -> tuple[dict | None, str | None]:
+    best: dict | None = None
+    best_candidate: str | None = None
+    best_rank = (-1, -1)
     for candidate in candidates:
         key = _artist_search_key(candidate)
+        if not key:
+            continue
         for result in results:
-            if _artist_search_key(str(result.get(name_field, ""))) == key:
-                return result, candidate
-    return None, None
+            if not isinstance(result, dict):
+                continue
+            if _artist_search_key(str(result.get(name_field, ""))) != key:
+                continue
+            rank = _deezer_artist_rank(result)
+            if rank > best_rank:
+                best = result
+                best_candidate = candidate
+                best_rank = rank
+    return best, best_candidate
 
 
 def _deezer_artist_for_name(name: str) -> dict | None:
@@ -1483,16 +1528,7 @@ def _fetch_deezer_artist(name: str) -> dict:
                 results = payload.get("data")
                 if not isinstance(results, list):
                     raise HTTPException(status_code=502, detail="Invalid artist provider response")
-                artist = next(
-                    (
-                        result
-                        for result in results
-                        if isinstance(result, dict)
-                        and _artist_search_key(str(result.get("name", "")))
-                        == _artist_search_key(name)
-                    ),
-                    results[0] if results else None,
-                )
+                artist = _pick_deezer_artist_match(results, name)
                 if not isinstance(artist, dict) or not isinstance(artist.get("id"), int):
                     raise HTTPException(status_code=404, detail="Artist not found")
                 return artist
@@ -1516,12 +1552,16 @@ def get_artist(name: str, user=Depends(require_api_user)) -> dict:
         artist = session.scalar(
             select(Artist).where(func.lower(Artist.name) == normalized_name.lower())
         )
+        cached_result = None
         if artist and artist.fetched_at:
             fetched_at = artist.fetched_at
             if fetched_at.tzinfo is None:
                 fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-            if now - fetched_at < timedelta(days=30):
-                return {
+            if (
+                fetched_at >= _ARTIST_CACHE_EPOCH
+                and now - fetched_at < timedelta(days=30)
+            ):
+                cached_result = {
                     "deezer_id": artist.deezer_id,
                     "name": artist.name,
                     "picture": artist.picture,
@@ -1529,8 +1569,14 @@ def get_artist(name: str, user=Depends(require_api_user)) -> dict:
                     "url": f"https://www.deezer.com/artist/{artist.deezer_id}",
                     "fetched_at": fetched_at.astimezone(timezone.utc).isoformat(),
                 }
+    if cached_result:
+        return cached_result
 
-        result = _fetch_deezer_artist(normalized_name)
+    result = _fetch_deezer_artist(normalized_name)
+    with SessionLocal() as session:
+        artist = session.scalar(
+            select(Artist).where(func.lower(Artist.name) == normalized_name.lower())
+        )
         deezer_id = result["id"]
         if artist and artist.deezer_id != deezer_id:
             session.delete(artist)

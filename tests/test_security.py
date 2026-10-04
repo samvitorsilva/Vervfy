@@ -562,6 +562,90 @@ def test_artist_route_caches_exact_deezer_match(app_module, monkeypatch):
     assert len(calls) == 1
 
 
+def test_artist_lookup_rejects_nonmatching_search_results(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"id": 1, "name": "Tate McRae Tribute"}]}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+
+    with pytest.raises(server.HTTPException) as error:
+        server._fetch_deezer_artist("Tate McRae")
+
+    assert error.value.status_code == 404
+
+
+def test_artist_lookup_prefers_highest_fan_exact_match(app_module, monkeypatch):
+    server, _ = app_module
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [
+                {
+                    "id": 61817012,
+                    "name": "Adele",
+                    "picture_medium": "https://cdn-images.dzcdn.net/images/artist/obscure/250x250-000000-80-0-0.jpg",
+                    "nb_fan": 335,
+                },
+                {
+                    "id": 75798,
+                    "name": "Adele",
+                    "picture_medium": "https://cdn-images.dzcdn.net/images/artist/famous/250x250-000000-80-0-0.jpg",
+                    "nb_fan": 15_484_960,
+                },
+            ]}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
+
+    artist = server._fetch_deezer_artist("Adele")
+    assert artist["id"] == 75798
+    assert artist["nb_fan"] == 15_484_960
+
+
+def test_artist_search_key_normalizes_stylized_credits(app_module):
+    server, _ = app_module
+    assert server._artist_search_key("A$AP Rocky") == server._artist_search_key("ASAP Rocky")
+    assert server._artist_search_key("Florence + The Machine") == server._artist_search_key(
+        "Florence and the Machine"
+    )
+    assert server._artist_search_key("P!nk") == server._artist_search_key("Pink")
+    assert server._pick_deezer_artist_match(
+        [
+            {"id": 1, "name": "A$AP Rocky", "nb_fan": 10, "picture_medium": "https://cdn-images.dzcdn.net/images/artist/a/250x250-000000-80-0-0.jpg"},
+            {"id": 2, "name": "A$AP Rocky", "nb_fan": 2_000_000, "picture_medium": "https://cdn-images.dzcdn.net/images/artist/b/250x250-000000-80-0-0.jpg"},
+        ],
+        "ASAP Rocky",
+    )["id"] == 2
+
+
 def test_deezer_quota_error_retries_once(app_module, monkeypatch):
     server, _ = app_module
     calls = []

@@ -26,6 +26,7 @@ from db import (
 
 USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_DUMMY_HASH = "$2b$12$16SzrlA/CFIYsvKCPGxg4e/G5yv59dknprQQazXEHPgIyzm3pjpgm"
 
 try:
     import redis

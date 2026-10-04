@@ -50,10 +50,28 @@ function artistKey(name: string): string {
   return name.toLocaleLowerCase();
 }
 
+function emptyArtistData(name: string): ArtistData {
+  return {
+    deezer_id: 0,
+    name,
+    picture: null,
+    fans: null,
+    url: "",
+    fetched_at: "",
+  };
+}
+
 async function fetchArtistData(name: string): Promise<ArtistData> {
   const response = await apiFetch(`/api/artists/${encodeURIComponent(name)}`);
   if (!response.ok) throw new Error(`Artist lookup failed (${response.status})`);
   return (await response.json()) as ArtistData;
+}
+
+function artistCoverFallback(tracks: TrackRecord[]): string | null {
+  for (const track of tracks) {
+    if (track.coverUrl) return track.coverUrl;
+  }
+  return null;
 }
 
 export default function ArtistExplorer({
@@ -113,7 +131,7 @@ export default function ArtistExplorer({
     queuedArtistNamesRef.current.add(key);
 
     const startNext = () => {
-      while (activeArtistRequestsRef.current < 4 && artistQueueRef.current.length) {
+      while (activeArtistRequestsRef.current < 8 && artistQueueRef.current.length) {
         const nextName = artistQueueRef.current.shift();
         if (!nextName) continue;
         const nextKey = artistKey(nextName);
@@ -121,7 +139,10 @@ export default function ArtistExplorer({
         activeArtistRequestsRef.current += 1;
         void loadArtistData(nextName)
           .then((data) => saveArtistData(nextKey, data))
-          .catch((error) => console.warn("Artist lookup unavailable", error))
+          .catch((error) => {
+            console.warn("Artist lookup unavailable", error);
+            saveArtistData(nextKey, emptyArtistData(nextName));
+          })
           .finally(() => {
             activeArtistRequestsRef.current -= 1;
             startNext();
@@ -192,7 +213,7 @@ export default function ArtistExplorer({
           enqueueArtistData(name);
         }
       },
-      { root: document.querySelector(".content"), rootMargin: "500px 0px" },
+      { root: document.querySelector(".content"), rootMargin: "800px 0px" },
     );
     document.querySelectorAll<HTMLElement>(".artist-card[data-artist-name]").forEach((card) => {
       observer.observe(card);
@@ -217,6 +238,7 @@ export default function ArtistExplorer({
       })
       .catch((error) => {
         console.warn("Artist lookup unavailable", error);
+        saveArtistData(key, emptyArtistData(currentArtist.name));
         if (!cancelled) setLoadedArtist(currentArtist.name);
       });
     void apiFetch(`/api/artists/profile?${query}`)
@@ -253,7 +275,8 @@ export default function ArtistExplorer({
         {visibleArtists.map((artist) => {
           const key = artistKey(artist.name);
           const artistData = artistDataByName[key];
-          const src = artistData?.picture;
+          const coverFallback = artistCoverFallback(artist.tracks);
+          const src = artistData?.picture || (artistData ? coverFallback : null);
           return (
             <article
               className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
@@ -271,10 +294,13 @@ export default function ArtistExplorer({
                     className="artist-card-photo"
                     src={src}
                     alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
                     onError={() => {
                       setArtistDataByName((current) => {
                         const data = current[key];
-                        return data
+                        return data?.picture
                           ? { ...current, [key]: { ...data, picture: null } }
                           : current;
                       });
@@ -310,7 +336,9 @@ export default function ArtistExplorer({
   const loading = loadedArtist !== currentArtist.name;
   const activeProfile = loading ? null : profile;
   const currentArtistData = artistDataByName[artistKey(currentArtist.name)];
-  const heroSrc = currentArtistData?.picture ?? null;
+  const heroSrc =
+    currentArtistData?.picture
+    || (currentArtistData ? artistCoverFallback(currentArtist.tracks) : null);
   const fallbackBio = currentArtistData
     ? currentArtistData.fans !== null
       ? `${currentArtistData.name} is a music artist with ${new Intl.NumberFormat().format(currentArtistData.fans)} Deezer fans.`
@@ -339,6 +367,8 @@ export default function ArtistExplorer({
             className="artist-photo"
             src={heroSrc}
             alt={currentArtist.name}
+            decoding="async"
+            referrerPolicy="no-referrer"
             onError={() => {
               const key = artistKey(currentArtist.name);
               setArtistDataByName((current) => {
