@@ -12,13 +12,9 @@ interface Artist {
   duration: number;
 }
 
-interface ArtistData {
-  deezer_id: number;
-  name: string;
+interface ArtistPhotoData {
   picture: string | null;
-  fans: number | null;
-  url: string;
-  fetched_at: string;
+  nb_fan: number | null;
 }
 
 export function artistNames(track: TrackRecord): string[] {
@@ -50,28 +46,15 @@ function artistKey(name: string): string {
   return name.toLocaleLowerCase();
 }
 
-function emptyArtistData(name: string): ArtistData {
-  return {
-    deezer_id: 0,
-    name,
-    picture: null,
-    fans: null,
-    url: "",
-    fetched_at: "",
-  };
-}
-
-async function fetchArtistData(name: string): Promise<ArtistData> {
-  const response = await apiFetch(`/api/artists/${encodeURIComponent(name)}`);
-  if (!response.ok) throw new Error(`Artist lookup failed (${response.status})`);
-  return (await response.json()) as ArtistData;
+async function fetchArtistPhoto(name: string): Promise<ArtistPhotoData> {
+  const query = new URLSearchParams({ name });
+  const response = await apiFetch(`/api/artists/photo?${query}`);
+  if (!response.ok) throw new Error(`Artist photo lookup failed (${response.status})`);
+  return (await response.json()) as ArtistPhotoData;
 }
 
 function artistCoverFallback(tracks: TrackRecord[]): string | null {
-  for (const track of tracks) {
-    if (track.coverUrl) return track.coverUrl;
-  }
-  return null;
+  return tracks.find((track) => track.coverUrl)?.coverUrl ?? null;
 }
 
 export default function ArtistExplorer({
@@ -89,69 +72,71 @@ export default function ArtistExplorer({
 }) {
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
-  const [artistDataByName, setArtistDataByName] = useState<Record<string, ArtistData>>({});
-  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
-  const [loadedArtist, setLoadedArtist] = useState<string | null>(null);
-  const artistDataRef = useRef(artistDataByName);
-  const artistRequestsRef = useRef(new Map<string, Promise<ArtistData>>());
-  const artistQueueRef = useRef<string[]>([]);
-  const queuedArtistNamesRef = useRef(new Set<string>());
-  const activeArtistRequestsRef = useRef(0);
+  const [photoByArtist, setPhotoByArtist] = useState<Record<string, ArtistPhotoData>>({});
+  const [profileByArtist, setProfileByArtist] = useState<
+    Record<string, Record<string, unknown> | null>
+  >({});
+  const [loadedProfiles, setLoadedProfiles] = useState<Record<string, boolean>>({});
+  const photoByArtistRef = useRef(photoByArtist);
+  const photoRequestsRef = useRef(new Map<string, Promise<ArtistPhotoData>>());
+  const photoQueueRef = useRef<string[]>([]);
+  const queuedPhotoNamesRef = useRef(new Set<string>());
+  const activePhotoRequestsRef = useRef(0);
 
   useEffect(() => {
-    artistDataRef.current = artistDataByName;
-  }, [artistDataByName]);
+    photoByArtistRef.current = photoByArtist;
+  }, [photoByArtist]);
 
-  const loadArtistData = useCallback((name: string): Promise<ArtistData> => {
+  const loadArtistPhoto = useCallback((name: string): Promise<ArtistPhotoData> => {
     const key = artistKey(name);
-    if (queuedArtistNamesRef.current.delete(key)) {
-      artistQueueRef.current = artistQueueRef.current.filter(
+    if (queuedPhotoNamesRef.current.delete(key)) {
+      photoQueueRef.current = photoQueueRef.current.filter(
         (queuedName) => artistKey(queuedName) !== key,
       );
     }
-    const pending = artistRequestsRef.current.get(key);
+    const pending = photoRequestsRef.current.get(key);
     if (pending) return pending;
-    const request = fetchArtistData(name).finally(() => {
-      artistRequestsRef.current.delete(key);
+    const request = fetchArtistPhoto(name).finally(() => {
+      photoRequestsRef.current.delete(key);
     });
-    artistRequestsRef.current.set(key, request);
+    photoRequestsRef.current.set(key, request);
     return request;
   }, []);
 
-  const saveArtistData = useCallback((key: string, data: ArtistData) => {
-    setArtistDataByName((current) => ({ ...current, [key]: data }));
+  const saveArtistPhoto = useCallback((key: string, data: ArtistPhotoData) => {
+    setPhotoByArtist((current) => ({ ...current, [key]: data }));
   }, []);
 
-  const enqueueArtistData = useCallback((name: string) => {
+  const enqueueArtistPhoto = useCallback((name: string) => {
     const key = artistKey(name);
-    if (key in artistDataRef.current || artistRequestsRef.current.has(key) || queuedArtistNamesRef.current.has(key)) {
+    if (key in photoByArtistRef.current || photoRequestsRef.current.has(key) || queuedPhotoNamesRef.current.has(key)) {
       return;
     }
-    artistQueueRef.current.push(name);
-    queuedArtistNamesRef.current.add(key);
+    photoQueueRef.current.push(name);
+    queuedPhotoNamesRef.current.add(key);
 
     const startNext = () => {
-      while (activeArtistRequestsRef.current < 8 && artistQueueRef.current.length) {
-        const nextName = artistQueueRef.current.shift();
+      while (activePhotoRequestsRef.current < 8 && photoQueueRef.current.length) {
+        const nextName = photoQueueRef.current.shift();
         if (!nextName) continue;
         const nextKey = artistKey(nextName);
-        queuedArtistNamesRef.current.delete(nextKey);
-        activeArtistRequestsRef.current += 1;
-        void loadArtistData(nextName)
-          .then((data) => saveArtistData(nextKey, data))
+        queuedPhotoNamesRef.current.delete(nextKey);
+        activePhotoRequestsRef.current += 1;
+        void loadArtistPhoto(nextName)
+          .then((data) => saveArtistPhoto(nextKey, data))
           .catch((error) => {
-            console.warn("Artist lookup unavailable", error);
-            saveArtistData(nextKey, emptyArtistData(nextName));
+            console.warn("Artist photo unavailable", error);
+            saveArtistPhoto(nextKey, { picture: null, nb_fan: null });
           })
           .finally(() => {
-            activeArtistRequestsRef.current -= 1;
+            activePhotoRequestsRef.current -= 1;
             startNext();
           });
       }
     };
 
     startNext();
-  }, [loadArtistData, saveArtistData]);
+  }, [loadArtistPhoto, saveArtistPhoto]);
 
   const artists = useMemo(() => {
     const map = new Map<string, Artist>();
@@ -200,7 +185,7 @@ export default function ArtistExplorer({
   useEffect(() => {
     if (view !== "artists") return;
     if (!("IntersectionObserver" in window)) {
-      visibleArtists.slice(0, 12).forEach((artist) => enqueueArtistData(artist.name));
+      visibleArtists.slice(0, 12).forEach((artist) => enqueueArtistPhoto(artist.name));
       return;
     }
     const observer = new IntersectionObserver(
@@ -210,7 +195,7 @@ export default function ArtistExplorer({
           observer.unobserve(entry.target);
           const name = (entry.target as HTMLElement).dataset.artistName;
           if (!name) continue;
-          enqueueArtistData(name);
+          enqueueArtistPhoto(name);
         }
       },
       { root: document.querySelector(".content"), rootMargin: "800px 0px" },
@@ -219,27 +204,25 @@ export default function ArtistExplorer({
       observer.observe(card);
     });
     return () => observer.disconnect();
-  }, [enqueueArtistData, view, visibleArtistNames, visibleArtists]);
+  }, [enqueueArtistPhoto, view, visibleArtistNames, visibleArtists]);
 
   useEffect(() => {
     if (!currentArtist) return;
     let cancelled = false;
     const key = artistKey(currentArtist.name);
     const query = new URLSearchParams({ name: currentArtist.name });
-    const artistDataRequest =
-      artistDataRef.current[key]
-        ? Promise.resolve(artistDataRef.current[key])
-        : loadArtistData(currentArtist.name);
+    const photoRequest =
+      photoByArtistRef.current[key]
+        ? Promise.resolve(photoByArtistRef.current[key])
+        : loadArtistPhoto(currentArtist.name);
 
-    void artistDataRequest
+    void photoRequest
       .then((data) => {
-        saveArtistData(key, data);
-        if (!cancelled) setLoadedArtist(currentArtist.name);
+        saveArtistPhoto(key, data);
       })
       .catch((error) => {
-        console.warn("Artist lookup unavailable", error);
-        saveArtistData(key, emptyArtistData(currentArtist.name));
-        if (!cancelled) setLoadedArtist(currentArtist.name);
+        console.warn("Artist photo unavailable", error);
+        saveArtistPhoto(key, { picture: null, nb_fan: null });
       });
     void apiFetch(`/api/artists/profile?${query}`)
       .then(async (response) => {
@@ -248,20 +231,20 @@ export default function ArtistExplorer({
       })
       .then(({ profile: nextProfile }) => {
         if (cancelled) return;
-        setProfile(nextProfile);
-        setLoadedArtist(currentArtist.name);
+        setProfileByArtist((current) => ({ ...current, [key]: nextProfile }));
+        setLoadedProfiles((current) => ({ ...current, [key]: true }));
       })
       .catch((error) => {
         console.warn("Artist profile unavailable", error);
         if (!cancelled) {
-          setProfile(null);
-          setLoadedArtist(currentArtist.name);
+          setProfileByArtist((current) => ({ ...current, [key]: null }));
+          setLoadedProfiles((current) => ({ ...current, [key]: true }));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [currentArtist, loadArtistData, saveArtistData]);
+  }, [currentArtist, loadArtistPhoto, saveArtistPhoto]);
 
   if (view === "artists") {
     if (tracks.length === 0) {
@@ -274,9 +257,8 @@ export default function ArtistExplorer({
       <div className={`artist-grid${listMode === "list" ? " list-mode" : ""}`}>
         {visibleArtists.map((artist) => {
           const key = artistKey(artist.name);
-          const artistData = artistDataByName[key];
-          const coverFallback = artistCoverFallback(artist.tracks);
-          const src = artistData?.picture || (artistData ? coverFallback : null);
+          const artistPhoto = photoByArtist[key];
+          const src = artistPhoto?.picture || artistCoverFallback(artist.tracks);
           return (
             <article
               className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
@@ -298,7 +280,7 @@ export default function ArtistExplorer({
                     decoding="async"
                     referrerPolicy="no-referrer"
                     onError={() => {
-                      setArtistDataByName((current) => {
+                      setPhotoByArtist((current) => {
                         const data = current[key];
                         return data?.picture
                           ? { ...current, [key]: { ...data, picture: null } }
@@ -307,7 +289,7 @@ export default function ArtistExplorer({
                     }}
                   />
                 ) : (
-                  <span className={`artist-card-photo${artistData ? " artist-card-photo-empty" : " artist-card-photo-loading"}`} aria-hidden="true" />
+                  <span className={`artist-card-photo${artistPhoto ? " artist-card-photo-empty" : " artist-card-photo-loading"}`} aria-hidden="true" />
                 )}
                 <span className="artist-card-name">{artist.name}</span>
                 <span className="artist-card-count">{artist.tracks.length} song{artist.tracks.length === 1 ? "" : "s"}</span>
@@ -333,24 +315,18 @@ export default function ArtistExplorer({
     return <div className="empty"><div className="empty-orb" /><h3>Artist not found</h3><p>This artist no longer has songs in your library.</p><button className="btn" type="button" onClick={() => setView("artists")}>Back to artists</button></div>;
   }
 
-  const loading = loadedArtist !== currentArtist.name;
-  const activeProfile = loading ? null : profile;
-  const currentArtistData = artistDataByName[artistKey(currentArtist.name)];
-  const heroSrc =
-    currentArtistData?.picture
-    || (currentArtistData ? artistCoverFallback(currentArtist.tracks) : null);
-  const fallbackBio = currentArtistData
-    ? currentArtistData.fans !== null
-      ? `${currentArtistData.name} is a music artist with ${new Intl.NumberFormat().format(currentArtistData.fans)} Deezer fans.`
-      : `${currentArtistData.name} has an artist profile on Deezer.`
-    : "Artist information is not available right now.";
+  const currentArtistKey = artistKey(currentArtist.name);
+  const loading = !loadedProfiles[currentArtistKey];
+  const activeProfile = loading ? null : profileByArtist[currentArtistKey];
+  const currentArtistPhoto = photoByArtist[currentArtistKey];
+  const heroSrc = currentArtistPhoto?.picture || artistCoverFallback(currentArtist.tracks);
   const facts = ([
     ["Genre", activeProfile?.genre],
     ["Style", activeProfile?.style],
     ["Mood", activeProfile?.mood],
     ["Formed", activeProfile?.formed_year],
     ["Label", activeProfile?.label],
-    ["Deezer fans", activeProfile?.followers ?? currentArtistData?.fans],
+    ["Followers", activeProfile?.followers],
     ["Popularity", activeProfile?.popularity],
   ] satisfies Array<[string, unknown]>).filter(
     (entry): entry is [string, unknown] => Boolean(entry[1]),
@@ -371,7 +347,7 @@ export default function ArtistExplorer({
             referrerPolicy="no-referrer"
             onError={() => {
               const key = artistKey(currentArtist.name);
-              setArtistDataByName((current) => {
+              setPhotoByArtist((current) => {
                 const data = current[key];
                 return data
                   ? { ...current, [key]: { ...data, picture: null } }
@@ -380,7 +356,7 @@ export default function ArtistExplorer({
             }}
           />
         ) : (
-          <span className={`artist-photo${currentArtistData ? " artist-photo-empty" : " artist-photo-loading"}`} aria-hidden="true" />
+          <span className={`artist-photo${currentArtistPhoto ? " artist-photo-empty" : " artist-photo-loading"}`} aria-hidden="true" />
         )}
         <div className="artist-hero-meta">
           <div className="artist-kicker">Artist</div>
@@ -405,11 +381,10 @@ export default function ArtistExplorer({
       </section>
       <section className="artist-info" aria-busy={loading}>
         <h2>About</h2>
-        <p className="artist-bio">{loading ? "Looking up artist details…" : String(activeProfile?.bio ?? fallbackBio)}</p>
+        <p className="artist-bio">{loading ? "Looking up artist details…" : String(activeProfile?.bio ?? "No verified artist information is available yet.")}</p>
         {facts.length ? <div className="artist-tags">{facts.map(([label, value]) => <span className="artist-tag" key={label}>{label}: {String(value)}</span>)}</div> : null}
         {websiteUrl ? <a className="artist-website" href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteLabel} ↗</a> : null}
         {sourceUrl ? <><p className="artist-source">Source: {String(activeProfile?.source ?? "Verified artist information")}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">Source page ↗</a></> : null}
-        {currentArtistData?.url ? <><p className="artist-source">Artist data: Deezer</p><a className="artist-website" href={currentArtistData.url} target="_blank" rel="noopener noreferrer">Deezer artist profile ↗</a></> : null}
       </section>
       {artistTracks.length ? (
         listMode === "grid" ? (

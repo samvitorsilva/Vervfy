@@ -134,7 +134,7 @@ const server = createServer(async (request, response) => {
     json(response, 200, {
       deezer_id: 123,
       name: decodeURIComponent(url.pathname.slice("/artists/".length)),
-      picture: "/api/artists/test-photo-image",
+      picture: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
       fans: 10,
       url: "https://www.deezer.com/artist/123",
       fetched_at: "2026-10-03T00:00:00+00:00",
@@ -142,14 +142,22 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (url.pathname === "/api/artists/profile" && request.method === "GET") {
-    json(response, 200, { profile: null });
+  if (url.pathname === "/api/artists/photo" && request.method === "GET") {
+    json(response, 200, {
+      picture: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
+      nb_fan: 10,
+    });
     return;
   }
 
-  if (url.pathname === "/api/artists/test-photo-image" && request.method === "GET") {
-    send(response, 200, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#8b7fff"/></svg>', {
-      "Content-Type": "image/svg+xml",
+  if (url.pathname === "/api/artists/profile" && request.method === "GET") {
+    json(response, 200, {
+      profile: {
+        bio: "Vervfy Test Artist is a verified test profile.",
+        genre: "Pop",
+        source: "Test artist source",
+        source_url: "https://example.com/artist",
+      },
     });
     return;
   }

@@ -54,6 +54,12 @@ test("login displays JSON authentication errors", async ({ page }) => {
 });
 
 test("tablet and mobile can open the full now-playing screen", async ({ page }) => {
+  await page.route("https://cdn-images.dzcdn.net/**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#8b7fff"/></svg>',
+    }),
+  );
   await page.goto("/login");
   await page.evaluate(() => localStorage.removeItem("vervfy:list-mode"));
   await page.getByLabel("Username").fill("playwright");
@@ -117,19 +123,29 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
   const artistPhoto = page.locator(".artist-photo");
-  await expect(page.locator(".artist-info")).toContainText("10 Deezer fans");
-  await expect(page.getByRole("link", { name: "Deezer artist profile" })).toHaveAttribute(
-    "href",
-    "https://www.deezer.com/artist/123",
+  await expect(page.locator(".artist-bio")).toHaveText(
+    "Vervfy Test Artist is a verified test profile.",
   );
-  await expect(artistPhoto).toHaveAttribute("src", "/api/artists/test-photo-image");
+  await expect(page.locator(".artist-info")).toContainText("Deezer fans: 10");
+  await expect(page.locator(".artist-info")).toContainText("Genre: Pop");
+  await expect(page.getByRole("link", { name: "Source page ↗" })).toHaveAttribute(
+    "href",
+    "https://example.com/artist",
+  );
+  await expect(artistPhoto).toHaveAttribute(
+    "src",
+    "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
+  );
   await expect
     .poll(() => artistPhoto.evaluate((image) => (image as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Artists" }).click();
   const artistCardPhoto = page.locator(".artist-card-photo").first();
-  await expect(artistCardPhoto).toHaveAttribute("src", "/api/artists/test-photo-image");
+  await expect(artistCardPhoto).toHaveAttribute(
+    "src",
+    "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
+  );
   await expect
     .poll(() => artistCardPhoto.evaluate((image) => (image as HTMLImageElement).naturalWidth))
     .toBeGreaterThan(0);

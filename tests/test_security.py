@@ -860,12 +860,24 @@ def test_artist_profile_fetches_verified_wikipedia_result(app_module, monkeypatc
     assert profile["bio"] == (
         "Example Artist is a British rapper known for influential recordings. More details."
     )
-    assert "followers" not in profile
+    assert profile["followers"] == "42"
     assert profile["source"] == "Wikipedia"
     assert server._lookup_artist_photo("Example Artist", ["Example Song"]) == (
         "https://cdn-images.dzcdn.net/images/artist/example/250x250-000000-80-0-0.jpg",
         42,
     )
+
+
+def test_artist_profile_api_returns_curated_biography(app_module):
+    _, client = app_module
+    _register(client)
+
+    response = client.get("/api/artists/profile", params={"name": "The Kid Laroi"})
+
+    assert response.status_code == 200
+    profile = response.json()["profile"]
+    assert profile["bio"].startswith("The Kid LAROI (Charlton Howard)")
+    assert profile["source_url"] == "https://en.wikipedia.org/wiki/The_Kid_Laroi"
 
 
 def test_tate_mcrae_profile_includes_verified_bio_and_official_website(app_module, monkeypatch):
@@ -882,6 +894,35 @@ def test_tate_mcrae_profile_includes_verified_bio_and_official_website(app_modul
     assert profile["website_label"] == "Official artist website"
     assert profile["source"] == "Wikipedia"
     assert profile["source_url"] == "https://en.wikipedia.org/wiki/Tate_McRae"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_source"),
+    [
+        ("Kidszn", "Deezer artist catalog"),
+        ("Thekidszn", "Deezer artist catalog"),
+        ("The Kid Laroi", "Wikipedia"),
+        ("Shawn Mendes", "Wikipedia"),
+        ("Maroon 5", "Wikipedia"),
+        ("The Neighborhood", "Wikipedia"),
+        ("The Neighbourhood", "Wikipedia"),
+    ],
+)
+def test_known_artist_profiles_are_available_without_provider_lookup(
+    app_module, monkeypatch, name, expected_source
+):
+    server, _ = app_module
+
+    def unexpected_client(**kwargs):
+        pytest.fail("Curated artist profiles should not require a network lookup")
+
+    monkeypatch.setattr(server.httpx, "Client", unexpected_client)
+    profile = server._verified_artist_profile(name)
+
+    assert profile is not None
+    assert profile["bio"]
+    assert profile["source"] == expected_source
+    assert profile["source_url"].startswith("https://")
 
 
 def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_module, monkeypatch):
@@ -939,7 +980,7 @@ def test_artist_profile_uses_wikipedia_search_when_direct_summary_misses(app_mod
     assert any(url.endswith("/w/api.php") for url in calls)
 
 
-def test_artist_profile_uses_exact_wikipedia_match_without_deezer_title_match(app_module, monkeypatch):
+def test_artist_profile_rejects_deezer_artist_without_catalog_title_match(app_module, monkeypatch):
     server, _ = app_module
 
     class FakeResponse:
@@ -979,10 +1020,13 @@ def test_artist_profile_uses_exact_wikipedia_match_without_deezer_title_match(ap
 
     server._artist_profile_cache.clear()
     monkeypatch.setattr(server.httpx, "Client", lambda **kwargs: FakeClient())
-    profile = server._lookup_artist_profile("SZA", ["Different Song"])
+    assert server._lookup_artist_profile("SZA", ["Different Song"]) is None
 
-    assert profile["bio"] == "SZA is an American singer and songwriter."
-    assert profile["source"] == "Wikipedia"
+
+def test_artist_profile_matches_neighborhood_spelling_alias(app_module, monkeypatch):
+    server, _ = app_module
+
+    assert server._wiki_title_matches("The Neighbourhood", "The Neighborhood")
 
 
 def test_artist_profile_rejects_mismatched_wikipedia_summary(app_module, monkeypatch):

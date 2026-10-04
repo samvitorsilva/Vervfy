@@ -54,6 +54,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: "/api/artists/profile", destination: `${backendOrigin}/api/artists/profile` },
+      { source: "/api/artists/photo", destination: `${backendOrigin}/api/artists/photo` },
       { source: "/api/artists/:name", destination: `${backendOrigin}/artists/:name` },
       { source: "/api/:path*", destination: `${backendOrigin}/api/:path*` },
       { source: "/backend-auth/login", destination: `${backendOrigin}/login` },

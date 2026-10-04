@@ -525,13 +525,77 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "source": "RUA YOUNG Apple Music artist profile",
         "source_url": "https://music.apple.com/us/artist/rua-young/1782603897",
     },
+    "thekidszn": {
+        "bio": (
+            "Thekidszn is a hip-hop/rap recording artist. The artist's Deezer "
+            "catalog includes SZN (2025) and Elevated (2024)."
+        ),
+        "genre": "Hip-hop/rap",
+        "website": "https://music.apple.com/us/artist/thekidszn/1454205129",
+        "website_label": "Apple Music artist profile",
+        "source": "Deezer artist catalog",
+        "source_url": "https://www.deezer.com/artist/60286412",
+    },
+    "thekidlaroi": {
+        "bio": (
+            "The Kid LAROI (Charlton Howard) is an Australian singer, rapper, "
+            "and songwriter whose single “Stay” became an international hit."
+        ),
+        "genre": "Pop, hip-hop",
+        "highlights": "Australian singer, rapper, and songwriter; known internationally for “Stay.”",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/The_Kid_Laroi",
+    },
+    "shawnmendes": {
+        "bio": (
+            "Shawn Mendes is a Canadian singer and songwriter who first built "
+            "an audience by sharing song covers online before releasing his "
+            "debut EP in 2014."
+        ),
+        "genre": "Pop",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/Shawn_Mendes",
+    },
+    "maroon5": {
+        "bio": (
+            "Maroon 5 is an American pop-rock band formed in Los Angeles. "
+            "The group began as Kara’s Flowers before adopting the Maroon 5 "
+            "name and breaking through with Songs About Jane."
+        ),
+        "genre": "Pop rock",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/Maroon_5",
+    },
+    "theneighborhood": {
+        "bio": (
+            "The Neighbourhood is an American alternative-rock band formed "
+            "in California in 2011. The group is known for songs including "
+            "“Sweater Weather” and “Daddy Issues.”"
+        ),
+        "genre": "Alternative rock",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/The_Neighbourhood",
+    },
+    "theneighbourhood": {
+        "bio": (
+            "The Neighbourhood is an American alternative-rock band formed "
+            "in California in 2011. The group is known for songs including "
+            "“Sweater Weather” and “Daddy Issues.”"
+        ),
+        "genre": "Alternative rock",
+        "source": "Wikipedia",
+        "source_url": "https://en.wikipedia.org/wiki/The_Neighbourhood",
+    },
 }
 
 
 def _verified_artist_profile(name: str) -> dict[str, str] | None:
     """Return an identity-checked profile for an artist credit, if available."""
     for candidate in _artist_name_candidates(name):
-        profile = _VERIFIED_ARTIST_PROFILES.get(_artist_search_key(candidate))
+        key = _artist_search_key(candidate)
+        profile = _VERIFIED_ARTIST_PROFILES.get(key)
+        if profile is None and key == "kidszn":
+            profile = _VERIFIED_ARTIST_PROFILES["thekidszn"]
         if profile:
             result = profile.copy()
             if candidate != name.strip():
@@ -751,6 +815,10 @@ _WIKI_TITLE_QUALIFIER = re.compile(
     r"vocalist|music(?:al)?\s+group|recording\s+artist)\)\s*$",
     re.I,
 )
+_WIKIPEDIA_ARTIST_TITLE_ALIASES = {
+    "theneighborhood": {"theneighbourhood"},
+    "theneighbourhood": {"theneighborhood"},
+}
 _MUSIC_PERSON_HINT = re.compile(
     r"\b(?:music(?:al|ian|ians)?|singer(?:-songwriter)?s?|songwriters?|"
     r"rappers?|bands?|groups?|vocalists?|composers?|djs?|producers?|"
@@ -762,7 +830,9 @@ _MUSIC_PERSON_HINT = re.compile(
 
 def _wiki_title_matches(title: str, name: str) -> bool:
     strip = lambda value: _WIKI_TITLE_QUALIFIER.sub("", value).strip()
-    return _artist_search_key(strip(title)) == _artist_search_key(strip(name))
+    title_key = _artist_search_key(strip(title))
+    name_key = _artist_search_key(strip(name))
+    return title_key == name_key or title_key in _WIKIPEDIA_ARTIST_TITLE_ALIASES.get(name_key, set())
 
 
 def _first_sentences(value: object, limit: int = 3) -> str:
@@ -841,10 +911,13 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
 
 
 def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
-    """Return an exact-name Wikipedia biography without waiting on Deezer catalog checks."""
+    """Return verified Wikipedia biography and Deezer audience information."""
     manual = _verified_artist_profile(name)
     if manual:
         return manual
+    artist = _verified_deezer_artist(name, titles)
+    if not artist:
+        return None
     key = _artist_search_key(name)
     if not key:
         return None
@@ -867,6 +940,9 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
             _artist_profile_cache, key, profile or None,
             now + (60 * 60 * 24 if profile else 10 * 60),
         )
+    fans = artist.get("nb_fan")
+    if isinstance(fans, int):
+        profile["followers"] = str(fans)
     return profile or None
 
 
