@@ -28,6 +28,12 @@ export interface TrackRecord {
   customLyrics?: string | null;
 }
 
+export interface CachedLyrics {
+  source: string;
+  lines?: { time: number; text: string }[];
+  text?: string;
+}
+
 export interface PlaylistRecord {
   id: string;
   name: string;
@@ -37,6 +43,7 @@ export interface PlaylistRecord {
 interface PlayerStore {
   audioElement: HTMLAudioElement | null;
   tracks: TrackRecord[];
+  lyricsByTrack: Record<string, CachedLyrics>;
   playlists: PlaylistRecord[];
   queue: string[];
   queueIndex: number;
@@ -58,11 +65,13 @@ interface PlayerStore {
   toggleFavorite: (trackId: string) => void;
   setPlaylists: (playlists: PlaylistRecord[]) => void;
   setTrackLyrics: (trackId: string, lyrics: string) => void;
+  setCachedLyrics: (trackId: string, lyrics: CachedLyrics) => void;
 }
 
 export const usePlayerStore = create<PlayerStore>((set) => ({
   audioElement: null,
   tracks: [],
+  lyricsByTrack: {},
   playlists: [],
   queue: [],
   queueIndex: -1,
@@ -107,5 +116,9 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
       tracks: state.tracks.map((track) =>
         track.id === trackId ? { ...track, customLyrics } : track,
       ),
+    })),
+  setCachedLyrics: (trackId, lyrics) =>
+    set((state) => ({
+      lyricsByTrack: { ...state.lyricsByTrack, [trackId]: lyrics },
     })),
 }));

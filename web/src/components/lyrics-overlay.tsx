@@ -12,7 +12,7 @@ import {
 } from "react";
 import { apiFetch, expectOk } from "@/lib/api/client";
 import { artistNames } from "@/components/artist-explorer";
-import type { RepeatMode, TrackRecord } from "@/store/player-store";
+import type { CachedLyrics, RepeatMode, TrackRecord } from "@/store/player-store";
 import { usePlayerStore } from "@/store/player-store";
 
 interface TimedLine {
@@ -162,11 +162,7 @@ async function readEmbeddedLyrics(trackId: string, signal: AbortSignal): Promise
   return null;
 }
 
-interface LyricsData {
-  source: string;
-  lines?: TimedLine[];
-  text?: string;
-}
+type LyricsData = CachedLyrics;
 
 function parseLrc(value: string): TimedLine[] {
   const lines: TimedLine[] = [];
@@ -286,12 +282,17 @@ export default function LyricsOverlay({
   repeat: RepeatMode;
 }) {
   const setTrackLyrics = usePlayerStore((state) => state.setTrackLyrics);
+  const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const audioElement = usePlayerStore((state) => state.audioElement);
   const [lyrics, setLyrics] = useState<LyricsData | null>(() =>
-    track?.customLyrics ? toLyrics(track.customLyrics, "custom") : null,
+    track.customLyrics
+      ? toLyrics(track.customLyrics, "custom")
+      : usePlayerStore.getState().lyricsByTrack[track.id] ?? null,
   );
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<boolean>(
+    () => !track.customLyrics && !usePlayerStore.getState().lyricsByTrack[track.id],
+  );
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [savePending, setSavePending] = useState(false);
@@ -325,16 +326,22 @@ export default function LyricsOverlay({
 
   useEffect(() => {
     const currentTrack = track;
-    if (currentTrack.customLyrics) return;
+    if (currentTrack.customLyrics || usePlayerStore.getState().lyricsByTrack[currentTrack.id]) return;
 
     let cancelled = false;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
+    const storeLyrics = (value: LyricsData) => {
+      if (cancelled) return;
+      setCachedLyrics(currentTrack.id, value);
+      setLyrics(value);
+    };
     async function lookup() {
       const leadArtist = currentTrack.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
       const title = cleanTitle(currentTrack.title);
       if (!title || !leadArtist || /^unknown artist$/i.test(leadArtist)) {
-        setLyrics({ source: "none" });
+        storeLyrics({ source: "none" });
+        setLoading(false);
         return;
       }
       setLoading(true);
@@ -346,7 +353,7 @@ export default function LyricsOverlay({
           if (error instanceof DOMException && error.name === "AbortError") throw error;
         }
         if (embedded) {
-          if (!cancelled) setLyrics(embedded);
+          storeLyrics(embedded);
           return;
         }
         const query = new URLSearchParams({
@@ -358,6 +365,7 @@ export default function LyricsOverlay({
           ...(currentTrack.duration > 0 ? { duration: String(Math.round(currentTrack.duration)) } : {}),
         });
         const response = await fetch(`https://lrclib.net/api/get?${query}`, {
+          cache: "no-store",
           signal: controller.signal,
         });
         const titleKey = normalized(title);
@@ -382,6 +390,7 @@ export default function LyricsOverlay({
           ];
           for (const search of searches) {
             const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
+              cache: "no-store",
               signal: controller.signal,
             });
             if (!searchResponse.ok) continue;
@@ -404,11 +413,11 @@ export default function LyricsOverlay({
         if (!cancelled && candidate && candidate.instrumental !== true) {
           const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
           const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
-          if (synced && parseLrc(synced).length) setLyrics(toLyrics(synced, "online-synced"));
-          else if (plain) setLyrics({ source: "online-plain", text: plain });
-          else setLyrics({ source: "none" });
+          if (synced && parseLrc(synced).length) storeLyrics(toLyrics(synced, "online-synced"));
+          else if (plain) storeLyrics({ source: "online-plain", text: plain });
+          else storeLyrics({ source: "none" });
         } else if (!cancelled) {
-          setLyrics({ source: "none" });
+          storeLyrics({ source: "none" });
         }
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
@@ -425,7 +434,7 @@ export default function LyricsOverlay({
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [track]);
+  }, [track, setCachedLyrics]);
 
   const lineIndex = useMemo(
     () => (lyrics?.lines ? activeLine(lyrics.lines, lyricCurrentTime * 1000) : -1),
