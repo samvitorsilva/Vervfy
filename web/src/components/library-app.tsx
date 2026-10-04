@@ -5,6 +5,7 @@ import type {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
@@ -135,16 +136,20 @@ function PlaybackSeek({
   audioElement,
   duration,
   onSeek,
+  onResume,
   className = "",
   variant,
 }: {
   audioElement: HTMLAudioElement | null;
   duration: number;
-  onSeek: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onSeek: (time: number) => void;
+  onResume: () => void;
   className?: string;
   variant: "mobile" | "player";
 }) {
   const [currentTime, setCurrentTime] = useState(0);
+  const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
+  const dragRef = useRef<{ pointerId: number; wasPlaying: boolean } | null>(null);
 
   useEffect(() => {
     if (!audioElement) return;
@@ -162,7 +167,35 @@ function PlaybackSeek({
     };
   }, [audioElement]);
 
-  const progress = duration ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const displayedTime = scrubbingTime ?? currentTime;
+  const progress = duration ? Math.min(100, (displayedTime / duration) * 100) : 0;
+  function timeAtPosition(clientX: number, element: HTMLDivElement): number {
+    const bounds = element.getBoundingClientRect();
+    const ratio = bounds.width
+      ? Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width))
+      : 0;
+    return ratio * duration;
+  }
+  function beginSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!audioElement || !duration || !event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
+    dragRef.current = { pointerId: event.pointerId, wasPlaying: !audioElement.paused };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setScrubbingTime(timeAtPosition(event.clientX, event.currentTarget));
+    if (!audioElement.paused) audioElement.pause();
+  }
+  function continueSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    setScrubbingTime(timeAtPosition(event.clientX, event.currentTarget));
+  }
+  function finishSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!audioElement || !drag || drag.pointerId !== event.pointerId) return;
+    onSeek(timeAtPosition(event.clientX, event.currentTarget));
+    dragRef.current = null;
+    setScrubbingTime(null);
+    if (drag.wasPlaying) onResume();
+  }
   const seekBar = (
     <div
       className={`seek${variant === "mobile" ? " mobile-seek" : ""}`}
@@ -171,9 +204,12 @@ function PlaybackSeek({
       aria-label="Track progress"
       aria-valuemin={0}
       aria-valuemax={duration}
-      aria-valuenow={currentTime}
-      aria-valuetext={`${formatTime(currentTime)} of ${formatTime(duration)}`}
-      onClick={onSeek}
+      aria-valuenow={displayedTime}
+      aria-valuetext={`${formatTime(displayedTime)} of ${formatTime(duration)}`}
+      onPointerDown={beginSeek}
+      onPointerMove={continueSeek}
+      onPointerUp={finishSeek}
+      onPointerCancel={finishSeek}
       onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (!audioElement || !duration) return;
         const offsets: Record<string, number> = {
@@ -200,7 +236,7 @@ function PlaybackSeek({
       <div className="mobile-seek-row">
         {seekBar}
         <div className="mobile-times">
-          <span>{formatTime(currentTime)}</span>
+          <span>{formatTime(displayedTime)}</span>
           <span>{formatTime(duration)}</span>
         </div>
       </div>
@@ -209,7 +245,7 @@ function PlaybackSeek({
 
   return (
     <div className={`seek-row${className ? ` ${className}` : ""}`}>
-      <span className="time">{formatTime(currentTime)}</span>
+      <span className="time">{formatTime(displayedTime)}</span>
       {seekBar}
       <span className="time right">{formatTime(duration)}</span>
     </div>
@@ -1661,12 +1697,10 @@ export default function LibraryApp() {
     }
   }
 
-  function seekTo(event: ReactMouseEvent<HTMLDivElement>) {
+  function seekTo(time: number) {
     const audio = usePlayerStore.getState().audioElement;
     if (!audio || !duration) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const position = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    audio.currentTime = position * duration;
+    audio.currentTime = Math.max(0, Math.min(duration, time));
     setCurrentTime(audio.currentTime);
   }
 
@@ -2100,6 +2134,7 @@ export default function LibraryApp() {
                 audioElement={audioElement}
                 duration={duration}
                 onSeek={seekTo}
+                onResume={togglePlayback}
                 variant="mobile"
               />
               <div className="mobile-transport">
@@ -2426,6 +2461,7 @@ export default function LibraryApp() {
             audioElement={audioElement}
             duration={duration}
             onSeek={seekTo}
+            onResume={togglePlayback}
             variant="player"
           />
         </div>
@@ -2487,6 +2523,7 @@ export default function LibraryApp() {
             audioElement={audioElement}
             duration={duration}
             onSeek={seekTo}
+            onResume={togglePlayback}
             variant="player"
             className="mini-seek"
           />

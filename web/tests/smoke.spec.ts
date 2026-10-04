@@ -559,27 +559,33 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   });
   await lyricsControls.getByRole("button", { name: "Play", exact: true }).click();
   await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(false);
-  await lyricsControls.getByRole("button", { name: "Pause", exact: true }).click();
-  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(true);
-  await audio.evaluate((element) => { (element as HTMLAudioElement).playbackRate = 1; });
   const lyricsSeek = page.locator('.lyrics-overlay [aria-label="Track progress"]');
   await expect(lyricsSeek).toBeVisible();
   const lyricsSeekBounds = await lyricsSeek.boundingBox();
   expect(lyricsSeekBounds).not.toBeNull();
-  await lyricsSeek.click({
-    position: {
-      x: (lyricsSeekBounds?.width ?? 0) * 0.75,
-      y: (lyricsSeekBounds?.height ?? 0) / 2,
-    },
-  });
+  const lyricsSeekY = (lyricsSeekBounds?.y ?? 0) + (lyricsSeekBounds?.height ?? 0) / 2;
+  await page.mouse.move((lyricsSeekBounds?.x ?? 0) + (lyricsSeekBounds?.width ?? 0) * 0.2, lyricsSeekY);
+  await page.mouse.down();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(true);
+  const lyricsPausedAt = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
+  await page.mouse.move((lyricsSeekBounds?.x ?? 0) + (lyricsSeekBounds?.width ?? 0) * 0.75, lyricsSeekY, { steps: 4 });
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeCloseTo(lyricsPausedAt, 1);
+  await page.mouse.up();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(false);
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(3.5);
+  await lyricsControls.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(true);
+  await audio.evaluate((element) => { (element as HTMLAudioElement).playbackRate = 1; });
   await lyricsSeek.focus();
   await page.keyboard.press("End");
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(5.5);
+  await audio.evaluate((element) => { (element as HTMLAudioElement).currentTime = 1; });
   await page.getByRole("button", { name: "Close lyrics" }).click();
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -601,12 +607,21 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   ]);
   const bounds = await seekBar.boundingBox();
   expect(bounds).not.toBeNull();
-  await seekBar.click({
-    position: { x: (bounds?.width ?? 0) * 0.75, y: (bounds?.height ?? 0) / 2 },
-  });
+  const seekY = (bounds?.y ?? 0) + (bounds?.height ?? 0) / 2;
+  await page.mouse.move((bounds?.x ?? 0) + (bounds?.width ?? 0) * 0.2, seekY);
+  await page.mouse.down();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(true);
+  const pausedAt = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
+  await page.mouse.move((bounds?.x ?? 0) + (bounds?.width ?? 0) * 0.75, seekY, { steps: 4 });
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeCloseTo(pausedAt, 1);
+  await page.mouse.up();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(false);
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(3.5);
+  await audio.evaluate((element) => (element as HTMLAudioElement).pause());
 
   const streamUrl = await audio.evaluate((element) => (element as HTMLAudioElement).currentSrc);
   const rangeStatus = await page.evaluate(async (url) => {

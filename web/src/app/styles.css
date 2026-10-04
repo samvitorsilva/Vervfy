@@ -1354,7 +1354,7 @@ body.mini-mode .mini-player{ display:block; }
   .mobile-player-context{ display:flex; flex-direction:column; align-items:center; gap:2px; font-size:10px; color:var(--text-mid); }
   .mobile-player-context strong{ color:var(--text); font-size:12px; font-weight:700; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .mobile-player-scroll{ position:relative; z-index:1; height:calc(100% - 76px); overflow-y:auto; padding:clamp(12px, 3vh, 40px) clamp(22px, 8vw, 100px) 44px; display:flex; flex-direction:column; }
-  .mobile-player-art{ width:min(58vw, 340px); aspect-ratio:1; margin:0 auto clamp(16px, 3vh, 36px); border-radius:18px; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.1); flex:0 0 auto; }
+  .mobile-player-art{ width:min(54vw, 320px); aspect-ratio:1; margin:0 auto clamp(16px, 3vh, 36px); border-radius:18px; overflow:hidden; box-shadow:0 24px 70px rgba(0,0,0,.48), 0 0 0 1px rgba(255,255,255,.1); flex:0 0 auto; }
   .mobile-player-art img{ display:block; width:100%; height:100%; object-fit:cover; }
   .mobile-player-info{ width:min(100%, 570px); margin:0 auto; flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
   .mobile-player-title-row{ display:flex; align-items:center; justify-content:space-between; gap:18px; }
@@ -1656,7 +1656,7 @@ body.mini-mode .mini-player{ display:block; }
   .artist-info, .artist-hero{ padding-inline:16px; }
   .acct-card{ align-items:flex-start; padding:16px; }
   .acct-form .btn{ width:100%; justify-content:center; }
-  .mobile-player-art{ width:min(48vw, 220px); margin-bottom:14px; }
+  .mobile-player-art{ width:min(44vw, 200px); margin-bottom:14px; }
   .mobile-lyrics-preview p{ font-size:16px; }
   .rail-btn[data-view][data-tip]::after{ font-size:8px; }
   .rail-btn{ max-width:none; padding:0 1px; }

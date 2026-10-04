@@ -371,7 +371,8 @@ export default function LyricsOverlay({
   const [syncText, setSyncText] = useState<string[]>([]);
   const lyricsViewportRef = useRef<HTMLDivElement>(null);
   const lyricsTrackRef = useRef<HTMLDivElement>(null);
-  const seekingPointerIdRef = useRef<number | null>(null);
+  const seekingPointerRef = useRef<{ pointerId: number; wasPlaying: boolean } | null>(null);
+  const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
   const smoothTimeRef = useRef(currentTime);
   const [smoothCurrentTime, setSmoothCurrentTime] = useState(currentTime);
   const activeTrack = track;
@@ -394,7 +395,8 @@ export default function LyricsOverlay({
     return () => cancelAnimationFrame(frame);
   }, [audioElement, isPlaying]);
 
-  const lyricCurrentTime = audioElement && isPlaying ? smoothCurrentTime : currentTime;
+  const lyricCurrentTime = scrubbingTime ??
+    (audioElement && isPlaying ? smoothCurrentTime : currentTime);
 
   useEffect(() => {
     const currentTrack = track;
@@ -449,31 +451,37 @@ export default function LyricsOverlay({
     ? Math.max(0, Math.min(100, (lyricCurrentTime / duration) * 100))
     : 0;
 
-  function seekToPosition(clientX: number, element: HTMLDivElement) {
-    const audio = usePlayerStore.getState().audioElement;
-    if (!audio || !duration) return;
+  function timeAtPosition(clientX: number, element: HTMLDivElement): number {
     const bounds = element.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
-    audio.currentTime = ratio * duration;
+    const ratio = bounds.width
+      ? Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width))
+      : 0;
+    return ratio * duration;
   }
 
   function beginSeek(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!duration) return;
+    const audio = usePlayerStore.getState().audioElement;
+    if (!audio || !duration || !event.isPrimary || event.button !== 0) return;
     event.preventDefault();
-    seekingPointerIdRef.current = event.pointerId;
+    seekingPointerRef.current = { pointerId: event.pointerId, wasPlaying: !audio.paused };
     event.currentTarget.setPointerCapture(event.pointerId);
-    seekToPosition(event.clientX, event.currentTarget);
+    setScrubbingTime(timeAtPosition(event.clientX, event.currentTarget));
+    if (!audio.paused) audio.pause();
   }
 
   function continueSeek(event: ReactPointerEvent<HTMLDivElement>) {
-    if (seekingPointerIdRef.current !== event.pointerId) return;
-    seekToPosition(event.clientX, event.currentTarget);
+    if (seekingPointerRef.current?.pointerId !== event.pointerId) return;
+    setScrubbingTime(timeAtPosition(event.clientX, event.currentTarget));
   }
 
   function finishSeek(event: ReactPointerEvent<HTMLDivElement>) {
-    if (seekingPointerIdRef.current !== event.pointerId) return;
-    seekToPosition(event.clientX, event.currentTarget);
-    seekingPointerIdRef.current = null;
+    const drag = seekingPointerRef.current;
+    const audio = usePlayerStore.getState().audioElement;
+    if (!audio || !drag || drag.pointerId !== event.pointerId) return;
+    audio.currentTime = timeAtPosition(event.clientX, event.currentTarget);
+    seekingPointerRef.current = null;
+    setScrubbingTime(null);
+    if (drag.wasPlaying) onTogglePlayback();
   }
 
   function seekByKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
