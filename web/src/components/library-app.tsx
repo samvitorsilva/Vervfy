@@ -13,10 +13,11 @@ import type { Account, LibraryState } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
 import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
-import LyricsOverlay from "@/components/lyrics-overlay";
+import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
 import VisualizerOverlay from "@/components/visualizer-overlay";
 import {
   usePlayerStore,
+  type CachedLyrics,
   type LibraryView,
   type PlaylistRecord,
   type TrackRecord,
@@ -90,6 +91,22 @@ function normalizeMeta(value: LibraryState): LibraryMeta {
       trackIds: [...new Set(playlist.trackIds)],
     })),
   };
+}
+
+function activePreviewLine(lines: NonNullable<CachedLyrics["lines"]>, timeMs: number): number {
+  let low = 0;
+  let high = lines.length - 1;
+  let active = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (lines[middle].time <= timeMs) {
+      active = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return active;
 }
 
 const TrackImage = memo(function TrackImage({
@@ -492,6 +509,8 @@ export default function LibraryApp() {
   const setRepeat = usePlayerStore((state) => state.setRepeat);
   const setShuffle = usePlayerStore((state) => state.setShuffle);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
+  const lyricsByTrack = usePlayerStore((state) => state.lyricsByTrack);
+  const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const toggleFavorite = usePlayerStore((state) => state.toggleFavorite);
   const setPlaylists = usePlayerStore((state) => state.setPlaylists);
 
@@ -516,6 +535,7 @@ export default function LibraryApp() {
   const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
   const [queueDragOverIndex, setQueueDragOverIndex] = useState<number | null>(null);
   const queuePointerDragRef = useRef<{ pointerId: number; fromIndex: number } | null>(null);
+  const previewLineRef = useRef<{ trackId: string; index: number } | null>(null);
   const [playlistModal, setPlaylistModal] = useState<{
     playlist?: PlaylistRecord;
     trackId?: string;
@@ -526,6 +546,8 @@ export default function LibraryApp() {
   const [expandedPlayerOpen, setExpandedPlayerOpen] = useState(false);
   const [playingFromView, setPlayingFromView] = useState<LibraryView | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [lyricsLookupFailedTrackId, setLyricsLookupFailedTrackId] = useState<string | null>(null);
+  const [previewLineState, setPreviewLineState] = useState<{ trackId: string; index: number } | null>(null);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
@@ -582,6 +604,61 @@ export default function LibraryApp() {
 
   const activeTrackId = queueIndex >= 0 ? queue[queueIndex] ?? null : null;
   const currentTrack = tracks.find((track) => track.id === activeTrackId) ?? null;
+  const cachedLyrics = currentTrack ? lyricsByTrack[currentTrack.id] : undefined;
+  const previewLyrics = currentTrack?.customLyrics
+    ? parseLyricsText(currentTrack.customLyrics, "custom")
+    : cachedLyrics;
+  const previewLines = previewLyrics?.lines;
+  const previewLineIndex = currentTrack && previewLines
+    ? previewLineState?.trackId === currentTrack.id
+      ? previewLineState.index
+      : activePreviewLine(previewLines, currentTime * 1000)
+    : -1;
+  const previewCurrentLineIndex = previewLines?.length
+    ? Math.max(0, Math.min(previewLineIndex < 0 ? 0 : previewLineIndex, previewLines.length - 1))
+    : -1;
+  const previewNextLineIndex = previewLineIndex < 0 ? 1 : previewCurrentLineIndex + 1;
+
+  useEffect(() => {
+    if (!expandedPlayerOpen || !currentTrack || cachedLyrics || currentTrack.customLyrics) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    void lookupLyrics(currentTrack, controller.signal)
+      .then((lyrics) => {
+        if (!cancelled) setCachedLyrics(currentTrack.id, lyrics);
+      })
+      .catch(() => {
+        if (!cancelled) setLyricsLookupFailedTrackId(currentTrack.id);
+      })
+      .finally(() => clearTimeout(timeout));
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [cachedLyrics, currentTrack, expandedPlayerOpen, setCachedLyrics]);
+
+  useEffect(() => {
+    if (!expandedPlayerOpen || !currentTrack || !previewLines?.length) return;
+
+    let frame = 0;
+    const update = () => {
+      const time = audioElement?.currentTime ?? currentTime;
+      const next = { trackId: currentTrack.id, index: activePreviewLine(previewLines, time * 1000) };
+      const previous = previewLineRef.current;
+      if (previous?.trackId !== next.trackId || previous.index !== next.index) {
+        previewLineRef.current = next;
+        setPreviewLineState(next);
+      }
+      frame = requestAnimationFrame(update);
+    };
+    frame = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(frame);
+  }, [audioElement, currentTime, currentTrack, expandedPlayerOpen, previewLines]);
+
   const tracksById = useMemo(
     () => new Map(tracks.map((track) => [track.id, track])),
     [tracks],
@@ -2050,6 +2127,48 @@ export default function LibraryApp() {
                   onClick={toggleRepeat}
                 ><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
               </div>
+              <button
+                className="mobile-lyrics-preview"
+                type="button"
+                aria-label="Open full lyrics"
+                onClick={() => {
+                  setExpandedPlayerOpen(false);
+                  setLyricsOpen(true);
+                }}
+              >
+                <span className="mobile-lyrics-heading">
+                  <span>Lyrics</span>
+                  <span>
+                    {previewLines?.length
+                      ? "Synced to playback"
+                      : previewLyrics?.text
+                        ? "Plain lyrics"
+                        : "Open full lyrics"}
+                  </span>
+                </span>
+                {previewLines?.length ? (
+                  <p aria-live="polite">
+                    <span className="lyric-active">
+                      {previewLines[previewCurrentLineIndex]?.text}
+                    </span>
+                    {previewLines[previewNextLineIndex] ? (
+                      <span className="lyric-next">
+                        {previewLines[previewNextLineIndex].text}
+                      </span>
+                    ) : null}
+                  </p>
+                ) : previewLyrics?.text ? (
+                  <p>{previewLyrics.text.split(/\r?\n/).filter(Boolean).slice(0, 2).join("\n")}</p>
+                ) : (
+                  <p>
+                    {lyricsLookupFailedTrackId === currentTrack.id
+                      ? "Couldn't load lyrics. Tap to retry."
+                      : cachedLyrics?.source === "none"
+                        ? "No lyrics found for this track."
+                        : "Finding lyrics…"}
+                  </p>
+                )}
+              </button>
               <div className="mobile-secondary-actions">
                 <button
                   className="mobile-secondary"

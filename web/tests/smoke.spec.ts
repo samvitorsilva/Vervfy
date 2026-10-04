@@ -165,6 +165,91 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await expect(page.locator(".artist-name")).toHaveText(artistName!);
 });
 
+test("expanded mobile player shows playback-synced lyric lines", async ({ page }) => {
+  const track = {
+    id: "responsive-preview-track",
+    title: "synced-preview",
+    artist: "Vervfy Test Artist",
+    album: "Playwright Test Album",
+    duration: 6,
+    has_cover: false,
+    cover_url: "",
+    stream_url: "/api/tracks/responsive-preview-track/stream",
+    custom_lyrics: null,
+  };
+  await page.route("**/api/tracks", (route) =>
+    route.fulfill({ json: { tracks: [track] } }),
+  );
+  await page.route("**/api/tracks/responsive-preview-track/stream", (route) =>
+    route.fulfill({ contentType: "audio/wav", body: makeWav() }),
+  );
+  await page.route("https://lrclib.net/api/get**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        trackName: track.title,
+        artistName: track.artist,
+        duration: track.duration,
+        syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
+        plainLyrics: "First lyric line\nSecond lyric line",
+      }),
+    }),
+  );
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = page.locator(".card").filter({ hasText: track.title });
+  await expect(trackCard).toBeVisible();
+  await trackCard.click();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.locator(".now-track-open").click();
+
+  const player = page.getByRole("dialog", { name: "Now playing" });
+  await expect(player).toBeVisible();
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.readyState))
+    .toBeGreaterThan(0);
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.duration))
+    .toBeGreaterThan(0);
+  await page.locator("audio").evaluate((audio: HTMLAudioElement) => {
+    audio.currentTime = 0;
+  });
+  const lyricsPreview = player.locator(".mobile-lyrics-preview");
+  await expect(lyricsPreview.locator(".lyric-active")).toHaveText("First lyric line");
+  await page.locator("audio").evaluate(async (audio: HTMLAudioElement) => {
+    if (audio.paused) await audio.play();
+  });
+  await expect.poll(() => page.locator("audio").evaluate((audio: HTMLAudioElement) => audio.currentTime))
+    .toBeGreaterThan(2);
+  await expect(lyricsPreview.locator(".lyric-active")).toHaveText("Second lyric line");
+  await expect(lyricsPreview.getByText("Synced to playback")).toBeVisible();
+
+  await lyricsPreview.click();
+  const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyricsDialog).toBeVisible();
+  await expect(lyricsDialog).toContainText("Second lyric line");
+  await page.setViewportSize({ width: 768, height: 1024 });
+  const trackCardBounds = await lyricsDialog.locator(".lyrics-side").boundingBox();
+  const lyricsPlayerBounds = await lyricsDialog.locator(".lyrics-player").boundingBox();
+  expect(trackCardBounds?.width).toBeLessThan(260);
+  expect(lyricsPlayerBounds?.height).toBeLessThan(100);
+  await page.keyboard.press("Escape");
+  await expect(lyricsDialog).toHaveCount(0);
+  const nowbar = page.locator("#nowbar");
+  const nowbarBounds = await nowbar.boundingBox();
+  const transportBounds = await nowbar.locator(".transport").boundingBox();
+  expect(nowbarBounds).not.toBeNull();
+  expect(transportBounds).not.toBeNull();
+  expect(
+    Math.abs(
+      nowbarBounds!.x + nowbarBounds!.width / 2 -
+        (transportBounds!.x + transportBounds!.width / 2),
+    ),
+  ).toBeLessThan(1);
+});
+
 test("opening the library with an expired session returns to login", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);

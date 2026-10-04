@@ -228,9 +228,80 @@ function stampToLrc(lines: TimedLine[]): string {
     .join("\n");
 }
 
-function toLyrics(value: string, source: string): LyricsData {
+export function parseLyricsText(value: string, source: string): LyricsData {
   const lines = parseLrc(value);
   return lines.length ? { source, lines } : { source, text: value };
+}
+
+export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Promise<LyricsData> {
+  if (track.customLyrics?.trim()) return parseLyricsText(track.customLyrics, "custom");
+
+  const leadArtist = track.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
+  const title = cleanTitle(track.title);
+  if (!title || !leadArtist || /^unknown artist$/i.test(leadArtist)) return { source: "none" };
+
+  let embedded: LyricsData | null = null;
+  try {
+    embedded = await readEmbeddedLyrics(track.id, signal);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+  }
+  if (embedded) return embedded;
+
+  const query = new URLSearchParams({
+    track_name: title,
+    artist_name: leadArtist,
+    ...(track.album && !/^unknown album$/i.test(track.album) ? { album_name: track.album } : {}),
+    ...(track.duration > 0 ? { duration: String(Math.round(track.duration)) } : {}),
+  });
+  const response = await fetch(`https://lrclib.net/api/get?${query}`, { cache: "no-store", signal });
+  const titleKey = normalized(title);
+  const artistKey = normalized(leadArtist);
+  const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
+  const matchesTrack = (entry: Record<string, unknown>) =>
+    normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
+    normalized(String(entry.artistName ?? "").split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "") === artistKey &&
+    (!track.duration ||
+      (typeof entry.duration === "number" &&
+        entry.duration > 0 &&
+        Math.abs(entry.duration - track.duration) <= durationTolerance));
+  let candidate: Record<string, unknown> | null = response.ok
+    ? (await response.json()) as Record<string, unknown>
+    : null;
+  if (candidate && !matchesTrack(candidate)) candidate = null;
+
+  if (!candidate) {
+    const searches = [
+      new URLSearchParams({ track_name: title, artist_name: leadArtist }),
+      new URLSearchParams({ q: `${leadArtist} ${title}` }),
+    ];
+    for (const search of searches) {
+      const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
+        cache: "no-store",
+        signal,
+      });
+      if (!searchResponse.ok) continue;
+      const results: unknown = await searchResponse.json();
+      if (!Array.isArray(results)) continue;
+      candidate = (results as Record<string, unknown>[])
+        .filter(matchesTrack)
+        .sort((left, right) => {
+          const durationDelta = track.duration
+            ? Math.abs(Number(left.duration) - track.duration) -
+              Math.abs(Number(right.duration) - track.duration)
+            : 0;
+          if (durationDelta !== 0) return durationDelta;
+          return Number(Boolean(right.syncedLyrics)) - Number(Boolean(left.syncedLyrics));
+        })[0] ?? null;
+      if (candidate) break;
+    }
+  }
+
+  if (!candidate || candidate.instrumental === true) return { source: "none" };
+  const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
+  const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
+  if (synced && parseLrc(synced).length) return parseLyricsText(synced, "online-synced");
+  return plain ? { source: "online-plain", text: plain } : { source: "none" };
 }
 
 function formatTime(value: number): string {
@@ -287,7 +358,7 @@ export default function LyricsOverlay({
   const audioElement = usePlayerStore((state) => state.audioElement);
   const [lyrics, setLyrics] = useState<LyricsData | null>(() =>
     track.customLyrics
-      ? toLyrics(track.customLyrics, "custom")
+      ? parseLyricsText(track.customLyrics, "custom")
       : usePlayerStore.getState().lyricsByTrack[track.id] ?? null,
   );
   const [loading, setLoading] = useState<boolean>(
@@ -337,88 +408,9 @@ export default function LyricsOverlay({
       setLyrics(value);
     };
     async function lookup() {
-      const leadArtist = currentTrack.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
-      const title = cleanTitle(currentTrack.title);
-      if (!title || !leadArtist || /^unknown artist$/i.test(leadArtist)) {
-        storeLyrics({ source: "none" });
-        setLoading(false);
-        return;
-      }
       setLoading(true);
       try {
-        let embedded: LyricsData | null = null;
-        try {
-          embedded = await readEmbeddedLyrics(currentTrack.id, controller.signal);
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") throw error;
-        }
-        if (embedded) {
-          storeLyrics(embedded);
-          return;
-        }
-        const query = new URLSearchParams({
-          track_name: title,
-          artist_name: leadArtist,
-          ...(currentTrack.album && !/^unknown album$/i.test(currentTrack.album)
-            ? { album_name: currentTrack.album }
-            : {}),
-          ...(currentTrack.duration > 0 ? { duration: String(Math.round(currentTrack.duration)) } : {}),
-        });
-        const response = await fetch(`https://lrclib.net/api/get?${query}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        const titleKey = normalized(title);
-        const artistKey = normalized(leadArtist);
-        const durationTolerance = Math.min(15, Math.max(5, currentTrack.duration * 0.06));
-        const matchesTrack = (entry: Record<string, unknown>) =>
-          normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
-          normalized(String(entry.artistName ?? "").split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "") === artistKey &&
-          (!currentTrack.duration ||
-            (typeof entry.duration === "number" &&
-              entry.duration > 0 &&
-              Math.abs(entry.duration - currentTrack.duration) <= durationTolerance));
-        let candidate: Record<string, unknown> | null = response.ok
-          ? (await response.json()) as Record<string, unknown>
-          : null;
-        if (candidate && !matchesTrack(candidate)) candidate = null;
-
-        if (!candidate) {
-          const searches = [
-            new URLSearchParams({ track_name: title, artist_name: leadArtist }),
-            new URLSearchParams({ q: `${leadArtist} ${title}` }),
-          ];
-          for (const search of searches) {
-            const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
-              cache: "no-store",
-              signal: controller.signal,
-            });
-            if (!searchResponse.ok) continue;
-            const results: unknown = await searchResponse.json();
-            if (!Array.isArray(results)) continue;
-            candidate = (results as Record<string, unknown>[])
-              .filter(matchesTrack)
-              .sort((left, right) => {
-                const durationDelta = currentTrack.duration
-                  ? Math.abs(Number(left.duration) - currentTrack.duration) -
-                    Math.abs(Number(right.duration) - currentTrack.duration)
-                  : 0;
-                if (durationDelta !== 0) return durationDelta;
-                return Number(Boolean(right.syncedLyrics)) - Number(Boolean(left.syncedLyrics));
-              })[0] ?? null;
-            if (candidate) break;
-          }
-        }
-
-        if (!cancelled && candidate && candidate.instrumental !== true) {
-          const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
-          const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
-          if (synced && parseLrc(synced).length) storeLyrics(toLyrics(synced, "online-synced"));
-          else if (plain) storeLyrics({ source: "online-plain", text: plain });
-          else storeLyrics({ source: "none" });
-        } else if (!cancelled) {
-          storeLyrics({ source: "none" });
-        }
+        storeLyrics(await lookupLyrics(currentTrack, controller.signal));
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setLyrics({ source: "none" });
@@ -500,7 +492,7 @@ export default function LyricsOverlay({
       await expectOk(savedResponse);
       const result = (await savedResponse.json()) as { custom_lyrics: string };
       setTrackLyrics(activeTrack.id, result.custom_lyrics);
-      setLyrics(toLyrics(result.custom_lyrics, "custom"));
+      setLyrics(parseLyricsText(result.custom_lyrics, "custom"));
       setDraft(result.custom_lyrics);
       setEditorOpen(false);
       setSyncLines(null);
@@ -556,7 +548,7 @@ export default function LyricsOverlay({
       await expectOk(response);
       const result = (await response.json()) as { custom_lyrics: string };
       setTrackLyrics(activeTrack.id, result.custom_lyrics);
-      setLyrics(toLyrics(result.custom_lyrics, "custom-synced"));
+      setLyrics(parseLyricsText(result.custom_lyrics, "custom-synced"));
       setDraft(result.custom_lyrics);
       setSyncLines(null);
       onToast("Lyrics synced to the track.");
