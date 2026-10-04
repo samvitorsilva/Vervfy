@@ -515,6 +515,7 @@ export default function LibraryApp() {
   const [offlinePendingId, setOfflinePendingId] = useState<string | null>(null);
   const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
   const [queueDragOverIndex, setQueueDragOverIndex] = useState<number | null>(null);
+  const queuePointerDragRef = useRef<{ pointerId: number; fromIndex: number } | null>(null);
   const [playlistModal, setPlaylistModal] = useState<{
     playlist?: PlaylistRecord;
     trackId?: string;
@@ -1618,6 +1619,30 @@ export default function LibraryApp() {
     notify(`Repeat: ${next}`);
   }
 
+  function reorderQueue(fromIndex: number, targetIndex: number) {
+    const state = usePlayerStore.getState();
+    if (
+      fromIndex < 0 ||
+      fromIndex >= state.queue.length ||
+      targetIndex < 0 ||
+      targetIndex >= state.queue.length ||
+      fromIndex === targetIndex
+    ) return;
+
+    const nextQueue = [...state.queue];
+    const [moved] = nextQueue.splice(fromIndex, 1);
+    const insertAt = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    nextQueue.splice(insertAt, 0, moved);
+
+    let activeIndex = state.queueIndex;
+    if (activeIndex === fromIndex) activeIndex = insertAt;
+    else {
+      if (fromIndex < activeIndex) activeIndex -= 1;
+      if (insertAt <= activeIndex) activeIndex += 1;
+    }
+    setQueue(nextQueue, activeIndex);
+  }
+
   function removeFromQueue(index: number) {
     const state = usePlayerStore.getState();
     const nextQueue = [...state.queue];
@@ -2357,37 +2382,46 @@ export default function LibraryApp() {
             return <div
               className={`q-row${index === queueIndex ? " playing" : ""}${queueDragIndex === index ? " dragging" : ""}${queueDragOverIndex === index ? " drag-over" : ""}`}
               key={`${trackId}-${index}`}
-              onDragOver={(event) => { event.preventDefault(); setQueueDragOverIndex(index); }}
-              onDrop={(event) => {
-                event.preventDefault();
-                const fromIndex = Number(event.dataTransfer.getData("text/plain"));
-                if (!Number.isInteger(fromIndex) || fromIndex === index) return;
-                const state = usePlayerStore.getState();
-                const nextQueue = [...state.queue];
-                const [moved] = nextQueue.splice(fromIndex, 1);
-                const insertAt = fromIndex < index ? index - 1 : index;
-                nextQueue.splice(insertAt, 0, moved);
-                let activeIndex = state.queueIndex;
-                if (activeIndex === fromIndex) activeIndex = insertAt;
-                else if (fromIndex < activeIndex && insertAt >= activeIndex) activeIndex -= 1;
-                else if (fromIndex > activeIndex && insertAt <= activeIndex) activeIndex += 1;
-                setQueue(nextQueue, activeIndex);
-                setQueueDragIndex(null);
-                setQueueDragOverIndex(null);
-              }}
+              data-queue-index={index}
             ><button
               className="q-drag"
               type="button"
-              draggable
               title={`Drag to reorder ${track.title}`}
               aria-label={`Drag to reorder ${track.title}`}
-              onDragStart={(event) => {
-                event.stopPropagation();
-                event.dataTransfer.setData("text/plain", String(index));
-                event.dataTransfer.effectAllowed = "move";
+              onPointerDown={(event) => {
+                if (!event.isPrimary || event.button !== 0) return;
+                event.preventDefault();
+                queuePointerDragRef.current = { pointerId: event.pointerId, fromIndex: index };
+                event.currentTarget.setPointerCapture(event.pointerId);
                 setQueueDragIndex(index);
               }}
-              onDragEnd={() => { setQueueDragIndex(null); setQueueDragOverIndex(null); }}
+              onPointerMove={(event) => {
+                const drag = queuePointerDragRef.current;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                const row = document.elementFromPoint(event.clientX, event.clientY)
+                  ?.closest<HTMLElement>(".q-row[data-queue-index]");
+                const overIndex = row ? Number(row.dataset.queueIndex) : null;
+                setQueueDragOverIndex(overIndex !== null && Number.isInteger(overIndex) ? overIndex : null);
+              }}
+              onPointerUp={(event) => {
+                const drag = queuePointerDragRef.current;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                const row = document.elementFromPoint(event.clientX, event.clientY)
+                  ?.closest<HTMLElement>(".q-row[data-queue-index]");
+                const targetIndex = row ? Number(row.dataset.queueIndex) : null;
+                queuePointerDragRef.current = null;
+                setQueueDragIndex(null);
+                setQueueDragOverIndex(null);
+                if (targetIndex !== null && Number.isInteger(targetIndex)) {
+                  reorderQueue(drag.fromIndex, targetIndex);
+                }
+              }}
+              onPointerCancel={(event) => {
+                if (queuePointerDragRef.current?.pointerId !== event.pointerId) return;
+                queuePointerDragRef.current = null;
+                setQueueDragIndex(null);
+                setQueueDragOverIndex(null);
+              }}
             ><Icon name="drag" /></button><TrackImage track={track} /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title="Remove from queue" aria-label={`Remove ${track.title} from queue`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
           })}
         </div>
@@ -2405,7 +2439,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div className={`queue-picker-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
+      <div className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
         <form className="queue-picker-card playlist-name-card" onSubmit={createOrRenamePlaylist}>
           <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? "Rename playlist" : "New playlist"}</h3><button className="icon-btn" type="button" title="Close" onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
           <label className="playlist-name-label" htmlFor="playlistNameInput">Playlist name</label>

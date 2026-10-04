@@ -1,5 +1,6 @@
 .auth-page{
-  min-height:100vh; display:flex; align-items:center; justify-content:center;
+  height:100vh; height:100dvh; overflow-y:auto; overscroll-behavior-y:contain;
+  display:flex; align-items:center; justify-content:center;
   padding:24px; position:relative; z-index:1;
 }
 .auth-card{
