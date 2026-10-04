@@ -1398,7 +1398,7 @@ body.mini-mode .mini-player{ display:block; }
   /* Mobile chrome: floating glass dock + now-playing bar stacked above it */
   :root{
     --rail-h:68px;
-    --nowbar-h:110px;
+    --nowbar-h:76px;
     --player-height:var(--nowbar-h);
     --nowbar-gap:10px;
     --safe-bottom:env(safe-area-inset-bottom, 0px);
@@ -1531,23 +1531,21 @@ body.mini-mode .mini-player{ display:block; }
     bottom:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--safe-bottom));
     padding:8px 10px; gap:6px; height:var(--player-height); border-radius:20px;
     z-index:50; overflow:hidden;
-    display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
-    grid-template-rows:40px 34px 16px; column-gap:6px; row-gap:2px;
   }
-  .now-track{ grid-column:1 / -1; grid-row:1; width:100%; flex:0 1 auto; min-width:0; gap:6px; }
+  .now-track{ width:min(40%, 168px); flex:0 1 auto; min-width:0; gap:6px; }
   .now-art-wrap, .now-art{ width:40px; height:40px; border-radius:11px; }
   /* Keep like tappable on phones — was display:none and looked “covered” */
   .now-fav{ display:flex; width:26px; height:26px; flex:0 0 auto; }
   .now-fav svg{ width:14px; height:14px; }
-  .transport{ display:contents; }
-  .transport-btns{ grid-column:2; grid-row:2; gap:0; }
+  .transport{ min-width:0; flex:1 1 0; gap:2px; }
+  .transport-btns{ gap:0; }
   .transport-btns .tbtn:first-child, .transport-btns .tbtn:last-child{ display:none; }
   .tbtn{ width:30px; height:30px; }
   .tbtn-play{ width:36px; height:36px; }
-  .seek-row{ grid-column:1 / -1; grid-row:3; gap:5px; }
+  .seek-row{ gap:5px; }
   .time{ width:32px; font-size:10px; }
-  .now-extra{ grid-column:3; grid-row:2; flex:0 0 auto; gap:0; width:auto; justify-content:flex-end; }
-  .now-artist{ display:block; }
+  .now-extra{ flex:0 0 auto; gap:0; width:auto; }
+  .now-artist{ display:none; }
   /* Keep lyrics, queue, and mute reachable; hide viz/mini to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
@@ -1646,7 +1644,7 @@ body.mini-mode .mini-player{ display:block; }
 @media (max-width:480px){
   /* Keep lyrics and mute available on narrow phones; hide queue to save width. */
   .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-mute){ display:none; }
-  .now-track{ width:100%; }
+  .now-track{ width:min(44%, 150px); }
   .view-count{ display:none; }
   .artist-info, .artist-hero{ padding-inline:16px; }
   .acct-card{ align-items:flex-start; padding:16px; }
@@ -1705,7 +1703,7 @@ button:focus-visible{
 
 @media (max-width:380px){
   .nowbar{ gap:3px; padding-inline:7px; }
-  .now-track{ width:100%; }
+  .now-track{ width:min(40%, 128px); }
   .now-art-wrap, .now-art{ width:34px; height:34px; }
   .now-fav{ width:24px; }
   .player-control-lyrics, .player-control-mute{ width:25px; }
@@ -1713,10 +1711,9 @@ button:focus-visible{
 }
 
 @media (max-height:560px) and (max-width:640px){
-  :root{ --rail-h:58px; --nowbar-h:102px; --player-height:var(--nowbar-h); }
+  :root{ --rail-h:58px; --nowbar-h:68px; --player-height:var(--nowbar-h); }
   .rail{ height:var(--rail-h); }
   .topbar{ padding-block:8px; }
-  .nowbar{ grid-template-rows:34px 30px 14px; padding-block:6px; }
 }
 
 /* Liquid glass: only the helper's four highest-priority visible surfaces use
@@ -1900,7 +1897,6 @@ button:focus-visible{
   body:has(#nowbar:not(.hidden)) .photo-editor-card{
     max-height:calc(100dvh - var(--player-height) - 42px); overflow-y:auto;
   }
-  .nowbar{ grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr); }
   .now-extra .icon-btn{ width:28px; height:28px; }
   .now-extra .icon-btn svg{ width:16px; height:16px; }
 }
