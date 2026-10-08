@@ -27,6 +27,11 @@ class Track:
 class UploadQuotaExceeded(RuntimeError):
     """Raised when an upload no longer fits the account quota at commit time."""
 
+
+class AudioUnavailableError(RuntimeError):
+    """A track has neither a Storage object nor a legacy database audio blob."""
+
+
 def track_id_for_bytes(data: BytesLike) -> str:
     size, sample_size = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:sample_size])
     if size > sample_size: digest.update(data[-sample_size:])
@@ -284,7 +289,9 @@ class Library:
                     TrackRecord.user_id == self.user_id,
                 )
             )
-        return bytes(data) if data is not None else b""
+        if data is None:
+            raise AudioUnavailableError(f"Track {track_id} has no audio in Storage or the database.")
+        return bytes(data)
 
     def audio_bytes(self, track_id: str, max_bytes: int | None = None):
         """``(data, filename)``.  Prefer :meth:`read_range`; this reads the whole file when ``max_bytes`` is None."""
@@ -304,7 +311,9 @@ class Library:
         with tenant_session(self.user_id) as s:
             data = s.scalar(select(TrackRecord.audio_data).where(
                 TrackRecord.id == track_id, TrackRecord.user_id == self.user_id))
-        return (bytes(data) if data is not None else None), filename
+        if data is None:
+            raise AudioUnavailableError(f"Track {track_id} has no audio in Storage or the database.")
+        return bytes(data), filename
 
     def _read_metadata(self, filename, data: BytesLike):
         title,artist=_parse_filename(filename);album="Unknown Album";duration=0.;cover=make_placeholder_cover(title);has_cover=False

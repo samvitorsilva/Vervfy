@@ -242,7 +242,6 @@ function PlaybackSeek({
       </div>
     );
   }
-
   return (
     <div className={`seek-row${className ? ` ${className}` : ""}`}>
       <span className="time">{formatTime(displayedTime)}</span>
@@ -457,6 +456,7 @@ function seekAudio(audio: HTMLAudioElement | null, offset: number): void {
 
 function viewName(view: LibraryView, playlists: PlaylistRecord[]): string {
   if (view === "library") return "Library";
+  if (view === "offline") return "Offline";
   if (view === "favorites") return "Favorites";
   if (view === "playlists") return "Playlists";
   if (view === "artists") return "Artists";
@@ -706,6 +706,7 @@ export default function LibraryApp() {
 
   const visibleTracks = useMemo(() => {
     let list = tracks;
+    if (view === "offline") list = list.filter((track) => track.offline);
     if (view === "favorites") list = list.filter((track) => track.favorite);
     if (view.startsWith("playlist:")) {
       const playlist = playlists.find((item) => `playlist:${item.id}` === view);
@@ -1327,6 +1328,32 @@ export default function LibraryApp() {
             offlineObjectUrlsRef.current.add(coverUrl);
             track.coverUrl = coverUrl;
           }
+        }
+        const loadedTrackIds = new Set(nextTracks.map((track) => track.id));
+        for (const record of offlineRecords) {
+          if (loadedTrackIds.has(record.trackId)) continue;
+          const offlineUrl = URL.createObjectURL(record.audio);
+          offlineObjectUrlsRef.current.add(offlineUrl);
+          const fallbackCover = generateAura(`${record.artist}|${record.album}|${record.title}`);
+          let coverUrl = fallbackCover;
+          if (record.cover instanceof Blob) {
+            coverUrl = URL.createObjectURL(record.cover);
+            offlineObjectUrlsRef.current.add(coverUrl);
+          }
+          nextTracks.push({
+            id: record.trackId,
+            title: record.title || "Unknown title",
+            artist: record.artist || "Unknown artist",
+            album: record.album || "Unknown album",
+            duration: record.duration || 0,
+            coverUrl,
+            remoteCoverUrl: fallbackCover,
+            streamUrl: "",
+            offlineUrl,
+            offline: true,
+            favorite: false,
+            customLyrics: record.customLyrics,
+          });
         }
         if (cancelled) return;
         setProfile(account);
@@ -2026,6 +2053,16 @@ export default function LibraryApp() {
         </div>
       );
     }
+    if (view === "offline") {
+      return (
+        <div className="empty">
+          <div className="empty-orb"><Icon name="offline" /></div>
+          <h3>No offline songs yet</h3>
+          <p>Download songs from the library menu to listen without an internet connection.</p>
+          <button className="btn btn-primary" type="button" onClick={() => setView("library")}>Browse library</button>
+        </div>
+      );
+    }
     if (tracks.length === 0) {
       return (
         <div className="empty">
@@ -2250,6 +2287,7 @@ export default function LibraryApp() {
             <div className="logo-word">Vervfy</div>
           </div>
           <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip="Library" aria-label="Library" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
+          <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip="Offline" aria-label="Offline" aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
           <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip="Playlists" aria-label="Playlists" aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
           <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip="Artists" aria-label="Artists" aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /></button>
           <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip="Favorites" aria-label="Favorites" aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /></button>
@@ -2269,7 +2307,7 @@ export default function LibraryApp() {
             </button>
             <div className="topbar-id">
               <span className="view-title">{title}</span>
-              <span className="view-count">{tracks.length || view === "playlists" || playlistForView ? `· ${count}` : ""}</span>
+              <span className="view-count">{tracks.length || view === "playlists" || view === "offline" || playlistForView ? `· ${count}` : ""}</span>
             </div>
             {view !== "account" ? (
               <div className="view-toggle" role="group" aria-label="View mode">

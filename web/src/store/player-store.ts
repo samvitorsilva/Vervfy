@@ -5,6 +5,7 @@ import { create } from "zustand";
 export type RepeatMode = "off" | "all" | "one";
 export type LibraryView =
   | "library"
+  | "offline"
   | "favorites"
   | "playlists"
   | "artists"

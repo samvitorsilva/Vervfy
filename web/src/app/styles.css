@@ -1298,7 +1298,7 @@ body.mini-mode .mini-player{ display:block; }
 .drop-overlay.show{ display:flex; pointer-events:auto; cursor:pointer; }
 .drop-overlay h3{ font-size:22px; font-weight:700; letter-spacing:-0.02em; }
 
-.toast-wrap{
+.toasts{
   position:fixed; bottom:112px; left:50%; transform:translateX(-50%); z-index:120;
   display:flex; flex-direction:column; gap:8px; align-items:center;
 }

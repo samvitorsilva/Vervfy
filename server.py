@@ -37,7 +37,7 @@ from database import Base, engine
 import audio_store
 import auth
 from db import Artist, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
-from library import Library, UploadQuotaExceeded, track_id_for_bytes
+from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
 ROOT = Path(__file__).resolve().parent
@@ -1903,7 +1903,11 @@ def track_stream(request: Request, track_id: str, user=Depends(require_api_user)
         return StreamingResponse(body(), status_code=status_code, media_type=media_type, headers=headers)
 
     # Legacy track whose audio is still in Postgres: fetch just the slice.
-    payload = library.read_range(track_id, start, end) or b""
+    try:
+        payload = library.read_range(track_id, start, end) or b""
+    except AudioUnavailableError:
+        log.error("track %s has no audio in Storage or the database", track_id)
+        raise HTTPException(status_code=502, detail="Track audio is unavailable") from None
     headers["Content-Length"] = str(len(payload))
     return Response(content=payload, status_code=status_code, media_type=media_type, headers=headers)
 
@@ -1942,6 +1946,9 @@ def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
     except audio_store.StorageError:
         log.exception("audio storage read failed for %s", track_id)
         raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
+    except AudioUnavailableError:
+        log.error("track %s has no audio in Storage or the database", track_id)
+        raise HTTPException(status_code=502, detail="Track audio is unavailable") from None
     return Response(
         content=data or b"",
         media_type="application/octet-stream",

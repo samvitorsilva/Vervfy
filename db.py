@@ -120,7 +120,7 @@ class TrackRecord(Base):
     audio_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     storage_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
 
 
 class Favorite(Base):
