@@ -21,7 +21,7 @@ export default function RootProviders({ children }: { children: ReactNode }) {
       <ServiceWorkerRegistration />
       <LiquidGlass />
       {children}
-      <audio ref={audioRef} preload="metadata" hidden />
+      <audio ref={audioRef} preload="auto" hidden />
     </>
   );
 }
