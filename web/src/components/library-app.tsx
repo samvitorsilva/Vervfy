@@ -69,6 +69,38 @@ const AURA_PALETTE = [
   ["#c084fc", "#54e8d4"],
 ];
 
+interface PlaybackAttempt {
+  trackId: string; // TEMP DEBUG
+  src: string;
+  retryCount: number;
+  retryTimer: number | null;
+  requestId: number;
+  loading: boolean;
+  failed: boolean;
+}
+
+function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknown): void {
+  const errorName =
+    error instanceof Error
+      ? error.name
+      : error && typeof error === "object" && "name" in error && typeof error.name === "string"
+        ? error.name
+        : "UnknownError";
+  const errorMessage =
+    error instanceof Error
+      ? error.message
+      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+        ? error.message
+        : String(error);
+  console.warn(`[audio] ${context}`, {
+    name: errorName,
+    message: errorMessage,
+    code: audio.error?.code ?? null,
+    networkState: audio.networkState,
+    readyState: audio.readyState,
+  });
+}
+
 function generateAura(seed: string): string {
   let hash = 0;
   for (let index = 0; index < seed.length; index += 1) {
@@ -549,6 +581,8 @@ export default function LibraryApp() {
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const toggleFavorite = usePlayerStore((state) => state.toggleFavorite);
   const setPlaylists = usePlayerStore((state) => state.setPlaylists);
+  const playbackAttemptRef = useRef<PlaybackAttempt | null>(null);
+  const runPlaybackAttemptRef = useRef<(attempt: PlaybackAttempt) => void>(() => {});
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -745,29 +779,32 @@ export default function LibraryApp() {
   }, []);
 
   // TEMP DEBUG
-  const showPlaybackDebug = useCallback((trackId: string, audio: HTMLAudioElement, error: unknown) => {
-    const errorName =
-      error instanceof Error
-        ? error.name
-        : error && typeof error === "object" && "name" in error && typeof error.name === "string"
+  const showPlaybackDebug = useCallback(
+    (trackId: string, audio: HTMLAudioElement, error: unknown) => {
+      const errorName =
+        error instanceof Error
           ? error.name
-          : "UnknownError";
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+          : error && typeof error === "object" && "name" in error && typeof error.name === "string"
+            ? error.name
+            : "UnknownError";
+      const errorMessage =
+        error instanceof Error
           ? error.message
-          : String(error);
-    const srcPath = new URL(audio.currentSrc || audio.src, window.location.href).pathname;
-    setDebugToast(
-      `DEBUG id=${trackId} storage=unknown error=${errorName} message=${errorMessage.replace(/\s+/g, " ")} code=${audio.error?.code ?? "null"} net=${audio.networkState} ready=${audio.readyState} src=${srcPath}`,
-    );
-    if (debugToastTimeoutRef.current) clearTimeout(debugToastTimeoutRef.current);
-    debugToastTimeoutRef.current = setTimeout(() => {
-      setDebugToast("");
-      debugToastTimeoutRef.current = null;
-    }, 10000);
-  }, []);
+          : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+            ? error.message
+            : String(error);
+      const srcPath = new URL(audio.currentSrc || audio.src, window.location.href).pathname;
+      setDebugToast(
+        `DEBUG id=${trackId} storage=unknown error=${errorName} message=${errorMessage.replace(/\s+/g, " ")} code=${audio.error?.code ?? "null"} net=${audio.networkState} ready=${audio.readyState} src=${srcPath}`,
+      );
+      if (debugToastTimeoutRef.current) clearTimeout(debugToastTimeoutRef.current);
+      debugToastTimeoutRef.current = setTimeout(() => {
+        setDebugToast("");
+        debugToastTimeoutRef.current = null;
+      }, 10000);
+    },
+    [],
+  );
 
   const reloadTracks = useCallback(async () => {
     const response = await expectOk(
@@ -996,25 +1033,166 @@ export default function LibraryApp() {
     return saveQueueRef.current;
   }, [applyMeta, notify]);
 
+  const handlePlaybackFailure = useCallback(
+    (
+      attempt: PlaybackAttempt,
+      audio: HTMLAudioElement,
+      error: unknown,
+      message: string,
+    ) => {
+      if (
+        playbackAttemptRef.current !== attempt ||
+        attempt.failed ||
+        attempt.retryTimer !== null
+      ) {
+        return;
+      }
+      attempt.loading = false;
+
+      const errorName =
+        error && typeof error === "object" && "name" in error && typeof error.name === "string"
+          ? error.name
+          : "";
+      if (errorName === "AbortError") {
+        return;
+      }
+      if (
+        errorName !== "NotAllowedError" &&
+        attempt.retryCount === 0 &&
+        (errorName === "NetworkError" ||
+          audio.error?.code === MediaError.MEDIA_ERR_ABORTED ||
+          audio.error?.code === MediaError.MEDIA_ERR_NETWORK)
+      ) {
+        attempt.retryCount += 1;
+        attempt.retryTimer = window.setTimeout(() => {
+          attempt.retryTimer = null;
+          if (playbackAttemptRef.current === attempt && audio.src === attempt.src) {
+            runPlaybackAttemptRef.current(attempt);
+          }
+        }, 300);
+        return;
+      }
+
+      attempt.failed = true;
+      setPlaying(false);
+      notify(errorName === "NotAllowedError" ? "Press play to start." : message);
+    },
+    [notify, setPlaying],
+  );
+
+  const runPlaybackAttempt = useCallback(
+    (attempt: PlaybackAttempt) => {
+      const audio = usePlayerStore.getState().audioElement;
+      if (!audio || playbackAttemptRef.current !== attempt) return;
+      const requestId = ++attempt.requestId;
+      attempt.loading = true;
+      if (
+        audio.src !== attempt.src ||
+        audio.error !== null ||
+        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
+      ) {
+        console.trace("[audio] load called", attempt.src); // TEMP DEBUG
+        audio.src = attempt.src;
+        console.trace("[audio] load called", attempt.src); // TEMP DEBUG
+        audio.load();
+      }
+      setPlaying(true);
+      void audio.play().then(
+        () => {
+          if (playbackAttemptRef.current === attempt && attempt.requestId === requestId) {
+            attempt.loading = false;
+          }
+        },
+        (error: unknown) => {
+          if (
+            playbackAttemptRef.current !== attempt ||
+            attempt.requestId !== requestId ||
+            audio.src !== attempt.src
+          ) {
+            return;
+          }
+          attempt.loading = false;
+          if (
+            error &&
+            typeof error === "object" &&
+            "name" in error &&
+            error.name === "AbortError"
+          ) {
+            setPlaying(false);
+            return;
+          }
+          logAudioFailure("play() rejected", audio, error);
+          showPlaybackDebug(attempt.trackId, audio, error); // TEMP DEBUG
+          handlePlaybackFailure(
+            attempt,
+            audio,
+            error,
+            "The track could not start. Please try again.",
+          );
+        },
+      );
+    },
+    [handlePlaybackFailure, setPlaying, showPlaybackDebug], // TEMP DEBUG
+  );
   const startTrack = useCallback(
     (trackId: string) => {
       const track = usePlayerStore.getState().tracks.find((item) => item.id === trackId);
       const audio = usePlayerStore.getState().audioElement;
       if (!track || !audio) return;
-      audio.src = track.offlineUrl || track.streamUrl;
-      audio.load();
-      setPlaying(true);
-      void audio.play().catch((error: unknown) => {
-        setPlaying(false);
-        showPlaybackDebug(trackId, audio, error); // TEMP DEBUG
-        if (error instanceof DOMException && error.name === "NotAllowedError") {
-          notify("Press play to start.");
-        } else {
-          notify("The track could not start. Please try again.");
-        }
-      });
+
+      const src = new URL(track.offlineUrl || track.streamUrl, window.location.href).href;
+      const currentAttempt = playbackAttemptRef.current;
+      if (
+        currentAttempt?.src === src &&
+        !currentAttempt.failed &&
+        (currentAttempt.loading || !audio.paused)
+      ) {
+        return;
+      }
+
+      const previousAttempt = playbackAttemptRef.current;
+      if (previousAttempt?.retryTimer !== null && previousAttempt?.retryTimer !== undefined) {
+        window.clearTimeout(previousAttempt.retryTimer);
+      }
+      const attempt: PlaybackAttempt = {
+        trackId, // TEMP DEBUG
+        src,
+        retryCount: 0,
+        retryTimer: null,
+        requestId: 0,
+        loading: false,
+        failed: false,
+      };
+      playbackAttemptRef.current = attempt;
+      runPlaybackAttemptRef.current = runPlaybackAttempt;
+      runPlaybackAttempt(attempt);
     },
-    [notify, setPlaying, showPlaybackDebug], // TEMP DEBUG
+    [runPlaybackAttempt],
+  );
+
+  const handleAudioError = useCallback(
+    (audio: HTMLAudioElement) => {
+      const error = new Error(audio.error?.message || "Audio element emitted an error");
+      error.name = "MediaError";
+      logAudioFailure("audio error event", audio, error);
+
+      const attempt = playbackAttemptRef.current;
+      if (
+        !attempt ||
+        audio.src !== attempt.src ||
+        (audio.currentSrc && audio.currentSrc !== attempt.src)
+      ) {
+        return;
+      }
+      showPlaybackDebug(attempt.trackId, audio, error); // TEMP DEBUG
+      handlePlaybackFailure(
+        attempt,
+        audio,
+        error,
+        "This track could not be played. Check the file format or your connection.",
+      );
+    },
+    [handlePlaybackFailure, showPlaybackDebug], // TEMP DEBUG
   );
 
   const playFromList = useCallback(
@@ -1142,6 +1320,12 @@ export default function LibraryApp() {
         startTrack(currentTrack.id);
       }
     } else {
+      const attempt = playbackAttemptRef.current;
+      if (attempt?.retryTimer !== null && attempt?.retryTimer !== undefined) {
+        window.clearTimeout(attempt.retryTimer);
+        attempt.retryTimer = null;
+      }
+      if (attempt) attempt.requestId += 1;
       audioElement.pause();
     }
   }, [audioElement, currentTrack, playFromList, startTrack, visibleTracks]);
@@ -1456,15 +1640,7 @@ export default function LibraryApp() {
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "paused";
     };
     const onEnded = () => nextRef.current(true);
-    const onError = () => {
-      setPlaying(false);
-      const state = usePlayerStore.getState(); // TEMP DEBUG
-      const trackId = state.queue[state.queueIndex] ?? "unknown"; // TEMP DEBUG
-      const error = new Error(audioElement.error?.message || "Audio element emitted an error"); // TEMP DEBUG
-      error.name = "MediaError"; // TEMP DEBUG
-      showPlaybackDebug(trackId, audioElement, error); // TEMP DEBUG
-      notify("This track could not be played. Check the file format or your connection.");
-    };
+    const onError = () => handleAudioError(audioElement);
     audioElement.addEventListener("timeupdate", updatePlayback);
     audioElement.addEventListener("loadedmetadata", updatePlaybackPosition);
     audioElement.addEventListener("durationchange", updatePlaybackPosition);
@@ -1484,7 +1660,7 @@ export default function LibraryApp() {
       audioElement.removeEventListener("ended", onEnded);
       audioElement.removeEventListener("error", onError);
     };
-  }, [audioElement, notify, setPlaying, showPlaybackDebug]); // TEMP DEBUG
+  }, [audioElement, handleAudioError, setPlaying]);
 
   useEffect(() => {
     document.body.classList.toggle("mini-mode", miniMode);
@@ -1666,7 +1842,9 @@ export default function LibraryApp() {
       } else {
         audioElement?.pause();
         if (audioElement) {
+          console.trace("[audio] load called", audioElement.src); // TEMP DEBUG
           audioElement.removeAttribute("src");
+          console.trace("[audio] load called", audioElement.src); // TEMP DEBUG
           audioElement.load();
         }
         setQueue([], -1);
@@ -1992,7 +2170,10 @@ export default function LibraryApp() {
             aria-haspopup="menu"
             aria-expanded={trackMenu?.trackId === track.id}
             data-track-menu-trigger
-            onClick={(event) => toggleTrackMenu(track, event)}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleTrackMenu(track, event);
+            }}
           >
             <Icon name="more" />
           </button>
