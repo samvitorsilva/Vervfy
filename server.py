@@ -14,7 +14,6 @@ import mimetypes
 import os
 import re
 import secrets
-import threading
 import time
 import unicodedata
 import uuid
@@ -86,7 +85,6 @@ app = FastAPI(
 @app.on_event("shutdown")
 def close_audio_store() -> None:
     audio_store.close_client()
-    _close_artist_http_client()
 
 
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
@@ -224,29 +222,6 @@ _artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
 _artist_photo_result_cache: dict[str, tuple[float, tuple[str | None, int | None]]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 MAX_ARTIST_CACHE_ENTRIES = 1024
-_artist_http_client: httpx.Client | None = None
-_artist_http_client_lock = threading.Lock()
-
-
-def _get_artist_http_client() -> httpx.Client:
-    """Reuse provider connections so artist photo/profile lookups avoid TLS setup."""
-    global _artist_http_client
-    with _artist_http_client_lock:
-        if _artist_http_client is None or _artist_http_client.is_closed:
-            _artist_http_client = httpx.Client(
-                headers={"User-Agent": "Vervfy/1.0"},
-                follow_redirects=True,
-                timeout=httpx.Timeout(6.0, connect=4.0),
-            )
-        return _artist_http_client
-
-
-def _close_artist_http_client() -> None:
-    global _artist_http_client
-    with _artist_http_client_lock:
-        if _artist_http_client is not None:
-            _artist_http_client.close()
-            _artist_http_client = None
 
 
 # Bust portraits cached before the current process started (wrong namesake matches,
@@ -678,18 +653,18 @@ def _deezer_artist_for_name(name: str) -> dict | None:
     artist: dict | None = None
     candidates = _artist_name_candidates(name) or [name.strip()]
     try:
-        client = _get_artist_http_client()
-        for candidate in candidates:
-            response = client.get(
-                "https://api.deezer.com/search/artist",
-                params={"q": candidate, "limit": 10},
-                timeout=4.0,
-            )
-            response.raise_for_status()
-            results = response.json().get("data", [])
-            artist, _ = _matching_catalog_artist(results, [candidate], "name")
-            if artist:
-                break
+        with httpx.Client(timeout=4.0) as client:
+            for candidate in candidates:
+                response = client.get(
+                    "https://api.deezer.com/search/artist",
+                    params={"q": candidate, "limit": 10},
+                    headers={"User-Agent": "Vervfy/1.0"},
+                )
+                response.raise_for_status()
+                results = response.json().get("data", [])
+                artist, _ = _matching_catalog_artist(results, [candidate], "name")
+                if artist:
+                    break
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         log.warning("Deezer artist lookup failed for %r: %s", name, exc)
     _cache_artist_result(
@@ -704,47 +679,44 @@ def _deezer_artist_has_library_title(artist: dict, titles: list[str]) -> bool:
     if not artist_id or not title_keys:
         return False
     try:
-        client = _get_artist_http_client()
-        try:
-            top = client.get(
-                f"https://api.deezer.com/artist/{artist_id}/top",
-                params={"limit": 100},
-                timeout=3.0,
-            )
-            top.raise_for_status()
-            tracks = top.json().get("data", [])
-            if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
-                return True
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            log.warning("Deezer top-track check failed for artist %r: %s", artist.get("name"), exc)
-
-        albums_response = client.get(
-            f"https://api.deezer.com/artist/{artist_id}/albums",
-            params={"limit": 50},
-            timeout=3.0,
-        )
-        albums_response.raise_for_status()
-        albums = albums_response.json().get("data", [])
-        for album in albums:
-            if _artist_track_title_key(str(album.get("title", ""))) in title_keys:
-                return True
-        # Cap album crawls — top + album titles cover most library matches.
-        for album in albums[:5]:
-            album_id = album.get("id")
-            if not album_id:
-                continue
+        with httpx.Client(timeout=3.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
             try:
-                response = client.get(
-                    f"https://api.deezer.com/album/{album_id}/tracks",
+                top = client.get(
+                    f"https://api.deezer.com/artist/{artist_id}/top",
                     params={"limit": 100},
-                    timeout=3.0,
                 )
-                response.raise_for_status()
-                tracks = response.json().get("data", [])
+                top.raise_for_status()
+                tracks = top.json().get("data", [])
                 if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
                     return True
             except (httpx.HTTPError, ValueError, TypeError) as exc:
-                log.warning("Deezer album-track check failed for artist %r: %s", artist.get("name"), exc)
+                log.warning("Deezer top-track check failed for artist %r: %s", artist.get("name"), exc)
+
+            albums_response = client.get(
+                f"https://api.deezer.com/artist/{artist_id}/albums",
+                params={"limit": 50},
+            )
+            albums_response.raise_for_status()
+            albums = albums_response.json().get("data", [])
+            for album in albums:
+                if _artist_track_title_key(str(album.get("title", ""))) in title_keys:
+                    return True
+            # Cap album crawls — top + album titles cover most library matches.
+            for album in albums[:5]:
+                album_id = album.get("id")
+                if not album_id:
+                    continue
+                try:
+                    response = client.get(
+                        f"https://api.deezer.com/album/{album_id}/tracks",
+                        params={"limit": 100},
+                    )
+                    response.raise_for_status()
+                    tracks = response.json().get("data", [])
+                    if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
+                        return True
+                except (httpx.HTTPError, ValueError, TypeError) as exc:
+                    log.warning("Deezer album-track check failed for artist %r: %s", artist.get("name"), exc)
     except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
         log.warning("Deezer catalog verification failed for artist %r: %s", artist.get("name"), exc)
     return False
@@ -956,7 +928,12 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
     else:
         profile = {}
         try:
-            profile = _fetch_wikipedia_artist_profile(_get_artist_http_client(), name) or {}
+            with httpx.Client(
+                timeout=6.0,
+                headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
+                follow_redirects=True,
+            ) as client:
+                profile = _fetch_wikipedia_artist_profile(client, name) or {}
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             log.warning("Wikipedia artist lookup failed for %r: %s", name, exc)
         _cache_artist_result(
@@ -1608,30 +1585,29 @@ def _deezer_error_is_quota(error: object) -> bool:
 
 def _fetch_deezer_artist(name: str) -> dict:
     try:
-        client = _get_artist_http_client()
-        for attempt in range(2):
-            response = client.get(
-                "https://api.deezer.com/search/artist",
-                params={"q": name, "limit": 10},
-                timeout=6.0,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise HTTPException(status_code=502, detail="Invalid artist provider response")
-            error = payload.get("error")
-            if error is not None:
-                if attempt == 0 and _deezer_error_is_quota(error):
-                    time.sleep(1)
-                    continue
-                raise HTTPException(status_code=502, detail="Artist provider lookup failed")
-            results = payload.get("data")
-            if not isinstance(results, list):
-                raise HTTPException(status_code=502, detail="Invalid artist provider response")
-            artist = _pick_deezer_artist_match(results, name)
-            if not isinstance(artist, dict) or not isinstance(artist.get("id"), int):
-                raise HTTPException(status_code=404, detail="Artist not found")
-            return artist
+        with httpx.Client(timeout=6.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
+            for attempt in range(2):
+                response = client.get(
+                    "https://api.deezer.com/search/artist",
+                    params={"q": name, "limit": 10},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
+                error = payload.get("error")
+                if error is not None:
+                    if attempt == 0 and _deezer_error_is_quota(error):
+                        time.sleep(1)
+                        continue
+                    raise HTTPException(status_code=502, detail="Artist provider lookup failed")
+                results = payload.get("data")
+                if not isinstance(results, list):
+                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
+                artist = _pick_deezer_artist_match(results, name)
+                if not isinstance(artist, dict) or not isinstance(artist.get("id"), int):
+                    raise HTTPException(status_code=404, detail="Artist not found")
+                return artist
     except HTTPException:
         raise
     except (httpx.HTTPError, ValueError, TypeError) as exc:

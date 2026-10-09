@@ -17,16 +17,6 @@ interface ArtistPhotoData {
   nb_fan: number | null;
 }
 
-type ArtistProfile = Record<string, unknown> | null;
-type ArtistDataCacheEntry<T> = { value: T; expiresAt: number };
-
-const ARTIST_DATA_TTL = 24 * 60 * 60 * 1000;
-const EMPTY_ARTIST_DATA_TTL = 10 * 60 * 1000;
-const artistPhotoCache = new Map<string, ArtistDataCacheEntry<ArtistPhotoData>>();
-const artistPhotoRequests = new Map<string, Promise<ArtistPhotoData>>();
-const artistProfileCache = new Map<string, ArtistDataCacheEntry<ArtistProfile>>();
-const artistProfileRequests = new Map<string, Promise<ArtistProfile>>();
-
 export function artistNames(track: TrackRecord): string[] {
   const names = track.artist
     .split(/\s*(?:,|;|\/|\bfeat(?:uring)?\.?|\bft\.?|\bwith\b)\s*/i)
@@ -56,71 +46,11 @@ function artistKey(name: string): string {
   return name.toLocaleLowerCase();
 }
 
-function fetchCachedArtistData<T>(
-  name: string,
-  cache: Map<string, ArtistDataCacheEntry<T>>,
-  requests: Map<string, Promise<T>>,
-  fetchData: () => Promise<T>,
-  hasData: (value: T) => boolean,
-): Promise<T> {
-  const key = artistKey(name);
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
-  const pending = requests.get(key);
-  if (pending) return pending;
-
-  const request = fetchData()
-    .then((value) => {
-      cache.set(key, {
-        value,
-        expiresAt: Date.now() + (hasData(value) ? ARTIST_DATA_TTL : EMPTY_ARTIST_DATA_TTL),
-      });
-      return value;
-    })
-    .finally(() => requests.delete(key));
-  requests.set(key, request);
-  return request;
-}
-
-function fetchArtistPhoto(name: string): Promise<ArtistPhotoData> {
-  return fetchCachedArtistData(
-    name,
-    artistPhotoCache,
-    artistPhotoRequests,
-    async () => {
-      const query = new URLSearchParams({ name });
-      const response = await apiFetch(`/api/artists/photo?${query}`);
-      if (!response.ok) throw new Error(`Artist photo lookup failed (${response.status})`);
-      return (await response.json()) as ArtistPhotoData;
-    },
-    (data) => data.picture !== null,
-  );
-}
-
-function fetchArtistProfile(name: string): Promise<ArtistProfile> {
-  return fetchCachedArtistData(
-    name,
-    artistProfileCache,
-    artistProfileRequests,
-    async () => {
-      const query = new URLSearchParams({ name });
-      const response = await apiFetch(`/api/artists/profile?${query}`);
-      if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
-      const payload = (await response.json()) as { profile: ArtistProfile };
-      return payload.profile;
-    },
-    (profile) => profile !== null,
-  );
-}
-
-function clearArtistPhoto(name: string): void {
-  const key = artistKey(name);
-  const cached = artistPhotoCache.get(key);
-  if (!cached) return;
-  artistPhotoCache.set(key, {
-    value: { ...cached.value, picture: null },
-    expiresAt: Date.now() + EMPTY_ARTIST_DATA_TTL,
-  });
+async function fetchArtistPhoto(name: string): Promise<ArtistPhotoData> {
+  const query = new URLSearchParams({ name });
+  const response = await apiFetch(`/api/artists/photo?${query}`);
+  if (!response.ok) throw new Error(`Artist photo lookup failed (${response.status})`);
+  return (await response.json()) as ArtistPhotoData;
 }
 
 export default function ArtistExplorer({
@@ -276,6 +206,7 @@ export default function ArtistExplorer({
     if (!currentArtist) return;
     let cancelled = false;
     const key = artistKey(currentArtist.name);
+    const query = new URLSearchParams({ name: currentArtist.name });
     const photoRequest =
       photoByArtistRef.current[key]
         ? Promise.resolve(photoByArtistRef.current[key])
@@ -289,8 +220,12 @@ export default function ArtistExplorer({
         console.warn("Artist photo unavailable", error);
         saveArtistPhoto(key, { picture: null, nb_fan: null });
       });
-    void fetchArtistProfile(currentArtist.name)
-      .then((nextProfile) => {
+    void apiFetch(`/api/artists/profile?${query}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
+        return (await response.json()) as { profile: Record<string, unknown> | null };
+      })
+      .then(({ profile: nextProfile }) => {
         if (cancelled) return;
         setProfileByArtist((current) => ({ ...current, [key]: nextProfile }));
         setLoadedProfiles((current) => ({ ...current, [key]: true }));
@@ -341,7 +276,6 @@ export default function ArtistExplorer({
                     decoding="async"
                     referrerPolicy="no-referrer"
                     onError={() => {
-                      clearArtistPhoto(artist.name);
                       setPhotoByArtist((current) => {
                         const data = current[key];
                         return data?.picture
@@ -405,12 +339,10 @@ export default function ArtistExplorer({
             className="artist-photo"
             src={heroSrc}
             alt={currentArtist.name}
-            fetchPriority="high"
             decoding="async"
             referrerPolicy="no-referrer"
             onError={() => {
               const key = artistKey(currentArtist.name);
-              clearArtistPhoto(currentArtist.name);
               setPhotoByArtist((current) => {
                 const data = current[key];
                 return data
