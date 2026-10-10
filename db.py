@@ -172,3 +172,13 @@ class Artist(Base):
     picture: Mapped[str | None] = mapped_column(Text)
     fans: Mapped[int | None] = mapped_column(BigInteger)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArtistImageCache(Base):
+    __tablename__ = "artist_image_cache"
+    normalized_name: Mapped[str] = mapped_column(String(200), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    looked_up_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

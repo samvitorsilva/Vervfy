@@ -132,6 +132,12 @@ in front of the application, start Uvicorn with
 `--proxy-headers --forwarded-allow-ips='*'` so forwarded HTTPS headers are
 trusted.
 
+Artist portraits are cached in the shared `artist_image_cache` table. After
+deploying the migration, optionally backfill existing library artists with
+`python scripts/backfill_artist_images.py`; the script throttles lookups to at
+most five per second. Missing portraits are also filled in the background as
+the Artists view is opened and after uploads.
+
 If the application database role does not own the tables, set
 `MIGRATION_DATABASE_URL` to a PostgreSQL URL for a role that owns them. Alembic
 uses that URL for schema changes, while the running app continues using

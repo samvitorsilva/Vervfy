@@ -248,6 +248,29 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
   }
   if (embedded) return embedded;
 
+  type LrclibEntry = Record<string, unknown>;
+  const leadOf = (value: string) => value.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "";
+  const titleKey = normalized(title);
+  const artistKey = normalized(leadArtist);
+  const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
+  // Wider window, used only to find a *timed* copy when the close matches have plain text only.
+  const syncedFallbackTolerance = Math.min(20, Math.max(10, track.duration * 0.08));
+
+  const sameSong = (entry: LrclibEntry) =>
+    normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
+    normalized(leadOf(String(entry.artistName ?? ""))) === artistKey;
+  const durationDelta = (entry: LrclibEntry) =>
+    typeof entry.duration === "number" && entry.duration > 0
+      ? Math.abs(entry.duration - track.duration)
+      : Number.POSITIVE_INFINITY;
+  const within = (entry: LrclibEntry, tolerance: number) => !track.duration || durationDelta(entry) <= tolerance;
+  const hasSynced = (entry: LrclibEntry) =>
+    typeof entry.syncedLyrics === "string" && parseLrc(entry.syncedLyrics).length > 0;
+  const hasPlain = (entry: LrclibEntry) =>
+    typeof entry.plainLyrics === "string" && entry.plainLyrics.trim().length > 0;
+  const closest = (entries: LrclibEntry[]) =>
+    [...entries].sort((left, right) => durationDelta(left) - durationDelta(right))[0] ?? null;
+
   const query = new URLSearchParams({
     track_name: title,
     artist_name: leadArtist,
@@ -255,26 +278,32 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     ...(track.duration > 0 ? { duration: String(Math.round(track.duration)) } : {}),
   });
   const response = await fetch(`https://lrclib.net/api/get?${query}`, { cache: "no-store", signal });
-  const titleKey = normalized(title);
-  const artistKey = normalized(leadArtist);
-  const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
-  const matchesTrack = (entry: Record<string, unknown>) =>
-    normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
-    normalized(String(entry.artistName ?? "").split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "") === artistKey &&
-    (!track.duration ||
-      (typeof entry.duration === "number" &&
-        entry.duration > 0 &&
-        Math.abs(entry.duration - track.duration) <= durationTolerance));
-  let candidate: Record<string, unknown> | null = response.ok
-    ? (await response.json()) as Record<string, unknown>
-    : null;
-  if (candidate && !matchesTrack(candidate)) candidate = null;
+  let exact: LrclibEntry | null = response.ok ? ((await response.json()) as LrclibEntry) : null;
+  if (exact && !(sameSong(exact) && within(exact, durationTolerance))) exact = null;
+  if (exact?.instrumental === true) return { source: "none" };
 
-  if (!candidate) {
+  const pool: LrclibEntry[] = exact ? [exact] : [];
+  // Prefer a timed copy: close in length first, then (only if none) a slightly wider window.
+  const pickBest = (): LrclibEntry | null => {
+    const usable = pool.filter((entry) => entry.instrumental !== true);
+    return (
+      closest(usable.filter((entry) => hasSynced(entry) && within(entry, durationTolerance))) ??
+      closest(usable.filter((entry) => hasSynced(entry) && within(entry, syncedFallbackTolerance))) ??
+      closest(usable.filter((entry) => hasPlain(entry) && within(entry, durationTolerance)))
+    );
+  };
+  const hasTimedChoice = () => {
+    const best = pickBest();
+    return best !== null && hasSynced(best);
+  };
+
+  // The exact hit already has timestamps: no extra requests needed.
+  if (!hasTimedChoice()) {
     const searches = [
       new URLSearchParams({ track_name: title, artist_name: leadArtist }),
       new URLSearchParams({ q: `${leadArtist} ${title}` }),
     ];
+    const seen = new Set<unknown>(pool.map((entry) => entry.id));
     for (const search of searches) {
       const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
         cache: "no-store",
@@ -283,21 +312,17 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
       if (!searchResponse.ok) continue;
       const results: unknown = await searchResponse.json();
       if (!Array.isArray(results)) continue;
-      candidate = (results as Record<string, unknown>[])
-        .filter(matchesTrack)
-        .sort((left, right) => {
-          const durationDelta = track.duration
-            ? Math.abs(Number(left.duration) - track.duration) -
-              Math.abs(Number(right.duration) - track.duration)
-            : 0;
-          if (durationDelta !== 0) return durationDelta;
-          return Number(Boolean(right.syncedLyrics)) - Number(Boolean(left.syncedLyrics));
-        })[0] ?? null;
-      if (candidate) break;
+      for (const entry of results as LrclibEntry[]) {
+        if (!sameSong(entry) || (entry.id !== undefined && seen.has(entry.id))) continue;
+        seen.add(entry.id);
+        pool.push(entry);
+      }
+      if (hasTimedChoice()) break;
     }
   }
 
-  if (!candidate || candidate.instrumental === true) return { source: "none" };
+  const candidate = pickBest();
+  if (!candidate) return { source: "none" };
   const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
   const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
   if (synced && parseLrc(synced).length) return parseLyricsText(synced, "online-synced");

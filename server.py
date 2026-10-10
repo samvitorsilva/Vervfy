@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 import asyncio
+from difflib import SequenceMatcher
 import functools
 import hashlib
 import logging
@@ -14,6 +15,7 @@ import mimetypes
 import os
 import re
 import secrets
+import threading
 import time
 import unicodedata
 import uuid
@@ -21,7 +23,7 @@ from typing import Annotated
 from urllib.parse import quote, urlsplit
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 import httpx
@@ -36,7 +38,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from db import Artist, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from db import Artist, ArtistImageCache, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -85,6 +87,7 @@ app = FastAPI(
 @app.on_event("shutdown")
 def close_audio_store() -> None:
     audio_store.close_client()
+    _close_artist_image_http_client()
 
 
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
@@ -222,6 +225,214 @@ _artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
 _artist_photo_result_cache: dict[str, tuple[float, tuple[str | None, int | None]]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
 MAX_ARTIST_CACHE_ENTRIES = 1024
+ARTIST_IMAGE_TTL = timedelta(days=7)
+_artist_image_lookups: set[str] = set()
+_artist_image_lookups_lock = threading.Lock()
+_artist_image_rate_lock = threading.Lock()
+_artist_image_last_request = 0.0
+_artist_image_http_client: httpx.Client | None = None
+_artist_image_http_client_lock = threading.Lock()
+
+
+def _get_artist_image_http_client() -> httpx.Client:
+    global _artist_image_http_client
+    with _artist_image_http_client_lock:
+        if _artist_image_http_client is None or _artist_image_http_client.is_closed:
+            _artist_image_http_client = httpx.Client(
+                headers={"User-Agent": "Vervfy/1.0"},
+                timeout=httpx.Timeout(5.0, connect=5.0),
+            )
+        return _artist_image_http_client
+
+
+def _close_artist_image_http_client() -> None:
+    global _artist_image_http_client
+    with _artist_image_http_client_lock:
+        if _artist_image_http_client is not None:
+            _artist_image_http_client.close()
+            _artist_image_http_client = None
+
+
+def _wait_for_artist_image_rate_limit() -> None:
+    global _artist_image_last_request
+    with _artist_image_rate_lock:
+        delay = 0.2 - (time.monotonic() - _artist_image_last_request)
+        if delay > 0:
+            time.sleep(delay)
+        _artist_image_last_request = time.monotonic()
+
+
+def _normalized_artist_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name.strip()).casefold()
+
+
+def _artist_image_record(name: str) -> ArtistImageCache | None:
+    normalized_name = _normalized_artist_name(name)
+    if not normalized_name:
+        return None
+    with SessionLocal() as session:
+        return session.get(ArtistImageCache, normalized_name)
+
+
+def _artist_image_is_stale(record: ArtistImageCache | None, now: datetime | None = None) -> bool:
+    if record is None:
+        return True
+    looked_up_at = record.looked_up_at
+    if looked_up_at.tzinfo is None:
+        looked_up_at = looked_up_at.replace(tzinfo=timezone.utc)
+    return (now or datetime.now(timezone.utc)) - looked_up_at >= ARTIST_IMAGE_TTL
+
+
+def _pick_artist_image_match(results: list, name: str) -> dict | None:
+    key = _artist_search_key(name)
+    if not key:
+        return None
+    ranked: list[tuple[float, int, dict]] = []
+    for result in results:
+        if not isinstance(result, dict) or not isinstance(result.get("name"), str):
+            continue
+        candidate_key = _artist_search_key(result["name"])
+        if not candidate_key:
+            continue
+        score = SequenceMatcher(None, key, candidate_key).ratio()
+        if score < 0.72:
+            continue
+        fans = result.get("nb_fan")
+        ranked.append((score, fans if isinstance(fans, int) else 0, result))
+    if not ranked:
+        return None
+    return max(ranked, key=lambda item: (item[0], item[1]))[2]
+
+
+def _store_artist_image(
+    normalized_name: str,
+    display_name: str,
+    image_url: str | None,
+) -> None:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    now = datetime.now(timezone.utc)
+    values = {
+        "normalized_name": normalized_name,
+        "display_name": display_name,
+        "image_url": image_url,
+        "source": "deezer" if image_url else "none",
+        "looked_up_at": now,
+        "updated_at": now,
+    }
+    with SessionLocal() as session:
+        if session.bind is not None and session.bind.dialect.name == "sqlite":
+            statement = sqlite_insert(ArtistImageCache).values(**values)
+        else:
+            statement = pg_insert(ArtistImageCache).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=[ArtistImageCache.normalized_name],
+            set_={
+                "display_name": statement.excluded.display_name,
+                "image_url": statement.excluded.image_url,
+                "source": statement.excluded.source,
+                "looked_up_at": statement.excluded.looked_up_at,
+                "updated_at": statement.excluded.updated_at,
+            },
+        )
+        session.execute(statement)
+        session.commit()
+
+
+def get_artist_image(name: str) -> str | None:
+    """Return a cached Deezer portrait, refreshing misses without surfacing failures."""
+    if not isinstance(name, str):
+        return None
+    normalized_name = _normalized_artist_name(name)
+    if not normalized_name or len(normalized_name) > 200:
+        return None
+    display_name = re.sub(r"\s+", " ", name.strip())
+    cached: ArtistImageCache | None = None
+    claimed_lookup = False
+    try:
+        cached = _artist_image_record(display_name)
+        if not _artist_image_is_stale(cached):
+            return cached.image_url if cached else None
+
+        with _artist_image_lookups_lock:
+            if normalized_name in _artist_image_lookups:
+                return cached.image_url if cached else None
+            _artist_image_lookups.add(normalized_name)
+            claimed_lookup = True
+
+        image_url: str | None = None
+        matched_name = display_name
+        try:
+            client = _get_artist_image_http_client()
+            for attempt in range(2):
+                try:
+                    _wait_for_artist_image_rate_limit()
+                    response = client.get(
+                        "https://api.deezer.com/search/artist",
+                        params={"q": display_name, "limit": 10},
+                        timeout=5.0,
+                    )
+                    if response.status_code >= 500 and attempt == 0:
+                        continue
+                    response.raise_for_status()
+                    payload = response.json()
+                    results = payload.get("data", []) if isinstance(payload, dict) else []
+                    artist = _pick_artist_image_match(results, display_name)
+                    if artist:
+                        matched_name = str(artist.get("name") or display_name)[:200]
+                        image_url = _deezer_portrait_url(artist)
+                    break
+                except httpx.TimeoutException:
+                    if attempt == 1:
+                        raise
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code >= 500 and attempt == 0:
+                        continue
+                    raise
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            log.warning("Artist image lookup failed for %r: %s", display_name, exc)
+
+        _store_artist_image(normalized_name, matched_name, image_url)
+        return image_url
+    except Exception:
+        log.exception("Artist image cache failed for %r", display_name)
+        return cached.image_url if cached else None
+    finally:
+        if claimed_lookup:
+            with _artist_image_lookups_lock:
+                _artist_image_lookups.discard(normalized_name)
+
+
+def _lookup_artist_images(names: list[str]) -> None:
+    unique_names = list(dict.fromkeys(
+        re.sub(r"\s+", " ", name.strip())
+        for raw_name in names
+        for name in _artist_name_candidates(raw_name)
+        if name.strip() and len(name.strip()) <= 200
+    ))
+    for index, name in enumerate(unique_names):
+        if index:
+            time.sleep(0.2)
+        get_artist_image(name)
+
+
+def _cached_artist_images(names: list[str]) -> dict[str, ArtistImageCache]:
+    normalized_names = {
+        _normalized_artist_name(name)
+        for raw_name in names
+        for name in _artist_name_candidates(raw_name)
+        if name.strip() and len(name.strip()) <= 200
+    }
+    if not normalized_names:
+        return {}
+    with SessionLocal() as session:
+        records = session.scalars(
+            select(ArtistImageCache).where(
+                ArtistImageCache.normalized_name.in_(normalized_names)
+            )
+        ).all()
+        return {record.normalized_name: record for record in records}
 
 
 # Bust portraits cached before the current process started (wrong namesake matches,
@@ -976,7 +1187,15 @@ def require_api_user(request: Request):
     return row
 
 
-def _track_payload(track) -> dict:
+def _cached_artist_image_url(name: str) -> str | None:
+    names = _artist_name_candidates(name)
+    if not names:
+        return None
+    record = _cached_artist_images(names).get(_normalized_artist_name(names[0]))
+    return record.image_url if record else None
+
+
+def _track_payload(track, artist_image_url: str | None = None) -> dict:
     return {
         "id": track.id,
         "title": track.title,
@@ -987,6 +1206,7 @@ def _track_payload(track) -> dict:
         "has_cover": track.has_cover,
         "cover_url": f"/api/tracks/{track.id}/cover",
         "stream_url": f"/api/tracks/{track.id}/stream",
+        "artist_image_url": artist_image_url,
     }
 
 
@@ -1684,14 +1904,56 @@ def get_artist(name: str, user=Depends(require_api_user)) -> dict:
 
 @app.get("/api/artists/photo")
 def artist_photo(
+    background_tasks: BackgroundTasks,
     name: str = Query(min_length=1, max_length=200),
     user=Depends(require_api_user),
 ) -> dict:
-    """Find a verified portrait from this user's own artist catalog."""
+    """Compatibility route returning a cached portrait and scheduling cache fills."""
     _throttle_artist_lookup(user["id"])
-    own = _library_titles_for_artist(user["id"], name.strip())
-    picture, fans = _lookup_artist_photo(name.strip(), own)
-    return {"picture": picture, "nb_fan": fans}
+    record = _artist_image_record(name)
+    if _artist_image_is_stale(record):
+        background_tasks.add_task(_lookup_artist_images, [name])
+    return {"picture": record.image_url if record else None, "nb_fan": None}
+
+
+@app.get("/api/artists")
+def list_artist_images(
+    background_tasks: BackgroundTasks,
+    user=Depends(require_api_user),
+) -> dict:
+    """Return cached shared images immediately, then refresh missing/stale names."""
+    tracks = get_library(user["id"]).list_tracks()
+    names = list(dict.fromkeys(
+        name
+        for track in tracks
+        for name in _artist_name_candidates(track.artist)
+        if len(name) <= 200
+    ))
+    records = _cached_artist_images(names)
+    now = datetime.now(timezone.utc)
+    stale_names = [
+        name
+        for name in names
+        if _artist_image_is_stale(records.get(_normalized_artist_name(name)), now)
+    ]
+    if stale_names:
+        background_tasks.add_task(_lookup_artist_images, stale_names)
+    return {
+        "artists": [
+            {
+                "name": name,
+                "image_url": (
+                    record.image_url
+                    if (record := records.get(_normalized_artist_name(name)))
+                    else None
+                ),
+                "lookup_pending": _artist_image_is_stale(
+                    records.get(_normalized_artist_name(name)), now
+                ),
+            }
+            for name in names
+        ]
+    }
 
 
 @app.get("/api/artists/profile")
@@ -1708,13 +1970,32 @@ def artist_profile(
 @app.get("/api/tracks")
 def list_tracks(user=Depends(require_api_user)) -> dict:
     library = get_library(user["id"])
-    return {"tracks": [_track_payload(t) for t in library.list_tracks()]}
+    tracks = library.list_tracks()
+    cached_images = _cached_artist_images([track.artist for track in tracks])
+    return {
+        "tracks": [
+            _track_payload(
+                track,
+                (
+                    cached_images[_normalized_artist_name(names[0])].image_url
+                    if (names := _artist_name_candidates(track.artist))
+                    and _normalized_artist_name(names[0]) in cached_images
+                    else None
+                ),
+            )
+            for track in tracks
+        ]
+    }
 
 
 @app.post("/api/library/upload")
 @limit_upload_processing
 async def upload_track(
-    request: Request, file: UploadFile = File(...), user=Depends(require_api_user), _csrf=Depends(auth.verify_api_csrf)
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
     content_length = request.headers.get("content-length")
     if content_length:
@@ -1771,11 +2052,16 @@ async def upload_track(
         raise HTTPException(status_code=502, detail=f"Audio storage error: {str(exc)[:200]}") from None
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
-    return _track_payload(track)
+    background_tasks.add_task(_lookup_artist_images, [track.artist])
+    return _track_payload(track, _cached_artist_image_url(track.artist))
 
 
 @app.get("/api/library/upload/{job_id}")
-def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
+def upload_status(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(require_api_user),
+) -> dict:
     with tenant_session(user["id"]) as session:
         job = session.scalar(select(UploadJob).where(
             UploadJob.id == job_id,
@@ -1793,7 +2079,11 @@ def upload_status(job_id: str, user=Depends(require_api_user)) -> dict:
             payload["track_id"] = job.track_id
             track = get_library(user["id"]).get(job.track_id)
             if track:
-                payload["track"] = _track_payload(track)
+                background_tasks.add_task(_lookup_artist_images, [track.artist])
+                payload["track"] = _track_payload(
+                    track,
+                    _cached_artist_image_url(track.artist),
+                )
         return payload
 
 

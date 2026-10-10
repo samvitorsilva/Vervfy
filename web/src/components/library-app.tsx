@@ -33,6 +33,7 @@ interface ServerTrack {
   has_cover: boolean;
   cover_url: string;
   stream_url: string;
+  artist_image_url?: string | null;
   custom_lyrics?: string | null;
 }
 
@@ -826,6 +827,7 @@ export default function LibraryApp() {
         ? track.cover_url
         : generateAura(`${track.artist}|${track.album}|${track.title}`),
       streamUrl: track.stream_url,
+      artistImageUrl: track.artist_image_url ?? null,
       offlineUrl: previousById.get(track.id)?.offlineUrl ?? null,
       offline: previousById.get(track.id)?.offline ?? false,
       favorite: previousById.get(track.id)?.favorite ?? false,
@@ -1516,6 +1518,7 @@ export default function LibraryApp() {
             ? track.cover_url
             : generateAura(`${track.artist}|${track.album}|${track.title}`),
           streamUrl: track.stream_url,
+          artistImageUrl: track.artist_image_url ?? null,
           favorite: false,
           customLyrics: track.custom_lyrics ?? null,
         }));

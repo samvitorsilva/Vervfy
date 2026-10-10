@@ -509,6 +509,10 @@ input{ background:none; border:none; }
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
 }
 .artist-card-photo-empty{ display:block; flex:0 0 auto; background:rgba(255,255,255,.06); }
+span.artist-card-photo{
+  display:grid; place-items:center; color:rgba(255,255,255,.72);
+  font-size:32px; font-weight:700;
+}
 .artist-card-name{
   font-weight:700; font-size:14px; letter-spacing:-0.01em;
   max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -533,6 +537,7 @@ input{ background:none; border:none; }
   column-gap:14px; row-gap:3px; text-align:left;
 }
 .artist-card.list-mode .artist-card-photo{ grid-column:1; grid-row:1 / 3; width:58px; height:58px; }
+.artist-card.list-mode span.artist-card-photo{ font-size:22px; }
 .artist-card.list-mode .artist-card-name{ grid-column:2; grid-row:1; align-self:end; }
 .artist-card.list-mode .artist-card-count{ grid-column:2; grid-row:2; }
 .artist-card.list-mode .artist-card-play{ grid-column:2; grid-row:1; justify-self:end; align-self:center; margin:0; }
@@ -555,6 +560,10 @@ input{ background:none; border:none; }
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);
 }
 .artist-photo-empty{ display:block; background:rgba(255,255,255,.06); }
+span.artist-photo{
+  display:grid; place-items:center; color:rgba(255,255,255,.72);
+  font-size:40px; font-weight:700;
+}
 .artist-hero-meta{
   flex:1; min-width:0;
   display:grid; grid-template-columns:minmax(0,1fr) auto;
