@@ -44,20 +44,58 @@ def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
     letter = (title.strip()[:1] or "?").upper(); box = draw.textbbox((0, 0), letter, font=font)
     draw.text((size/2-(box[2]-box[0])/2, size/2-(box[3]-box[1])/2), letter, font=font, fill=(220, 245, 245)); return image
 
+_NOISE_WORDS = {
+    "official", "lyric", "lyrics", "video", "music", "audio", "visualizer",
+    "visualiser", "hd", "hq", "4k", "performance", "clip",
+}
+
+
 def _squash(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _strip_noise(text: str) -> str:
+    """Remove "(Lyric Video)", "[Official Audio]" and similar YouTube tags."""
+    def repl(match):
+        words = re.findall(r"[a-z0-9]+", match.group(1).lower())
+        return " " if words and all(word in _NOISE_WORDS for word in words) else match.group(0)
+
+    return re.sub(r"\s+", " ", re.sub(r"[(\[]([^)\]]*)[)\]]", repl, text)).strip()
+
+
+def _is_channel(part: str) -> bool:
+    return bool(re.search(r"vevo", part, re.I))
+
+
+def _channel_to_artist(part: str) -> str:
+    """'TateMcRaeVEVOTate McRae' -> 'Tate McRae'; 'TheWeekndVEVO' -> 'TheWeeknd'."""
+    pieces = [piece.strip() for piece in re.split(r"vevo", part, flags=re.I) if piece.strip()]
+    if not pieces:
+        return part.strip()
+    return ([piece for piece in pieces if " " in piece] or pieces)[0]
 
 
 def _parse_filename(filename: str):
     stem = os.path.splitext(os.path.basename(filename))[0]
     stem = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
     parts = [part.strip() for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
-    if len(parts) >= 2:
-        artist, rest = parts[0], parts[1:]
-        if len(rest) > 1 and _squash(rest[-1]) == _squash(artist):
+    topic = len(parts) > 2 and parts[-1].lower() == "topic"
+    if topic:
+        parts.pop()
+        return (_strip_noise(" - ".join(parts[:-1])) or parts[0]), parts[-1]
+    if len(parts) < 2:
+        return (_strip_noise(stem) or stem), "Unknown Artist"
+
+    first, second = parts[0], parts[1]
+    if _is_channel(second) or (_strip_noise(first) != first and _strip_noise(second) == second):
+        artist = _channel_to_artist(second) if _is_channel(second) else second
+        title = first
+    else:
+        artist, rest = (_channel_to_artist(first) if _is_channel(first) else first), parts[1:]
+        if len(rest) > 1 and (_is_channel(rest[-1]) or _squash(rest[-1]) == _squash(artist)):
             rest = rest[:-1]
-        return " - ".join(rest), artist
-    return stem, "Unknown Artist"
+        title = " - ".join(rest)
+    return (_strip_noise(title) or title), artist
 
 def _tag_text(value, fallback: str, *, join_values: bool = False) -> str:
     if value is None:
