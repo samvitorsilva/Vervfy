@@ -66,6 +66,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await page.getByLabel("Password").fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
   await page.locator(".hidden-input").first().setInputFiles({
     name: "responsive-player.wav",
     mimeType: "audio/wav",
@@ -102,6 +103,14 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     await player.getByRole("button", { name: "Close player" }).click();
     await expect(player).toHaveCount(0);
     await expect(nowPlayingButton).toBeFocused();
+    const playerRegions = await page.locator("#nowbar").evaluate((element) =>
+      [".now-track", ".transport", ".now-extra"].map((selector) => {
+        const rect = element.querySelector(selector)!.getBoundingClientRect();
+        return { left: rect.left, right: rect.right };
+      }),
+    );
+    expect(playerRegions[0].right).toBeLessThanOrEqual(playerRegions[1].left + 1);
+    expect(playerRegions[1].right).toBeLessThanOrEqual(playerRegions[2].left + 1);
   }
 
   await page.getByRole("button", { name: "Artists" }).click();
@@ -133,7 +142,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await expect(page.locator(".artist-bio")).toHaveText(
     "Vervfy Test Artist is a verified test profile.",
   );
-  await expect(page.locator(".artist-info")).toContainText("Deezer fans: 10");
+  await expect(page.locator(".artist-info")).toContainText("Followers: 10");
   await expect(page.locator(".artist-info")).toContainText("Genre: Pop");
   await expect(page.getByRole("link", { name: "Source page ↗" })).toHaveAttribute(
     "href",
@@ -305,7 +314,7 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
-  await expect(navigation.locator("[data-view]:visible")).toHaveCount(4);
+  await expect(navigation.locator("[data-view]:visible")).toHaveCount(5);
   await expect(navigation.locator('[data-view="library"]')).toHaveAttribute(
     "aria-current",
     "page",

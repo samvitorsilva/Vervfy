@@ -71,7 +71,6 @@ const AURA_PALETTE = [
 ];
 
 interface PlaybackAttempt {
-  trackId: string; // TEMP DEBUG
   src: string;
   retryCount: number;
   retryTimer: number | null;
@@ -590,8 +589,6 @@ export default function LibraryApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [profile, setProfile] = useState<Account | null>(null);
   const [toast, setToast] = useState("");
-  // TEMP DEBUG
-  const [debugToast, setDebugToast] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
@@ -640,8 +637,6 @@ export default function LibraryApp() {
   const shufflePlayedRef = useRef(new Set<number>());
   const nextRef = useRef<(automatic: boolean) => void>(() => undefined);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // TEMP DEBUG
-  const debugToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineObjectUrlsRef = useRef(new Set<string>());
 
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
@@ -778,34 +773,6 @@ export default function LibraryApp() {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     toastTimeoutRef.current = setTimeout(() => setToast(""), 2600);
   }, []);
-
-  // TEMP DEBUG
-  const showPlaybackDebug = useCallback(
-    (trackId: string, audio: HTMLAudioElement, error: unknown) => {
-      const errorName =
-        error instanceof Error
-          ? error.name
-          : error && typeof error === "object" && "name" in error && typeof error.name === "string"
-            ? error.name
-            : "UnknownError";
-      const errorMessage =
-        error instanceof Error
-          ? error.message
-          : error && typeof error === "object" && "message" in error && typeof error.message === "string"
-            ? error.message
-            : String(error);
-      const srcPath = new URL(audio.currentSrc || audio.src, window.location.href).pathname;
-      setDebugToast(
-        `DEBUG id=${trackId} storage=unknown error=${errorName} message=${errorMessage.replace(/\s+/g, " ")} code=${audio.error?.code ?? "null"} net=${audio.networkState} ready=${audio.readyState} src=${srcPath}`,
-      );
-      if (debugToastTimeoutRef.current) clearTimeout(debugToastTimeoutRef.current);
-      debugToastTimeoutRef.current = setTimeout(() => {
-        setDebugToast("");
-        debugToastTimeoutRef.current = null;
-      }, 10000);
-    },
-    [],
-  );
 
   const reloadTracks = useCallback(async () => {
     const response = await expectOk(
@@ -1093,9 +1060,7 @@ export default function LibraryApp() {
         audio.error !== null ||
         audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
       ) {
-        console.trace("[audio] load called", attempt.src); // TEMP DEBUG
         audio.src = attempt.src;
-        console.trace("[audio] load called", attempt.src); // TEMP DEBUG
         audio.load();
       }
       setPlaying(true);
@@ -1124,7 +1089,6 @@ export default function LibraryApp() {
             return;
           }
           logAudioFailure("play() rejected", audio, error);
-          showPlaybackDebug(attempt.trackId, audio, error); // TEMP DEBUG
           handlePlaybackFailure(
             attempt,
             audio,
@@ -1134,7 +1098,7 @@ export default function LibraryApp() {
         },
       );
     },
-    [handlePlaybackFailure, setPlaying, showPlaybackDebug], // TEMP DEBUG
+    [handlePlaybackFailure, setPlaying],
   );
   const startTrack = useCallback(
     (trackId: string) => {
@@ -1157,7 +1121,6 @@ export default function LibraryApp() {
         window.clearTimeout(previousAttempt.retryTimer);
       }
       const attempt: PlaybackAttempt = {
-        trackId, // TEMP DEBUG
         src,
         retryCount: 0,
         retryTimer: null,
@@ -1186,7 +1149,6 @@ export default function LibraryApp() {
       ) {
         return;
       }
-      showPlaybackDebug(attempt.trackId, audio, error); // TEMP DEBUG
       handlePlaybackFailure(
         attempt,
         audio,
@@ -1194,7 +1156,7 @@ export default function LibraryApp() {
         "This track could not be played. Check the file format or your connection.",
       );
     },
-    [handlePlaybackFailure, showPlaybackDebug], // TEMP DEBUG
+    [handlePlaybackFailure],
   );
 
   const playFromList = useCallback(
@@ -1680,7 +1642,6 @@ export default function LibraryApp() {
   useEffect(
     () => () => {
       if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-      if (debugToastTimeoutRef.current) clearTimeout(debugToastTimeoutRef.current); // TEMP DEBUG
       offlineObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       offlineObjectUrlsRef.current.clear();
     },
@@ -1845,9 +1806,7 @@ export default function LibraryApp() {
       } else {
         audioElement?.pause();
         if (audioElement) {
-          console.trace("[audio] load called", audioElement.src); // TEMP DEBUG
           audioElement.removeAttribute("src");
-          console.trace("[audio] load called", audioElement.src); // TEMP DEBUG
           audioElement.load();
         }
         setQueue([], -1);
@@ -2928,7 +2887,7 @@ export default function LibraryApp() {
         void uploadFiles(event.dataTransfer.files);
       }}><h3>Drop to add music</h3><p>Your files are uploaded to your account.</p></div> : null}
       {uploadStatus ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div> : null}
-      {toast || debugToast ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true">{debugToast ? <div className="toast" style={{ maxWidth: "calc(100vw - 24px)", overflowWrap: "anywhere" }}>{debugToast}</div> : null}{toast ? <div className="toast">{toast}</div> : null}</div> : null} {/* // TEMP DEBUG */}
+      {toast ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{toast}</div></div> : null}
     </div>
   );
 }

@@ -150,11 +150,23 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/artists" && request.method === "GET") {
+    json(response, 200, {
+      artists: [...new Set(tracks.map((track) => track.artist))].map((name) => ({
+        name,
+        image_url: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
+        lookup_pending: false,
+      })),
+    });
+    return;
+  }
+
   if (url.pathname === "/api/artists/profile" && request.method === "GET") {
     json(response, 200, {
       profile: {
         bio: "Vervfy Test Artist is a verified test profile.",
         genre: "Pop",
+        followers: "10",
         source: "Test artist source",
         source_url: "https://example.com/artist",
       },

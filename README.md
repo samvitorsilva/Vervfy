@@ -132,8 +132,9 @@ in front of the application, start Uvicorn with
 `--proxy-headers --forwarded-allow-ips='*'` so forwarded HTTPS headers are
 trusted.
 
-Artist portraits are cached in the shared `artist_image_cache` table. After
-deploying the migration, optionally backfill existing library artists with
+Artist portraits and Deezer artist profiles are cached in the shared
+`artist_image_cache` and `artists` tables. After deploying the migrations,
+optionally backfill existing library artists with
 `python scripts/backfill_artist_images.py`; the script throttles lookups to at
 most five per second. Missing portraits are also filled in the background as
 the Artists view is opened and after uploads.
