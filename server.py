@@ -1461,6 +1461,12 @@ def health(user=Depends(require_api_user)) -> dict:
     return {"ok": True, "tracks": get_library(user["id"]).count_tracks()}
 
 
+@app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
+def healthz() -> Response:
+    # Public, no auth, no database: only keeps the service awake.
+    return Response(content="ok", media_type="text/plain", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/library/state")
 def get_library_state(response: Response, user=Depends(require_api_user)) -> dict:
     """Server-backed favorites and playlists, shared across browsers/redeploys."""
