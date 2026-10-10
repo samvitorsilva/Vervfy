@@ -31,9 +31,11 @@ async function sendJson(path: string, method: string, payload: unknown) {
 }
 
 export default function AccountSettings({
+  active,
   onToast,
   onPhotoChange,
 }: {
+  active: boolean;
   onToast: (message: string) => void;
   onPhotoChange: (photoUrl: string | null) => void;
 }) {
@@ -85,6 +87,7 @@ export default function AccountSettings({
   }, [photoEditorOpen, photoSaving]);
 
   useEffect(() => {
+    if (!active || account) return;
     let cancelled = false;
     apiFetch("/api/me")
       .then(async (response) => {
@@ -104,7 +107,7 @@ export default function AccountSettings({
     return () => {
       cancelled = true;
     };
-  }, [onPhotoChange]);
+  }, [account, active, onPhotoChange]);
 
   async function saveEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

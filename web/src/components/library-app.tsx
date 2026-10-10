@@ -2558,23 +2558,28 @@ export default function LibraryApp() {
               </div>
             ) : loadError ? (
               <div className="empty"><div className="empty-orb" /><h3>Music server unavailable</h3><p>{loadError}</p><button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>Retry connection</button></div>
-            ) : view === "account" ? (
-              <AccountSettings
-                onToast={notify}
-                onPhotoChange={updateProfilePhoto}
-              />
-            ) : view === "artists" || view.startsWith("artist:") ? (
-              <ArtistExplorer
-                view={view}
-                search={search}
-                listMode={listMode}
-                renderTrack={renderTrack}
-                onPlay={(list, trackId) => {
-                  const selectedTrack = trackId ?? list[0]?.id;
-                  if (selectedTrack) playFromList(list, selectedTrack);
-                }}
-              />
-            ) : view === "playlists" ? (
+            ) : (
+              <>
+                <div hidden={view !== "account"}>
+                  <AccountSettings
+                    active={view === "account"}
+                    onToast={notify}
+                    onPhotoChange={updateProfilePhoto}
+                  />
+                </div>
+                <div hidden={view !== "artists" && !view.startsWith("artist:")}>
+                  <ArtistExplorer
+                    view={view}
+                    search={search}
+                    listMode={listMode}
+                    renderTrack={renderTrack}
+                    onPlay={(list, trackId) => {
+                      const selectedTrack = trackId ?? list[0]?.id;
+                      if (selectedTrack) playFromList(list, selectedTrack);
+                    }}
+                  />
+                </div>
+                {view === "account" || view === "artists" || view.startsWith("artist:") ? null : view === "playlists" ? (
               filteredPlaylists.length ? (
                 <div className={`pl-grid${listMode === "list" ? " list-mode" : ""}`}>
                   {filteredPlaylists.map((playlist) => {
@@ -2663,6 +2668,8 @@ export default function LibraryApp() {
                     )}
                   </>
                 ) : renderEmptyState()}
+              </>
+                )}
               </>
             )}
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { usePlayerStore, type ListMode, type TrackRecord } from "@/store/player-store";
@@ -15,6 +15,7 @@ interface Artist {
 interface ArtistPhotoData {
   picture: string | null;
   nb_fan: number | null;
+  lookupPending: boolean;
 }
 
 interface ArtistImagesResponse {
@@ -66,10 +67,15 @@ export default function ArtistExplorer({
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
   const [photoByArtist, setPhotoByArtist] = useState<Record<string, ArtistPhotoData>>({});
+  const photoByArtistRef = useRef(photoByArtist);
   const [profileByArtist, setProfileByArtist] = useState<
     Record<string, Record<string, unknown> | null>
   >({});
   const [loadedProfiles, setLoadedProfiles] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    photoByArtistRef.current = photoByArtist;
+  }, [photoByArtist]);
 
   const artists = useMemo(() => {
     const map = new Map<string, Artist>();
@@ -113,6 +119,12 @@ export default function ArtistExplorer({
 
   useEffect(() => {
     if (view !== "artists") return;
+    const needsRefresh = artists.some((artist) => {
+      const cached = photoByArtistRef.current[artistKey(artist.name)];
+      return !cached || cached.lookupPending;
+    });
+    if (!needsRefresh) return;
+
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
@@ -127,6 +139,7 @@ export default function ArtistExplorer({
             next[artistKey(artist.name)] = {
               picture: artist.image_url,
               nb_fan: null,
+              lookupPending: artist.lookup_pending,
             };
           }
           return next;
@@ -143,12 +156,13 @@ export default function ArtistExplorer({
       cancelled = true;
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [view]);
+  }, [artists, view]);
 
   useEffect(() => {
     if (!currentArtist) return;
-    let cancelled = false;
     const key = artistKey(currentArtist.name);
+    if (loadedProfiles[key]) return;
+    let cancelled = false;
     const query = new URLSearchParams({ name: currentArtist.name });
     void apiFetch(`/api/artists/profile?${query}`)
       .then(async (response) => {
@@ -170,7 +184,7 @@ export default function ArtistExplorer({
     return () => {
       cancelled = true;
     };
-  }, [currentArtist]);
+  }, [currentArtist, loadedProfiles]);
 
   if (view === "artists") {
     if (tracks.length === 0) {
