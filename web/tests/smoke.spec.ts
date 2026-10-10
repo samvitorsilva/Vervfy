@@ -85,6 +85,18 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await track.click();
   const nowPlayingButton = page.locator(".now-track-open");
   await expect(nowPlayingButton).toBeVisible();
+  const expectNowbarOnTop = async () => {
+    const nowbar = page.locator("#nowbar");
+    const isOnTop = await nowbar.evaluate((bar) => {
+      const rect = bar.getBoundingClientRect();
+      const topmostElement = document.elementFromPoint(
+        rect.left + rect.width / 2,
+        rect.top + rect.height / 2,
+      );
+      return topmostElement !== null && bar.contains(topmostElement);
+    });
+    expect(isOnTop).toBe(true);
+  };
 
   for (const viewport of [
     { width: 360, height: 812 },
@@ -114,6 +126,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   }
 
   await page.getByRole("button", { name: "Artists" }).click();
+  await expectNowbarOnTop();
   await nowPlayingButton.click();
   await expect(page.locator(".mobile-player-context strong")).toHaveText("Library");
   await page.getByRole("button", { name: "Close player" }).click();
@@ -125,6 +138,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   expect(artistName).toBeTruthy();
   await playerArtist.click();
   await expect(page.locator(".artist-name")).toHaveText(artistName!);
+  await expectNowbarOnTop();
   await page.getByRole("button", { name: "List view" }).click();
   const artistTrackRow = page.locator(".artist-page .list .row");
   await expect(artistTrackRow).toHaveCount(1);

@@ -1917,3 +1917,7 @@ button:focus-visible{
   .nowbar,
   .nowbar.glass{ z-index:50; }
 }
+@media (max-width:900px){
+  body:has(.artist-grid) .nowbar,
+  body:has(.artist-page) .nowbar{ z-index:60; }
+}
