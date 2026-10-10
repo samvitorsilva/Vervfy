@@ -1,6 +1,6 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
-import base64, hashlib, io, logging, os, tempfile
+import base64, hashlib, io, logging, os, re, tempfile
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy import func, select
@@ -44,11 +44,19 @@ def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
     letter = (title.strip()[:1] or "?").upper(); box = draw.textbbox((0, 0), letter, font=font)
     draw.text((size/2-(box[2]-box[0])/2, size/2-(box[3]-box[1])/2), letter, font=font, fill=(220, 245, 245)); return image
 
+def _squash(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
 def _parse_filename(filename: str):
     stem = os.path.splitext(os.path.basename(filename))[0]
-    if " - " in stem:
-        artist, title = (x.strip() for x in stem.split(" - ", 1))
-        if artist and title: return title, artist
+    stem = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
+    parts = [part.strip() for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
+    if len(parts) >= 2:
+        artist, rest = parts[0], parts[1:]
+        if len(rest) > 1 and _squash(rest[-1]) == _squash(artist):
+            rest = rest[:-1]
+        return " - ".join(rest), artist
     return stem, "Unknown Artist"
 
 def _tag_text(value, fallback: str, *, join_values: bool = False) -> str:
