@@ -7,6 +7,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 import audio_store
 from db import TrackRecord, User, tenant_session
+from online_cover import fetch_track_metadata
+
+log = logging.getLogger(__name__)
 
 Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "25000000"))
 try:
@@ -225,7 +228,18 @@ class Library:
             if old:return self._track(old)
         meta=self._read_metadata(safe,data)
         if not meta:return None
-        title,artist,album,duration,cover,has_cover=meta; cover.thumbnail((1024,1024), Image.LANCZOS); output=io.BytesIO();cover.save(output,format="JPEG",quality=90)
+        title,artist,album,duration,cover,has_cover=meta
+        try:
+            cover.thumbnail((1024,1024), Image.LANCZOS)
+            output=io.BytesIO()
+            cover.save(output,format="JPEG",quality=90)
+        except Exception:
+            if not has_cover:
+                raise
+            log.warning("Could not encode cover for %r by %r; using placeholder", title, artist, exc_info=True)
+            has_cover=False
+            output=io.BytesIO()
+            make_placeholder_cover(title).save(output,format="JPEG",quality=90)
         storage_path=None
         if storage_path_override:
             storage_path = storage_path_override
@@ -379,9 +393,41 @@ class Library:
                     try: duration=float(MP3(path).info.length or duration)
                     except Exception: pass
                 embedded_cover = _extract_cover(path, ext)
-                if embedded_cover is not None:
-                    cover = embedded_cover
-                    has_cover = True
+            else:
+                embedded_cover = None
+            online_metadata = None
+            fetched_cover = None
+            if (
+                embedded_cover is None
+                or album == "Unknown Album"
+                or duration <= 0
+            ):
+                online_metadata = fetch_track_metadata(
+                    title,
+                    artist,
+                    fetch_artwork=embedded_cover is None,
+                )
+            if online_metadata is not None:
+                if album == "Unknown Album" and online_metadata.album:
+                    album = online_metadata.album
+                if duration <= 0 and online_metadata.duration:
+                    duration = online_metadata.duration
+                fetched_cover = online_metadata.cover
+            if embedded_cover is not None:
+                cover = embedded_cover
+                has_cover = True
+            elif fetched_cover is not None:
+                cover = fetched_cover
+                has_cover = True
+            log.info(
+                "Cover lookup for %r by %r: embedded=%s fetch_cover=%s",
+                title,
+                artist,
+                embedded_cover is not None,
+                "not_run" if embedded_cover is not None else (
+                    "image" if fetched_cover is not None else "none"
+                ),
+            )
             return title,artist,album,duration,cover,has_cover
         finally:
             try:os.unlink(path)
