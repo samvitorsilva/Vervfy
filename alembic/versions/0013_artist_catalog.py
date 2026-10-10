@@ -11,23 +11,24 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if "artists" not in sa.inspect(bind).get_table_names():
-        op.create_table(
-            "artists",
-            sa.Column("deezer_id", sa.BigInteger(), primary_key=True),
-            sa.Column("name", sa.String(200), nullable=False),
-            sa.Column("picture", sa.Text(), nullable=True),
-            sa.Column("fans", sa.BigInteger(), nullable=True),
-            sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
-        )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_artists_lower_name ON artists (lower(name))"
+    if "artists" in sa.inspect(bind).get_table_names():
+        return
+    op.create_table(
+        "artists",
+        sa.Column("deezer_id", sa.BigInteger(), primary_key=True),
+        sa.Column("name", sa.String(200), nullable=False),
+        sa.Column("picture", sa.Text(), nullable=True),
+        sa.Column("fans", sa.BigInteger(), nullable=True),
+        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
     )
     if bind.dialect.name == "postgresql":
+        op.execute(
+            "CREATE INDEX ix_artists_lower_name ON artists (lower(name))"
+        )
         op.execute(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE artists TO app_runtime"
         )
 
 
 def downgrade() -> None:
-    op.drop_table("artists")
+    """Keep this shared cache: the migration may have adopted an existing table."""
