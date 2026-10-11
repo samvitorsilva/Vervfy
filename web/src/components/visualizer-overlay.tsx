@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "@/store/player-store";
+import { useLanguage } from "@/lib/i18n";
 
 interface AudioGraph {
   context: AudioContext;
@@ -11,6 +12,7 @@ interface AudioGraph {
 const audioGraphs = new WeakMap<HTMLAudioElement, AudioGraph>();
 
 export default function VisualizerOverlay({ onClose }: { onClose: () => void }) {
+  const { t } = useLanguage();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
   const frequenciesRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
@@ -116,11 +118,11 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
   }, []);
 
   return (
-    <div className="viz-overlay open" role="dialog" aria-modal="true" aria-label="Audio visualizer">
+    <div className="viz-overlay open" role="dialog" aria-modal="true" aria-label={t("Audio visualizer")}>
       <div className="viz-layout">
-        <div className="viz-stage"><canvas ref={canvasRef} aria-label="Audio frequency visualizer" /></div>
+        <div className="viz-stage"><canvas ref={canvasRef} aria-label={t("Audio frequency visualizer")} /></div>
       </div>
-      <button className="viz-close" type="button" aria-label="Close visualizer" onClick={onClose}>
+      <button className="viz-close" type="button" aria-label={t("Close visualizer")} onClick={onClose}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m7 7 10 10M17 7 7 17" /></svg>
       </button>
     </div>

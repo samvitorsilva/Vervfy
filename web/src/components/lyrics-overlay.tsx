@@ -14,6 +14,7 @@ import { apiFetch, expectOk } from "@/lib/api/client";
 import { artistNames } from "@/components/artist-explorer";
 import type { CachedLyrics, RepeatMode, TrackRecord } from "@/store/player-store";
 import { usePlayerStore } from "@/store/player-store";
+import { useLanguage } from "@/lib/i18n";
 
 interface TimedLine {
   time: number;
@@ -375,6 +376,7 @@ export default function LyricsOverlay({
   shuffle: boolean;
   repeat: RepeatMode;
 }) {
+  const { t } = useLanguage();
   const setTrackLyrics = usePlayerStore((state) => state.setTrackLyrics);
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
@@ -526,7 +528,7 @@ export default function LyricsOverlay({
     event.preventDefault();
     const value = draft.trim();
     if (!value) {
-      onToast("Paste some lyrics first.");
+      onToast(t("Paste some lyrics first."));
       return;
     }
     setSavePending(true);
@@ -547,7 +549,7 @@ export default function LyricsOverlay({
       setDraft(result.custom_lyrics);
       setEditorOpen(false);
       setSyncLines(null);
-      onToast("Lyrics saved.");
+      onToast(t("Lyrics saved."));
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Could not save lyrics.");
     } finally {
@@ -561,7 +563,7 @@ export default function LyricsOverlay({
       ? lines.filter((line) => line.text.trim()).map((line) => line.text.trim())
       : (lyrics?.text ?? activeTrack.customLyrics ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     if (!text.length) {
-      onToast("Add lyrics before syncing them.");
+      onToast(t("Add lyrics before syncing them."));
       return;
     }
     setSyncText(text);
@@ -580,7 +582,7 @@ export default function LyricsOverlay({
   async function saveSyncedLyrics() {
     if (!syncLines || syncLines.some((line) => line.time < 0)) return;
     if (syncLines.some((line, index) => index > 0 && line.time < syncLines[index - 1].time)) {
-      onToast("Lyrics must be tapped in song order. Correct the out-of-order line.");
+      onToast(t("Lyrics must be tapped in song order. Correct the out-of-order line."));
       return;
     }
     const value = stampToLrc(syncLines.map((line, index) => ({ ...line, text: syncText[index] })));
@@ -602,7 +604,7 @@ export default function LyricsOverlay({
       setLyrics(parseLyricsText(result.custom_lyrics, "custom-synced"));
       setDraft(result.custom_lyrics);
       setSyncLines(null);
-      onToast("Lyrics synced to the track.");
+      onToast(t("Lyrics synced to the track."));
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Could not save synced lyrics.");
     } finally {
@@ -620,14 +622,14 @@ export default function LyricsOverlay({
   };
 
   return (
-    <div className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label="Lyrics">
+    <div className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label={t("Lyrics")}>
       <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}")` }} />
       <header className="lyrics-topbar">
-        <button className="lyrics-close" type="button" aria-label="Close lyrics" onClick={onClose}>
+        <button className="lyrics-close" type="button" aria-label={t("Close lyrics")} onClick={onClose}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 9 6 6 6-6" /></svg>
         </button>
-        <div className="lyrics-topbar-title"><span>NOW PLAYING</span><strong>{activeTrack.title}</strong></div>
-        <button className="lyrics-edit-top" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? lyrics?.text ?? ""); setEditorOpen(true); }}>Edit lyrics</button>
+        <div className="lyrics-topbar-title"><span>{t("NOW PLAYING")}</span><strong>{activeTrack.title}</strong></div>
+        <button className="lyrics-edit-top" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? lyrics?.text ?? ""); setEditorOpen(true); }}>{t("Edit lyrics")}</button>
       </header>
       <div className="lyrics-stage">
         <div className="lyrics-side">
@@ -655,27 +657,27 @@ export default function LyricsOverlay({
         >
           {syncLines ? (
             <div className="lyrics-sync-editor">
-              <div className="lyrics-editor-heading"><h3>Sync lyrics to audio</h3><p>Start playback, then tap each line when it is sung.</p></div>
-              <div className="lyrics-sync-clock">Playback: <strong>{formatTime(lyricCurrentTime)}</strong></div>
+              <div className="lyrics-editor-heading"><h3>{t("Sync lyrics to audio")}</h3><p>{t("Start playback, then tap each line when it is sung.")}</p></div>
+              <div className="lyrics-sync-clock">{t("Playback")}: <strong>{formatTime(lyricCurrentTime)}</strong></div>
               <div className="lyrics-sync-lines">
-                {syncLines.map((line, index) => <button type="button" className={`lyrics-sync-line${line.time >= 0 ? " stamped" : ""}`} key={`${index}-${line.text}`} onClick={() => stampLine(index)}><span className="lyrics-sync-line-time">{line.time < 0 ? "Tap at this line" : formatTime(line.time / 1000)}</span><span>{syncText[index]}</span></button>)}
+                {syncLines.map((line, index) => <button type="button" className={`lyrics-sync-line${line.time >= 0 ? " stamped" : ""}`} key={`${index}-${line.text}`} onClick={() => stampLine(index)}><span className="lyrics-sync-line-time">{line.time < 0 ? t("Tap at this line") : formatTime(line.time / 1000)}</span><span>{syncText[index]}</span></button>)}
               </div>
-              <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setSyncLines(null)}>Back</button><button className="btn" type="button" onClick={() => {
+              <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setSyncLines(null)}>{t("Back")}</button><button className="btn" type="button" onClick={() => {
                 const audio = usePlayerStore.getState().audioElement;
                 if (audio) {
                   audio.currentTime = 0;
                   void audio.play();
                 }
-              }}>Play from start</button><button className="btn btn-primary" type="button" disabled={savePending || syncLines.some((line) => line.time < 0)} onClick={() => void saveSyncedLyrics()}>Save synced lyrics</button></div>
+              }}>{t("Play from start")}</button><button className="btn btn-primary" type="button" disabled={savePending || syncLines.some((line) => line.time < 0)} onClick={() => void saveSyncedLyrics()}>{t("Save synced lyrics")}</button></div>
             </div>
           ) : editorOpen ? (
             <form className="lyrics-editor" onSubmit={saveLyrics}>
-              <div className="lyrics-editor-heading"><h3>Add lyrics</h3><p>{activeTrack.title} · {activeTrack.artist}</p></div>
-              <textarea className="lyrics-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Paste plain lyrics or timestamped LRC lyrics here…" />
-              <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setEditorOpen(false)}>Cancel</button><button className="btn btn-primary" type="submit" disabled={savePending}>{savePending ? "Saving…" : "Save lyrics"}</button></div>
+              <div className="lyrics-editor-heading"><h3>{t("Add lyrics")}</h3><p>{activeTrack.title} · {activeTrack.artist}</p></div>
+              <textarea className="lyrics-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("Paste plain lyrics or timestamped LRC lyrics here…")} />
+              <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setEditorOpen(false)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit" disabled={savePending}>{savePending ? t("Saving…") : t("Save lyrics")}</button></div>
             </form>
           ) : loading ? (
-            <div className="lyrics-empty"><div className="empty-orb lyrics-loading-orb" /><h3>Searching for lyrics…</h3><p>Checking LRCLIB for a match.</p></div>
+            <div className="lyrics-empty"><div className="empty-orb lyrics-loading-orb" /><h3>{t("Searching for lyrics…")}</h3><p>{t("Checking LRCLIB for a match.")}</p></div>
           ) : lyrics?.lines?.length ? (
             <div className="lyrics-track" ref={lyricsTrackRef}>
               {lyrics.lines.map((line, index) => <button className={`lyrics-line${index === lineIndex ? " active" : ""}${index < lineIndex ? " past" : ""}`} type="button" key={`${line.time}-${index}`} onClick={() => {
@@ -684,9 +686,9 @@ export default function LyricsOverlay({
               }}>{line.text || "\u00a0"}</button>)}
             </div>
           ) : lyrics?.text ? (
-            <div className="lyrics-plain"><p>{lyrics.text}</p><button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>Sync to audio</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>Edit lyrics</button></div>
+            <div className="lyrics-plain"><p>{lyrics.text}</p><button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>{t("Sync to audio")}</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>{t("Edit lyrics")}</button></div>
           ) : (
-            <div className="lyrics-empty"><div className="empty-orb" /><h3>No lyrics available</h3><p>Vervfy could not find lyrics for this track. Add your own below.</p><button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>Paste lyrics</button></div>
+            <div className="lyrics-empty"><div className="empty-orb" /><h3>{t("No lyrics available")}</h3><p>{t("Vervfy could not find lyrics for this track. Add your own below.")}</p><button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
           )}
         </div>
       </div>
@@ -701,7 +703,7 @@ export default function LyricsOverlay({
             className="seek"
             role="slider"
             tabIndex={duration ? 0 : -1}
-            aria-label="Track progress"
+            aria-label={t("Track progress")}
             aria-valuemin={0}
             aria-valuemax={duration}
             aria-valuenow={lyricCurrentTime}
@@ -718,13 +720,13 @@ export default function LyricsOverlay({
           <span className="lyrics-player-time right">{formatTime(duration)}</span>
         </div>
         <div className="lyrics-player-controls">
-          <button className={`tbtn lyrics-mode-button${shuffle ? " on" : ""}`} type="button" aria-label="Shuffle" aria-pressed={shuffle} onClick={onToggleShuffle}><PlayerIcon name="shuffle" /></button>
-          <button className="tbtn" type="button" aria-label="Previous track" onClick={onPrevious}><PlayerIcon name="previous" /></button>
+          <button className={`tbtn lyrics-mode-button${shuffle ? " on" : ""}`} type="button" aria-label={t("Shuffle")} aria-pressed={shuffle} onClick={onToggleShuffle}><PlayerIcon name="shuffle" /></button>
+          <button className="tbtn" type="button" aria-label={t("Previous track")} onClick={onPrevious}><PlayerIcon name="previous" /></button>
           <button className="tbtn tbtn-play" type="button" aria-label={isPlaying ? "Pause" : "Play"} onClick={onTogglePlayback}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
-          <button className="tbtn" type="button" aria-label="Next track" onClick={onNext}><PlayerIcon name="next" /></button>
-          <button className={`tbtn lyrics-mode-button${repeat !== "off" ? " on" : ""}`} type="button" aria-label={`Repeat: ${repeat}`} aria-pressed={repeat !== "off"} onClick={onToggleRepeat}><PlayerIcon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
+          <button className="tbtn" type="button" aria-label={t("Next track")} onClick={onNext}><PlayerIcon name="next" /></button>
+          <button className={`tbtn lyrics-mode-button${repeat !== "off" ? " on" : ""}`} type="button" aria-label={t(`Repeat: ${repeat}`)} aria-pressed={repeat !== "off"} onClick={onToggleRepeat}><PlayerIcon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
         </div>
-        <button className="lyrics-edit-control" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? lyrics?.text ?? ""); setEditorOpen(true); }}>Edit lyrics</button>
+        <button className="lyrics-edit-control" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? lyrics?.text ?? ""); setEditorOpen(true); }}>{t("Edit lyrics")}</button>
       </div>
     </div>
   );

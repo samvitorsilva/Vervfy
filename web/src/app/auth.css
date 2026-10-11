@@ -19,6 +19,7 @@
   width:28px; height:28px; border-radius:7px; display:block;
   box-shadow:0 0 14px rgba(47, 230, 222, 0.28);
 }
+.auth-language-select{ margin:0 0 20px auto; }
 .auth-title{ font-size:1.3rem; font-weight:700; margin-bottom:6px; }
 .auth-sub{ color:var(--text-mid); font-size:0.9rem; margin-bottom:24px; }
 .auth-field{ margin-bottom:16px; }

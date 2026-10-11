@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { usePlayerStore, type ListMode, type TrackRecord } from "@/store/player-store";
+import { useLanguage } from "@/lib/i18n";
 
 interface Artist {
   name: string;
@@ -31,10 +32,12 @@ export function artistNames(track: TrackRecord): string[] {
   return [...new Set(names)];
 }
 
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number, t: (text: string) => string): string {
   const minutes = Math.round(seconds / 60);
   const hours = Math.floor(minutes / 60);
-  return hours === 0 ? `${minutes} min` : `${hours} hr${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  return hours === 0
+    ? `${minutes} ${t("min")}`
+    : `${hours} ${t("hr")}${minutes % 60 ? ` ${minutes % 60} ${t("min")}` : ""}`;
 }
 
 function safeExternalUrl(value: unknown): string | null {
@@ -64,6 +67,7 @@ export default function ArtistExplorer({
   onPlay: (tracks: TrackRecord[], startTrackId?: string) => void;
   renderTrack: (track: TrackRecord, index: number, playList: TrackRecord[]) => ReactNode;
 }) {
+  const { t } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
   const [photoByArtist, setPhotoByArtist] = useState<Record<string, ArtistPhotoData>>({});
@@ -188,10 +192,10 @@ export default function ArtistExplorer({
 
   if (view === "artists") {
     if (tracks.length === 0) {
-      return <div className="empty"><div className="empty-orb" /><h3>Your library is empty</h3><p>Add songs to see their artists here.</p></div>;
+      return <div className="empty"><div className="empty-orb" /><h3>{t("Your library is empty")}</h3><p>{t("Add songs to see their artists here.")}</p></div>;
     }
     if (!visibleArtists.length) {
-      return <div className="empty"><div className="empty-orb" /><h3>No matches</h3><p>Try a different search term.</p></div>;
+      return <div className="empty"><div className="empty-orb" /><h3>{t("No matches")}</h3><p>{t("Try a different search term.")}</p></div>;
     }
     return (
       <div className={`artist-grid${listMode === "list" ? " list-mode" : ""}`}>
@@ -247,7 +251,7 @@ export default function ArtistExplorer({
                   const firstTrack = artist.tracks[0];
                   if (firstTrack) onPlay(artist.tracks, firstTrack.id);
                 }}
-              >▶ Play</button>
+              >▶ {t("Play")}</button>
             </article>
           );
         })}
@@ -256,7 +260,7 @@ export default function ArtistExplorer({
   }
 
   if (!currentArtist) {
-    return <div className="empty"><div className="empty-orb" /><h3>Artist not found</h3><p>This artist no longer has songs in your library.</p><button className="btn" type="button" onClick={() => setView("artists")}>Back to artists</button></div>;
+    return <div className="empty"><div className="empty-orb" /><h3>{t("Artist not found")}</h3><p>{t("This artist no longer has songs in your library.")}</p><button className="btn" type="button" onClick={() => setView("artists")}>{t("Back to artists")}</button></div>;
   }
 
   const currentArtistKey = artistKey(currentArtist.name);
@@ -265,13 +269,13 @@ export default function ArtistExplorer({
   const currentArtistPhoto = photoByArtist[currentArtistKey];
   const heroSrc = currentArtistPhoto?.picture;
   const facts = ([
-    ["Genre", activeProfile?.genre],
-    ["Style", activeProfile?.style],
-    ["Mood", activeProfile?.mood],
-    ["Formed", activeProfile?.formed_year],
-    ["Label", activeProfile?.label],
-    ["Followers", activeProfile?.followers],
-    ["Popularity", activeProfile?.popularity],
+    [t("Genre"), activeProfile?.genre],
+    [t("Style"), activeProfile?.style],
+    [t("Mood"), activeProfile?.mood],
+    [t("Formed"), activeProfile?.formed_year],
+    [t("Label"), activeProfile?.label],
+    [t("Followers"), activeProfile?.followers],
+    [t("Popularity"), activeProfile?.popularity],
   ] satisfies Array<[string, unknown]>).filter(
     (entry): entry is [string, unknown] => Boolean(entry[1]),
   );
@@ -306,7 +310,7 @@ export default function ArtistExplorer({
           <span className={`artist-photo${currentArtistPhoto ? " artist-photo-empty" : " artist-photo-loading"}`} aria-hidden="true">{currentArtist.name.charAt(0).toLocaleUpperCase()}</span>
         )}
         <div className="artist-hero-meta">
-          <div className="artist-kicker">Artist</div>
+          <div className="artist-kicker">{t("Artist")}</div>
           <h1 className="artist-name">{currentArtist.name}</h1>
           <div className="artist-sub">{currentArtist.tracks.length} song{currentArtist.tracks.length === 1 ? "" : "s"} in your library · {currentArtist.albums.size} album{currentArtist.albums.size === 1 ? "" : "s"}</div>
           <button
@@ -318,20 +322,20 @@ export default function ArtistExplorer({
               const firstTrack = currentArtist.tracks[0];
               if (firstTrack) onPlay(currentArtist.tracks, firstTrack.id);
             }}
-          >▶ Play artist</button>
+          >▶ {t("Play artist")}</button>
         </div>
       </header>
-      <section className="artist-library-info" aria-label="Library information">
-        <div className="artist-library-stat"><span>Songs</span><strong>{currentArtist.tracks.length}</strong></div>
-        <div className="artist-library-stat"><span>Albums</span><strong>{currentArtist.albums.size}</strong></div>
-        {currentArtist.duration ? <div className="artist-library-stat"><span>Play time</span><strong>{formatDuration(currentArtist.duration)}</strong></div> : null}
+      <section className="artist-library-info" aria-label={t("Library information")}>
+        <div className="artist-library-stat"><span>{t("Songs")}</span><strong>{currentArtist.tracks.length}</strong></div>
+        <div className="artist-library-stat"><span>{t("Albums")}</span><strong>{currentArtist.albums.size}</strong></div>
+        {currentArtist.duration ? <div className="artist-library-stat"><span>{t("Play time")}</span><strong>{formatDuration(currentArtist.duration, t)}</strong></div> : null}
       </section>
       <section className="artist-info" aria-busy={loading}>
-        <h2>About</h2>
-        <p className="artist-bio">{loading ? "Looking up artist details…" : String(activeProfile?.bio ?? "No verified artist information is available yet.")}</p>
+        <h2>{t("About")}</h2>
+        <p className="artist-bio">{loading ? t("Looking up artist details…") : String(activeProfile?.bio ?? t("No verified artist information is available yet."))}</p>
         {facts.length ? <div className="artist-tags">{facts.map(([label, value]) => <span className="artist-tag" key={label}>{label}: {String(value)}</span>)}</div> : null}
         {websiteUrl ? <a className="artist-website" href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteLabel} ↗</a> : null}
-        {sourceUrl ? <><p className="artist-source">Source: {String(activeProfile?.source ?? "Verified artist information")}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">Source page ↗</a></> : null}
+        {sourceUrl ? <><p className="artist-source">{t("Source")}: {String(activeProfile?.source ?? t("Verified artist information"))}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("Source page ↗")}</a></> : null}
       </section>
       {artistTracks.length ? (
         listMode === "grid" ? (
@@ -340,14 +344,14 @@ export default function ArtistExplorer({
           </div>
         ) : (
           <div className="list">
-            <div className="list-head"><div /><div>Title</div><div>Album</div><div>Time</div><div /></div>
+            <div className="list-head"><div /><div>{t("Title")}</div><div>{t("Album")}</div><div>{t("Time")}</div><div /></div>
             {artistTracks.map((track, index) => renderTrack(track, index, artistTracks))}
           </div>
         )
       ) : (
         <div className="empty">
-          <h3>No matches</h3>
-          <p>Try a different search term.</p>
+          <h3>{t("No matches")}</h3>
+          <p>{t("Try a different search term.")}</p>
         </div>
       )}
     </div>

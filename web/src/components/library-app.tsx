@@ -16,6 +16,7 @@ import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
 import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
 import VisualizerOverlay from "@/components/visualizer-overlay";
+import { useLanguage } from "@/lib/i18n";
 import {
   usePlayerStore,
   type CachedLyrics,
@@ -179,6 +180,7 @@ function PlaybackSeek({
   className?: string;
   variant: "mobile" | "player";
 }) {
+  const { t } = useLanguage();
   const [currentTime, setCurrentTime] = useState(0);
   const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
   const dragRef = useRef<{ pointerId: number; wasPlaying: boolean } | null>(null);
@@ -233,7 +235,7 @@ function PlaybackSeek({
       className={`seek${variant === "mobile" ? " mobile-seek" : ""}`}
       role="slider"
       tabIndex={duration ? 0 : -1}
-      aria-label="Track progress"
+      aria-label={t("Track progress")}
       aria-valuemin={0}
       aria-valuemax={duration}
       aria-valuenow={displayedTime}
@@ -558,6 +560,7 @@ function Icon({ name }: { name: IconName }) {
 }
 
 export default function LibraryApp() {
+  const { t } = useLanguage();
   const audioElement = usePlayerStore((state) => state.audioElement);
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
@@ -733,7 +736,7 @@ export default function LibraryApp() {
     () => new Map(tracks.map((track) => [track.id, track])),
     [tracks],
   );
-  const title = viewName(view, playlists);
+  const title = t(viewName(view, playlists));
   const playlistForView = view.startsWith("playlist:")
     ? playlists.find((playlist) => `playlist:${playlist.id}` === view)
     : null;
@@ -2027,13 +2030,13 @@ export default function LibraryApp() {
       <div
         className="menu track-context-menu"
         role="menu"
-        aria-label={`Options for ${track.title}`}
+        aria-label={`${t("Options for")} ${track.title}`}
         style={{ top: trackMenu.top, left: trackMenu.left }}
         onClick={(event) => event.stopPropagation()}
       >
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track, true); setTrackMenu(null); }}>Play next</button>
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track); setTrackMenu(null); }}>Add to queue</button>
-        <button className="menu-item" role="menuitem" type="button"         onClick={() => { setExpandedPlayerOpen(false); setPlaylistPicker(track.id); setTrackMenu(null); }}>Add to playlist</button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track, true); setTrackMenu(null); }}>{t("Play next")}</button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track); setTrackMenu(null); }}>{t("Add to queue")}</button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); setPlaylistPicker(track.id); setTrackMenu(null); }}>{t("Add to playlist")}</button>
         <button
           className="menu-item"
           role="menuitem"
@@ -2042,10 +2045,10 @@ export default function LibraryApp() {
           onClick={() => void toggleOfflineDownload(track)}
         >
           {offlinePendingId === track.id
-            ? "Saving offline…"
+            ? t("Saving offline…")
             : track.offlineUrl
-              ? "Remove offline download"
-              : "Download for offline"}
+              ? t("Remove offline download")
+              : t("Download for offline")}
         </button>
         <button
           className="menu-item"
@@ -2054,7 +2057,7 @@ export default function LibraryApp() {
           aria-checked={track.favorite}
           onClick={() => { toggleFavoriteFor(track); setTrackMenu(null); }}
         >
-          {track.favorite ? "Remove from liked songs" : "Save to liked songs"}
+          {track.favorite ? t("Remove from liked songs") : t("Save to liked songs")}
         </button>
         {artistNames(track).map((name) => (
           <button
@@ -2067,15 +2070,15 @@ export default function LibraryApp() {
             View artist: {name}
           </button>
         ))}
-        <button className="menu-item" role="menuitem" type="button" onClick={() => void shareTrack(track)}>Share song</button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => void shareTrack(track)}>{t("Share song")}</button>
         {inPlaylist && playlist ? (
           <button className="menu-item" role="menuitem" type="button" onClick={() => removeTrackFromPlaylist(playlist.id, track)}>
-            Remove from this playlist
+            {t("Remove from this playlist")}
           </button>
         ) : null}
         <div className="menu-sep" />
         <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); void removeTrack(track); }}>
-          Remove from library
+          {t("Remove from library")}
         </button>
       </div>,
       document.body,
@@ -2103,8 +2106,8 @@ export default function LibraryApp() {
           <button
             className="card-queue"
             type="button"
-            title="Add to queue"
-            aria-label="Add to queue"
+            title={t("Add to queue")}
+            aria-label={t("Add to queue")}
             onClick={(event) => {
               event.stopPropagation();
               addToQueue(track);
@@ -2115,8 +2118,8 @@ export default function LibraryApp() {
           <button
             className={`card-fav${track.favorite ? " on" : ""}`}
             type="button"
-            title={track.favorite ? "Remove favorite" : "Favorite"}
-            aria-label={track.favorite ? "Remove favorite" : "Favorite"}
+            title={t(track.favorite ? "Remove favorite" : "Favorite")}
+            aria-label={t(track.favorite ? "Remove favorite" : "Favorite")}
             onClick={(event) => {
               event.stopPropagation();
               toggleFavoriteFor(track);
@@ -2127,8 +2130,8 @@ export default function LibraryApp() {
           <button
             className="card-menu"
             type="button"
-            title="More options"
-            aria-label={`More options for ${track.title}`}
+            title={t("More options")}
+            aria-label={`${t("More options for")} ${track.title}`}
             aria-haspopup="menu"
             aria-expanded={trackMenu?.trackId === track.id}
             data-track-menu-trigger
@@ -2190,12 +2193,12 @@ export default function LibraryApp() {
         <div className="row-album-cell">{track.album}</div>
         <div className="row-time">{track.duration ? formatTime(track.duration) : "--:--"}</div>
         <div className="row-actions">
-          <button type="button" title="Add to queue" aria-label="Add to queue" onClick={(event) => { event.stopPropagation(); addToQueue(track); }}><Icon name="queue" /></button>
-          <button type="button" className={track.favorite ? "fav-on" : ""} title={track.favorite ? "Remove favorite" : "Favorite"} aria-label={track.favorite ? "Remove favorite" : "Favorite"} aria-pressed={track.favorite} onClick={(event) => { event.stopPropagation(); toggleFavoriteFor(track); }}><Icon name="heart" /></button>
+          <button type="button" title={t("Add to queue")} aria-label={t("Add to queue")} onClick={(event) => { event.stopPropagation(); addToQueue(track); }}><Icon name="queue" /></button>
+          <button type="button" className={track.favorite ? "fav-on" : ""} title={t(track.favorite ? "Remove favorite" : "Favorite")} aria-label={t(track.favorite ? "Remove favorite" : "Favorite")} aria-pressed={track.favorite} onClick={(event) => { event.stopPropagation(); toggleFavoriteFor(track); }}><Icon name="heart" /></button>
           <button
             type="button"
-            title="More options"
-            aria-label={`More options for ${track.title}`}
+            title={t("More options")}
+            aria-label={`${t("More options for")} ${track.title}`}
             aria-haspopup="menu"
             aria-expanded={trackMenu?.trackId === track.id}
             data-track-menu-trigger
@@ -2212,9 +2215,9 @@ export default function LibraryApp() {
       return (
         <div className="empty">
           <div className="empty-orb" />
-          <h3>No matches for “{search.trim()}”</h3>
-          <p>Try another title, artist, or album name.</p>
-          <button className="btn" type="button" onClick={() => setSearch("")}>Clear search</button>
+          <h3>{t("No matches for")} “{search.trim()}”</h3>
+          <p>{t("Try another title, artist, or album name.")}</p>
+          <button className="btn" type="button" onClick={() => setSearch("")}>{t("Clear search")}</button>
         </div>
       );
     }
@@ -2222,12 +2225,12 @@ export default function LibraryApp() {
       return (
         <div className="empty playlist-track-empty">
           <div className="empty-orb" />
-          <h3>This playlist is empty</h3>
-          <p>{tracks.length ? "Add songs from your library to start building it." : "Add music to your library, then come back to build this playlist."}</p>
+          <h3>{t("This playlist is empty")}</h3>
+          <p>{tracks.length ? t("Add songs from your library to start building it.") : t("Add music to your library, then come back to build this playlist.")}</p>
           {tracks.length ? (
-            <button className="btn btn-primary" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}>Add from library</button>
+            <button className="btn btn-primary" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}>{t("Add from library")}</button>
           ) : (
-            <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>Add music</button>
+            <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>{t("Add music")}</button>
           )}
         </div>
       );
@@ -2236,9 +2239,9 @@ export default function LibraryApp() {
       return (
         <div className="empty">
           <div className="empty-orb"><Icon name="offline" /></div>
-          <h3>No offline songs yet</h3>
-          <p>Download songs from the library menu to listen without an internet connection.</p>
-          <button className="btn btn-primary" type="button" onClick={() => setView("library")}>Browse library</button>
+          <h3>{t("No offline songs yet")}</h3>
+          <p>{t("Download songs from the library menu to listen without an internet connection.")}</p>
+          <button className="btn btn-primary" type="button" onClick={() => setView("library")}>{t("Browse library")}</button>
         </div>
       );
     }
@@ -2246,11 +2249,11 @@ export default function LibraryApp() {
       return (
         <div className="empty">
           <div className="empty-orb" />
-          <h3>Your library is empty</h3>
-          <p>Add songs or a folder. Vervfy saves them to your account so they are available on your other devices.</p>
+          <h3>{t("Your library is empty")}</h3>
+          <p>{t("Add songs or a folder. Vervfy saves them to your account so they are available on your other devices.")}</p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 6 }}>
-            <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>Add music</button>
-            <button className="btn" type="button" onClick={() => folderInputRef.current?.click()}>Add folder</button>
+            <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>{t("Add music")}</button>
+            <button className="btn" type="button" onClick={() => folderInputRef.current?.click()}>{t("Add folder")}</button>
           </div>
         </div>
       );
@@ -2259,16 +2262,16 @@ export default function LibraryApp() {
       return (
         <div className="empty">
           <div className="empty-orb" />
-          <h3>No favorites yet</h3>
-          <p>Use the heart on any song to keep it close. Your favorites sync with your account.</p>
+          <h3>{t("No favorites yet")}</h3>
+          <p>{t("Use the heart on any song to keep it close. Your favorites sync with your account.")}</p>
         </div>
       );
     }
     return (
       <div className="empty">
         <div className="empty-orb" />
-        <h3>Nothing here yet</h3>
-        <p>Your library will show up here when you add music.</p>
+        <h3>{t("Nothing here yet")}</h3>
+        <p>{t("Your library will show up here when you add music.")}</p>
       </div>
     );
   };
@@ -2279,7 +2282,7 @@ export default function LibraryApp() {
           className="mobile-player open"
           role="dialog"
           aria-modal="true"
-          aria-label="Now playing"
+          aria-label={t("Now playing")}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
@@ -2296,20 +2299,20 @@ export default function LibraryApp() {
             <button
               className="mobile-player-icon"
               type="button"
-              aria-label="Close player"
+              aria-label={t("Close player")}
               ref={expandedPlayerCloseRef}
               onClick={() => setExpandedPlayerOpen(false)}
             >
               <Icon name="close" />
             </button>
             <div className="mobile-player-context">
-              <span>PLAYING FROM</span>
-              <strong>{viewName(playingFromView ?? view, playlists)}</strong>
+              <span>{t("PLAYING FROM")}</span>
+              <strong>{t(viewName(playingFromView ?? view, playlists))}</strong>
             </div>
             <button
               className="mobile-player-icon"
               type="button"
-              aria-label={`More options for ${currentTrack.title}`}
+              aria-label={`${t("More options for")} ${currentTrack.title}`}
               aria-haspopup="menu"
               data-track-menu-trigger
               onClick={(event) => toggleTrackMenu(currentTrack, event)}
@@ -2339,7 +2342,7 @@ export default function LibraryApp() {
                 <button
                   className={`mobile-player-fav${currentTrack.favorite ? " on" : ""}`}
                   type="button"
-                  aria-label={currentTrack.favorite ? "Remove favorite" : "Favorite"}
+                  aria-label={t(currentTrack.favorite ? "Remove favorite" : "Favorite")}
                   aria-pressed={currentTrack.favorite}
                   onClick={() => toggleFavoriteFor(currentTrack)}
                 >
@@ -2357,23 +2360,23 @@ export default function LibraryApp() {
                 <button
                   className={`mobile-control${shuffle ? " on" : ""}`}
                   type="button"
-                  aria-label="Shuffle"
+                  aria-label={t("Shuffle")}
                   aria-pressed={shuffle}
                   onClick={toggleShuffle}
                 ><Icon name="shuffle" /></button>
-                <button className="mobile-control" type="button" aria-label="Previous track" onClick={playPrevious}>
+                <button className="mobile-control" type="button" aria-label={t("Previous track")} onClick={playPrevious}>
                   <Icon name="prev" />
                 </button>
-                <button className="mobile-play" type="button" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlayback}>
+                <button className="mobile-play" type="button" aria-label={t(isPlaying ? "Pause" : "Play")} onClick={togglePlayback}>
                   <Icon name={isPlaying ? "pause" : "play"} />
                 </button>
-                <button className="mobile-control" type="button" aria-label="Next track" onClick={() => playNext(false)}>
+                <button className="mobile-control" type="button" aria-label={t("Next track")} onClick={() => playNext(false)}>
                   <Icon name="next" />
                 </button>
                 <button
                   className={`mobile-control${repeat !== "off" ? " on" : ""}`}
                   type="button"
-                  aria-label={`Repeat: ${repeat}`}
+                  aria-label={t(`Repeat: ${repeat}`)}
                   aria-pressed={repeat !== "off"}
                   onClick={toggleRepeat}
                 ><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
@@ -2381,20 +2384,20 @@ export default function LibraryApp() {
               <button
                 className="mobile-lyrics-preview"
                 type="button"
-                aria-label="Open full lyrics"
+                aria-label={t("Open full lyrics")}
                 onClick={() => {
                   setExpandedPlayerOpen(false);
                   setLyricsOpen(true);
                 }}
               >
                 <span className="mobile-lyrics-heading">
-                  <span>Lyrics</span>
+                  <span>{t("Lyrics")}</span>
                   <span>
                     {previewLines?.length
-                      ? "Synced to playback"
+                      ? t("Synced to playback")
                       : previewLyrics?.text
-                        ? "Plain lyrics"
-                        : "Open full lyrics"}
+                          ? t("Plain lyrics")
+                          : t("Open full lyrics")}
                   </span>
                 </span>
                 {previewLines?.length ? (
@@ -2413,10 +2416,10 @@ export default function LibraryApp() {
                 ) : (
                   <p>
                     {lyricsLookupFailedTrackId === currentTrack.id
-                      ? "Couldn't load lyrics. Tap to retry."
+                      ? t("Couldn't load lyrics. Tap to retry.")
                       : cachedLyrics?.source === "none"
-                        ? "No lyrics found for this track."
-                        : "Finding lyrics…"}
+                        ? t("No lyrics found for this track.")
+                        : t("Finding lyrics…")}
                   </p>
                 )}
               </button>
@@ -2428,7 +2431,7 @@ export default function LibraryApp() {
                     setExpandedPlayerOpen(false);
                     setLyricsOpen(true);
                   }}
-                ><span aria-hidden="true">♫</span><span>Lyrics</span></button>
+                ><span aria-hidden="true">♫</span><span>{t("Lyrics")}</span></button>
                 <button
                   className="mobile-secondary"
                   type="button"
@@ -2437,7 +2440,7 @@ export default function LibraryApp() {
                     setExpandedPlayerOpen(false);
                     setQueueOpen(true);
                   }}
-                ><Icon name="queue" /><span>Queue</span></button>
+                ><Icon name="queue" /><span>{t("Queue")}</span></button>
               </div>
             </section>
           </main>
@@ -2460,26 +2463,26 @@ export default function LibraryApp() {
         setIsDraggingFiles(false);
         void uploadFiles(event.dataTransfer.files);
       }}>
-        <nav className="rail" aria-label="Main navigation">
+        <nav className="rail" aria-label={t("Main navigation")}>
           <div className="logo-mark">
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
           </div>
-          <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip="Library" aria-label="Library" aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
-          <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip="Offline" aria-label="Offline" aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
-          <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip="Playlists" aria-label="Playlists" aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
-          <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip="Artists" aria-label="Artists" aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /></button>
-          <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip="Favorites" aria-label="Favorites" aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /></button>
-          <button className={`rail-btn${view === "account" ? " active" : ""}`} type="button" data-view="account" data-tip="Account" aria-label="Account" aria-current={view === "account" ? "page" : undefined} onClick={() => setView("account")}><Icon name="account" /></button>
+          <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
+          <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
+          <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
+          <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip={t("Artists")} aria-label={t("Artists")} aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /></button>
+          <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip={t("Favorites")} aria-label={t("Favorites")} aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /></button>
+          <button className={`rail-btn${view === "account" ? " active" : ""}`} type="button" data-view="account" data-tip={t("Account")} aria-label={t("Account")} aria-current={view === "account" ? "page" : undefined} onClick={() => setView("account")}><Icon name="account" /></button>
           <div className="rail-spacer" />
           <div className="rail-logout"><LogoutButton className="rail-btn rail-logout-button" ariaLabel="Log out"><Icon name="logout" /></LogoutButton></div>
-          <button className="rail-btn rail-shortcuts-button" type="button" data-tip="Shortcuts (?)" aria-label="Shortcuts" onClick={() => setShortcutsOpen(true)}><Icon name="help" /></button>
-          <button className="rail-btn rail-import-button" type="button" data-tip="Add music" aria-label="Add music" onClick={() => fileInputRef.current?.click()}><Icon name="import" /></button>
+          <button className="rail-btn rail-shortcuts-button" type="button" data-tip={t("Shortcuts (?)")} aria-label={t("Shortcuts")} onClick={() => setShortcutsOpen(true)}><Icon name="help" /></button>
+          <button className="rail-btn rail-import-button" type="button" data-tip={t("Add music")} aria-label={t("Add music")} onClick={() => fileInputRef.current?.click()}><Icon name="import" /></button>
         </nav>
 
         <div className="main">
           <div className="topbar">
-            <button className="home-profile-avatar" type="button" title="Account" aria-label="Open account" onClick={() => setView("account")}>
+            <button className="home-profile-avatar" type="button" title={t("Account")} aria-label={t("Open account")} onClick={() => setView("account")}>
               {profile?.photo_url
                 ? <img src={profile.photo_url} alt="" onError={() => setProfile((current) => current ? { ...current, photo_url: null } : null)} />
                 : profile?.username.slice(0, 1).toUpperCase() ?? <Icon name="account" />}
@@ -2489,34 +2492,34 @@ export default function LibraryApp() {
               <span className="view-count">{tracks.length || view === "playlists" || view === "offline" || playlistForView ? `· ${count}` : ""}</span>
             </div>
             {view !== "account" ? (
-              <div className="view-toggle" role="group" aria-label="View mode">
-                <button type="button" className={listMode === "grid" ? "active" : ""} aria-pressed={listMode === "grid"} title="Grid view" aria-label="Grid view" onClick={() => setListMode("grid")}><Icon name="grid" /></button>
-                <button type="button" className={listMode === "list" ? "active" : ""} aria-pressed={listMode === "list"} title="List view" aria-label="List view" onClick={() => setListMode("list")}><Icon name="list" /></button>
+              <div className="view-toggle" role="group" aria-label={t("View mode")}>
+                <button type="button" className={listMode === "grid" ? "active" : ""} aria-pressed={listMode === "grid"} title={t("Grid view")} aria-label={t("Grid view")} onClick={() => setListMode("grid")}><Icon name="grid" /></button>
+                <button type="button" className={listMode === "list" ? "active" : ""} aria-pressed={listMode === "list"} title={t("List view")} aria-label={t("List view")} onClick={() => setListMode("list")}><Icon name="list" /></button>
               </div>
             ) : null}
             {view !== "account" ? <label className="search-wrap">
               <Icon name="search" />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" autoComplete="off" aria-label={view === "playlists" ? "Search playlists" : "Search library"} />
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("Search")} autoComplete="off" aria-label={t(view === "playlists" ? "Search playlists" : "Search library")} />
               <span className="kbd">/</span>
             </label> : null}
             {view === "playlists" ? (
               <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}>
-                <Icon name="plus" /> New playlist
+                <Icon name="plus" /> {t("New playlist")}
               </button>
             ) : view === "account" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
               <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
-                <Icon name="import" /> Add music
+                <Icon name="import" /> {t("Add music")}
               </button>
             )}
           </div>
 
           <div className="content">
             {loading ? (
-              <div className="library-skeleton" aria-label="Loading library" aria-busy="true">
+              <div className="library-skeleton" aria-label={t("Loading library")} aria-busy="true">
                 {[0, 1, 2].map((item) => <div className="skeleton-row" key={item}><span className="skeleton-art" /><span className="skeleton-copy"><i /><i /></span><span className="skeleton-time" /></div>)}
               </div>
             ) : loadError ? (
-              <div className="empty"><div className="empty-orb" /><h3>Music server unavailable</h3><p>{loadError}</p><button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>Retry connection</button></div>
+              <div className="empty"><div className="empty-orb" /><h3>{t("Music server unavailable")}</h3><p>{loadError}</p><button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>{t("Retry connection")}</button></div>
             ) : (
               <>
                 <div hidden={view !== "account"}>
@@ -2569,18 +2572,18 @@ export default function LibraryApp() {
               ) : (
                 <div className="empty playlist-list-empty">
                   <div className="empty-orb"><Icon name={search.trim() ? "search" : "playlists"} /></div>
-                  <h3>{search.trim() ? "No playlists found" : "Your playlists start here"}</h3>
-                  <p>{search.trim() ? "Try a different name or clear your search." : "Collect songs into playlists for every mood and moment."}</p>
+                  <h3>{search.trim() ? t("No playlists found") : t("Your playlists start here")}</h3>
+                  <p>{search.trim() ? t("Try a different name or clear your search.") : t("Collect songs into playlists for every mood and moment.")}</p>
                   {search.trim()
-                    ? <button className="btn" type="button" onClick={() => setSearch("")}>Clear search</button>
-                    : <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}><Icon name="plus" /> Create playlist</button>}
+                    ? <button className="btn" type="button" onClick={() => setSearch("")}>{t("Clear search")}</button>
+                    : <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}><Icon name="plus" /> {t("Create playlist")}</button>}
                 </div>
               )
             ) : (
               <>
                 {playlistForView ? (
                   <div className="playlist-detail">
-                    <button className="playlist-back" type="button" onClick={() => setView("playlists")}><Icon name="prev" /> All playlists</button>
+                    <button className="playlist-back" type="button" onClick={() => setView("playlists")}><Icon name="prev" /> {t("All playlists")}</button>
                     <section className="playlist-hero">
                       <div className={`playlist-hero-cover${playlistViewCovers.length === 1 ? " single" : ""}${playlistViewCovers.length ? "" : " is-empty"}`} aria-hidden="true">
                         {playlistViewCovers.length
@@ -2588,22 +2591,22 @@ export default function LibraryApp() {
                           : <Icon name="playlists" />}
                       </div>
                       <div className="playlist-hero-copy">
-                        <span className="playlist-eyebrow">PLAYLIST</span>
+                        <span className="playlist-eyebrow">{t("PLAYLIST")}</span>
                         <h1>{playlistForView.name}</h1>
-                        <p>{playlistForView.trackIds.length} {playlistForView.trackIds.length === 1 ? "song" : "songs"} in this collection</p>
+                        <p>{playlistForView.trackIds.length} {t(playlistForView.trackIds.length === 1 ? "song" : "songs")} {t("in this collection")}</p>
                         <div className="playlist-actions">
                           <button className="btn btn-primary" type="button" disabled={!visibleTracks.length} onClick={() => {
                             const firstTrack = visibleTracks[0];
                             if (firstTrack) playFromList(visibleTracks, firstTrack.id);
-                          }}><Icon name="play" /> Play</button>
-                          <button className="btn" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}><Icon name="plus" /> Add songs</button>
-                          <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>Rename</button>
+                          }}><Icon name="play" /> {t("Play")}</button>
+                          <button className="btn" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
+                          <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
                           <button className="btn btn-danger" type="button" onClick={() => {
                             if (!window.confirm(`Delete “${playlistForView.name}”?`)) return;
                             setPlaylists(playlists.filter((item) => item.id !== playlistForView.id));
                             setView("playlists");
                             void saveMeta();
-                          }}>Delete</button>
+                          }}>{t("Delete")}</button>
                         </div>
                       </div>
                     </section>
@@ -2613,15 +2616,15 @@ export default function LibraryApp() {
                   <>
                     {playlistForView ? (
                       <div className="playlist-track-heading">
-                        <h2>Songs</h2>
-                        <span>{visibleTracks.length} {visibleTracks.length === 1 ? "song" : "songs"}</span>
+                        <h2>{t("Songs")}</h2>
+                        <span>{visibleTracks.length} {t(visibleTracks.length === 1 ? "song" : "songs")}</span>
                       </div>
                     ) : null}
                     {listMode === "grid" ? (
                       <div className="grid">{visibleTracks.map(renderTrack)}</div>
                     ) : (
                       <div className="list">
-                        <div className="list-head"><div /><div>Title</div><div>Album</div><div>Time</div><div /></div>
+                        <div className="list-head"><div /><div>{t("Title")}</div><div>{t("Album")}</div><div>{t("Time")}</div><div /></div>
                         {visibleTracks.map(renderTrack)}
                       </div>
                     )}
@@ -2635,7 +2638,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label="Now playing" aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
+      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
@@ -2671,15 +2674,15 @@ export default function LibraryApp() {
                 : "—"}
             </span>
           </span>
-          {currentTrack ? <button className={`now-fav${currentTrack.favorite ? " on" : ""}`} type="button" aria-label={currentTrack.favorite ? "Remove favorite" : "Favorite"} aria-pressed={currentTrack.favorite} onClick={() => toggleFavoriteFor(currentTrack)}><Icon name="heart" /></button> : null}
+          {currentTrack ? <button className={`now-fav${currentTrack.favorite ? " on" : ""}`} type="button" aria-label={t(currentTrack.favorite ? "Remove favorite" : "Favorite")} aria-pressed={currentTrack.favorite} onClick={() => toggleFavoriteFor(currentTrack)}><Icon name="heart" /></button> : null}
         </div>
         <div className="transport">
           <div className="transport-btns">
-            <button className={`tbtn${shuffle ? " on" : ""}`} type="button" title="Shuffle" aria-label="Shuffle" aria-pressed={shuffle} onClick={toggleShuffle}><Icon name="shuffle" /></button>
-            <button className="tbtn" type="button" title="Previous" onClick={playPrevious}><Icon name="prev" /></button>
-            <button className="tbtn tbtn-play" type="button" title="Play/Pause" onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button>
-            <button className="tbtn" type="button" title="Next" onClick={() => playNext(false)}><Icon name="next" /></button>
-            <button className={`tbtn${repeat !== "off" ? " on" : ""}`} type="button" title={`Repeat: ${repeat}`} aria-label={`Repeat: ${repeat}`} aria-pressed={repeat !== "off"} onClick={toggleRepeat}><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
+            <button className={`tbtn${shuffle ? " on" : ""}`} type="button" title={t("Shuffle")} aria-label={t("Shuffle")} aria-pressed={shuffle} onClick={toggleShuffle}><Icon name="shuffle" /></button>
+            <button className="tbtn" type="button" title={t("Previous track")} aria-label={t("Previous track")} onClick={playPrevious}><Icon name="prev" /></button>
+            <button className="tbtn tbtn-play" type="button" title={t("Play or pause")} aria-label={t(isPlaying ? "Pause" : "Play")} onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button>
+            <button className="tbtn" type="button" title={t("Next track")} aria-label={t("Next track")} onClick={() => playNext(false)}><Icon name="next" /></button>
+            <button className={`tbtn${repeat !== "off" ? " on" : ""}`} type="button" title={t(`Repeat: ${repeat}`)} aria-label={t(`Repeat: ${repeat}`)} aria-pressed={repeat !== "off"} onClick={toggleRepeat}><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
           </div>
           <PlaybackSeek
             audioElement={audioElement}
@@ -2690,10 +2693,10 @@ export default function LibraryApp() {
           />
         </div>
         <div className="now-extra">
-          <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title="Lyrics (L)" aria-label="Lyrics" aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
-          <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title="Visualizer (V)" aria-label="Visualizer" aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
-          <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title="Queue" aria-label="Queue" aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
-          <button className={`icon-btn player-control-mini${miniMode ? " on" : ""}`} type="button" title="Mini player" aria-label="Mini player" aria-pressed={miniMode} onClick={() => setMiniMode(!miniMode)}><Icon name="mini" /></button>
+          <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title={t("Lyrics (L)")} aria-label={t("Lyrics")} aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
+          <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title={t("Visualizer (V)")} aria-label={t("Visualizer")} aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
+          <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title={t("Queue")} aria-label={t("Queue")} aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
+          <button className={`icon-btn player-control-mini${miniMode ? " on" : ""}`} type="button" title={t("Mini player")} aria-label={t("Mini player")} aria-pressed={miniMode} onClick={() => setMiniMode(!miniMode)}><Icon name="mini" /></button>
           <button className={`icon-btn player-control-mute${muted ? " on" : ""}`} type="button" title={muted ? "Unmute" : "Mute"} aria-label={muted ? "Unmute" : "Mute"} aria-pressed={muted} onClick={() => {
           const audio = usePlayerStore.getState().audioElement;
           if (!audio) return;
@@ -2701,7 +2704,7 @@ export default function LibraryApp() {
           setMuted(nextMuted);
           audio.muted = nextMuted;
           }}><Icon name={muted || volume === 0 ? "volume-muted" : "volume"} /></button>
-          <div className="vol-wrap"><div className="vol-track" role="slider" tabIndex={0} aria-label="Volume" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((muted ? 0 : volume) * 100)} aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`} onClick={updateVolume} onKeyDown={(event) => {
+          <div className="vol-wrap"><div className="vol-track" role="slider" tabIndex={0} aria-label={t("Volume")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((muted ? 0 : volume) * 100)} aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)}%`} onClick={updateVolume} onKeyDown={(event) => {
             if (event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowLeft" && event.key !== "ArrowDown") return;
             event.preventDefault();
             const direction = event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : -1;
@@ -2730,19 +2733,19 @@ export default function LibraryApp() {
         />
       ) : null}
       {visualizerOpen ? <VisualizerOverlay onClose={() => setVisualizerOpen(false)} /> : null}
-      {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onClick={() => setShortcutsOpen(false)}>
+      {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
         <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
-          <div className="queue-picker-head"><h3>Keyboard shortcuts</h3><button className="icon-btn" type="button" aria-label="Close shortcuts" onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
-          <div className="queue-picker-list"><p><kbd>Space</kbd><span>Play / pause</span></p><p><kbd>Shift + ← / →</kbd><span>Previous / next track</span></p><p><kbd>← / →</kbd><span>Seek 5 seconds</span></p><p><kbd>↑ / ↓</kbd><span>Volume</span></p><p><kbd>M</kbd><span>Mute</span></p><p><kbd>F</kbd><span>Favorite current track</span></p><p><kbd>N</kbd><span>Mini player</span></p><p><kbd>L</kbd><span>Lyrics</span></p><p><kbd>V</kbd><span>Visualizer</span></p><p><kbd>/</kbd><span>Search</span></p><p><kbd>?</kbd><span>Shortcuts</span></p><p><kbd>Esc</kbd><span>Close panels</span></p></div>
+          <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
+          <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>N</kbd><span>{t("Mini player")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
       </div> : null}
 
       <div className={`mini-player${miniMode ? " open" : ""}`}>
         <div className="mini-drag" />
-        <button className="mini-exit" type="button" aria-label="Close mini player" onClick={() => setMiniMode(false)}><Icon name="close" /></button>
+        <button className="mini-exit" type="button" aria-label={t("Close mini player")} onClick={() => setMiniMode(false)}><Icon name="close" /></button>
         <div className="mini-body">
           <div className="mini-art-wrap"><div className="mini-art"><img src={currentTrack?.coverUrl ?? FALLBACK_ART} alt="" /></div></div>
-          <div className="mini-meta"><div className="mini-title">{currentTrack?.title ?? "Nothing playing"}</div><div className="mini-artist">{currentTrack?.artist ?? "Pick a track"}</div></div>
+          <div className="mini-meta"><div className="mini-title">{currentTrack?.title ?? t("Nothing playing")}</div><div className="mini-artist">{currentTrack?.artist ?? t("Pick a track")}</div></div>
           <PlaybackSeek
             audioElement={audioElement}
             duration={duration}
@@ -2751,14 +2754,14 @@ export default function LibraryApp() {
             variant="player"
             className="mini-seek"
           />
-          <div className="mini-btns"><button className="tbtn" type="button" aria-label="Previous track" onClick={playPrevious}><Icon name="prev" /></button><button className="tbtn tbtn-play" type="button" aria-label="Play or pause" onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button><button className="tbtn" type="button" aria-label="Next track" onClick={() => playNext(false)}><Icon name="next" /></button></div>
+          <div className="mini-btns"><button className="tbtn" type="button" aria-label={t("Previous track")} onClick={playPrevious}><Icon name="prev" /></button><button className="tbtn tbtn-play" type="button" aria-label={t("Play or pause")} onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button><button className="tbtn" type="button" aria-label={t("Next track")} onClick={() => playNext(false)}><Icon name="next" /></button></div>
         </div>
       </div>
 
-      <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label="Up next">
-        <div className="side-head"><h3>Up next</h3><div className="side-head-actions"><button className="icon-btn" type="button" title="Add from library" onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title="Close queue" onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
+      <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
+        <div className="side-head"><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
         <div className="side-body">
-          {queue.length === 0 ? <div className="side-empty"><p>Your queue is empty.</p><button className="btn" type="button" onClick={() => setQueuePickerOpen(true)}>Add from library</button></div> : queue.map((trackId, index) => {
+          {queue.length === 0 ? <div className="side-empty"><p>{t("Your queue is empty.")}</p><button className="btn" type="button" onClick={() => setQueuePickerOpen(true)}>{t("Add from library")}</button></div> : queue.map((trackId, index) => {
             const track = tracks.find((item) => item.id === trackId);
             if (!track) return null;
             return <div
@@ -2804,35 +2807,35 @@ export default function LibraryApp() {
                 setQueueDragIndex(null);
                 setQueueDragOverIndex(null);
               }}
-            ><Icon name="drag" /></button><TrackImage track={track} /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title="Remove from queue" aria-label={`Remove ${track.title} from queue`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
+            ><Icon name="drag" /></button><TrackImage track={track} /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title={t("Remove from queue")} aria-label={`${t("Remove from queue")}: ${track.title}`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
           })}
         </div>
       </aside>
 
-      <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label="Add from library">
+      <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>Add from library</h3><button className="icon-btn" type="button" title="Close" onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
-          <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search library" aria-label="Search library" /></label>
+          <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
+          <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t("Search library")} aria-label={t("Search library")} /></label>
           <div className="queue-picker-list">{filteredQueueTracks.length ? filteredQueueTracks.map((track) => <button className="qp-row" type="button" key={track.id} onClick={(event) => {
             event.stopPropagation();
             addToQueue(track);
             setQueuePickerOpen(true);
-          }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? "No tracks match your search." : "Your library is empty."}</div>}</div>
+          }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("No tracks match your search.") : t("Your library is empty")}</div>}</div>
         </div>
       </div>
 
       <div className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
         <form className="queue-picker-card playlist-name-card" onSubmit={createOrRenamePlaylist}>
-          <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? "Rename playlist" : "New playlist"}</h3><button className="icon-btn" type="button" title="Close" onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
-          <label className="playlist-name-label" htmlFor="playlistNameInput">Playlist name</label>
+          <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? t("Rename playlist") : t("New playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
+          <label className="playlist-name-label" htmlFor="playlistNameInput">{t("Playlist name")}</label>
           <input ref={playlistNameInputRef} className="playlist-name-input" id="playlistNameInput" maxLength={200} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} />
-          <div className="playlist-name-actions"><button className="btn" type="button" onClick={() => setPlaylistModal(null)}>Cancel</button><button className="btn btn-primary" type="submit">{playlistModal?.playlist ? "Save" : "Create"}</button></div>
+          <div className="playlist-name-actions"><button className="btn" type="button" onClick={() => setPlaylistModal(null)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit">{playlistModal?.playlist ? t("Save") : t("Create")}</button></div>
         </form>
       </div>
 
-      <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label="Add track to playlist">
+      <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>Add to playlist</h3><button className="icon-btn" type="button" title="Close" onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
+          <div className="queue-picker-head"><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">{playlists.length ? playlists.map((playlist) => {
             const trackId = playlistPicker;
             const inPlaylist = trackId ? playlist.trackIds.includes(trackId) : false;
@@ -2840,20 +2843,20 @@ export default function LibraryApp() {
               if (trackId) addTrackToPlaylist(playlist.id, trackId);
               setPlaylistPicker(null);
               notify(`Added to “${playlist.name}”.`);
-            }}><span className="qp-meta"><span className="qp-title">{playlist.name}</span><span className="qp-artist">{playlist.trackIds.length} tracks</span></span><span className="qp-add">{inPlaylist ? "✓" : <Icon name="plus" />}</span></button>;
-          }) : <div className="queue-picker-empty">Create a playlist first.</div>}</div>
-          <div className="playlist-name-actions"><button className="btn btn-primary" type="button" onClick={() => { setPlaylistPicker(null); setPlaylistName(""); setPlaylistModal({ trackId: playlistPicker ?? undefined }); }}>New playlist</button></div>
+            }}><span className="qp-meta"><span className="qp-title">{playlist.name}</span><span className="qp-artist">{playlist.trackIds.length} {t("tracks")}</span></span><span className="qp-add">{inPlaylist ? "✓" : <Icon name="plus" />}</span></button>;
+          }) : <div className="queue-picker-empty">{t("Create a playlist first.")}</div>}</div>
+          <div className="playlist-name-actions"><button className="btn btn-primary" type="button" onClick={() => { setPlaylistPicker(null); setPlaylistName(""); setPlaylistModal({ trackId: playlistPicker ?? undefined }); }}>{t("New playlist")}</button></div>
         </div>
       </div>
 
-      <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label="Add tracks to playlist">
+      <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>Add from library</h3><button className="icon-btn" type="button" title="Close" onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
+          <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">
             {tracksAvailableToAdd.length ? tracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
               if (playlistAddTarget) addTrackToPlaylist(playlistAddTarget, track.id);
               notify(`Added “${track.title}” to the playlist.`);
-            }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? "Every song in your library is already in this playlist." : "Your library is empty."}</div>}
+            }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
           </div>
         </div>
       </div>
@@ -2885,7 +2888,7 @@ export default function LibraryApp() {
         event.preventDefault();
         setIsDraggingFiles(false);
         void uploadFiles(event.dataTransfer.files);
-      }}><h3>Drop to add music</h3><p>Your files are uploaded to your account.</p></div> : null}
+      }}><h3>{t("Drop to add music")}</h3><p>{t("Your files are uploaded to your account.")}</p></div> : null}
       {uploadStatus ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div> : null}
       {toast ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{toast}</div></div> : null}
     </div>

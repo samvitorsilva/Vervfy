@@ -43,6 +43,24 @@ test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   });
 });
 
+test("Brazilian Portuguese is detected and the language choice persists", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "language", { configurable: true, value: "pt-BR" });
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["pt-BR", "en-US"] });
+  });
+  await page.goto("/login");
+
+  await expect(page.getByRole("heading", { name: "Bem-vindo de volta" })).toBeVisible();
+  await expect(page.getByLabel("Nome de usuário")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "pt-BR");
+
+  await page.getByLabel("Idioma").selectOption("en");
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+});
+
 test("login displays JSON authentication errors", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("invalid-user");

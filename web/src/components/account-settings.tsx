@@ -6,10 +6,11 @@ import type { Account } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
 import { artistNames } from "@/components/artist-explorer";
 import { usePlayerStore, type LibraryView } from "@/store/player-store";
+import { LanguageSelect, useLanguage } from "@/lib/i18n";
 
-function dateLabel(timestamp: number): string {
+function dateLabel(timestamp: number, language: string): string {
   if (!timestamp) return "—";
-  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
+  return new Date(timestamp * 1000).toLocaleDateString(language, {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -39,6 +40,7 @@ export default function AccountSettings({
   onToast: (message: string) => void;
   onPhotoChange: (photoUrl: string | null) => void;
 }) {
+  const { language, t } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
   const setView = usePlayerStore((state) => state.setView);
@@ -102,16 +104,16 @@ export default function AccountSettings({
         }
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Could not load account.");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : t("Could not load account."));
       });
     return () => {
       cancelled = true;
     };
-  }, [account, active, onPhotoChange]);
+  }, [account, active, onPhotoChange, t]);
 
   async function saveEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setEmailMessage("Saving email…");
+    setEmailMessage(t("Saving email…"));
     try {
       const data = await sendJson("/api/account/email", "PUT", {
         email: email.trim(),
@@ -121,9 +123,9 @@ export default function AccountSettings({
       setAccount((current) => current ? { ...current, email: nextEmail } : current);
       setEmail(nextEmail ?? "");
       setEmailPassword("");
-      setEmailMessage(nextEmail ? "Email saved to your account." : "Email removed.");
+      setEmailMessage(nextEmail ? t("Email saved to your account.") : t("Email removed."));
     } catch (reason) {
-      setEmailMessage(reason instanceof Error ? reason.message : "Could not update email.");
+      setEmailMessage(reason instanceof Error ? reason.message : t("Could not update email."));
     }
   }
 
@@ -131,16 +133,16 @@ export default function AccountSettings({
     event.preventDefault();
     const form = event.currentTarget;
     const formData = new FormData(form);
-    setPasswordMessage("Updating…");
+    setPasswordMessage(t("Updating…"));
     try {
       await sendJson("/api/account/password", "POST", {
         current_password: String(formData.get("current_password") ?? ""),
         new_password: String(formData.get("new_password") ?? ""),
       });
       form.reset();
-      setPasswordMessage("Password updated.");
+      setPasswordMessage(t("Password updated."));
     } catch (reason) {
-      setPasswordMessage(reason instanceof Error ? reason.message : "Could not update password.");
+      setPasswordMessage(reason instanceof Error ? reason.message : t("Could not update password."));
     }
   }
 
@@ -169,11 +171,11 @@ export default function AccountSettings({
   function choosePhoto(file: File | undefined) {
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
-      setPhotoMessage("Choose a JPEG, PNG, WebP, or GIF image.");
+      setPhotoMessage(t("Choose a JPEG, PNG, WebP, or GIF image."));
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      setPhotoMessage("Profile photo must be 5 MB or smaller.");
+      setPhotoMessage(t("Profile photo must be 5 MB or smaller."));
       return;
     }
     if (photoObjectUrlRef.current) URL.revokeObjectURL(photoObjectUrlRef.current);
@@ -234,7 +236,7 @@ export default function AccountSettings({
 
   async function savePhoto() {
     setPhotoSaving(true);
-    setPhotoMessage(photoRemoved ? "Removing…" : "Saving…");
+    setPhotoMessage(photoRemoved ? t("Removing…") : t("Saving…"));
     try {
       if (photoRemoved) {
         await expectOk(
@@ -247,7 +249,7 @@ export default function AccountSettings({
         setAccount((current) => current ? { ...current, photo_url: null } : current);
         onPhotoChange(null);
         closePhotoEditor();
-        onToast("Profile photo removed.");
+        onToast(t("Profile photo removed."));
         return;
       }
 
@@ -290,9 +292,9 @@ export default function AccountSettings({
       setAccount((current) => current ? { ...current, photo_url: photoUrl } : current);
       onPhotoChange(photoUrl);
       closePhotoEditor();
-      onToast("Profile photo saved.");
+      onToast(t("Profile photo saved."));
     } catch (reason) {
-      setPhotoMessage(reason instanceof Error ? reason.message : "Could not save profile photo.");
+      setPhotoMessage(reason instanceof Error ? reason.message : t("Could not save profile photo."));
     } finally {
       setPhotoSaving(false);
     }
@@ -305,15 +307,15 @@ export default function AccountSettings({
       window.location.assign("/login");
     } catch (reason) {
       setPending(false);
-      onToast(reason instanceof Error ? reason.message : "Could not sign out of all devices.");
+      onToast(reason instanceof Error ? reason.message : t("Could not sign out of all devices."));
     }
   }
 
   async function deleteAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!window.confirm("Delete your account and all of its music data permanently?")) return;
+    if (!window.confirm(t("Delete your account and all of its music data permanently?"))) return;
     const formData = new FormData(event.currentTarget);
-    setDeleteMessage("Deleting account…");
+    setDeleteMessage(t("Deleting account…"));
     setPending(true);
     try {
       await sendJson("/api/account", "DELETE", {
@@ -323,30 +325,30 @@ export default function AccountSettings({
       window.location.assign("/login?account_deleted=1");
     } catch (reason) {
       setPending(false);
-      setDeleteMessage(reason instanceof Error ? reason.message : "Could not delete account.");
+      setDeleteMessage(reason instanceof Error ? reason.message : t("Could not delete account."));
     }
   }
 
   const likedCount = tracks.filter((track) => track.favorite).length;
   const artistCount = new Set(tracks.flatMap(artistNames)).size;
   const cards: Array<{ label: string; count: number; subtitle: string; view: LibraryView }> = [
-    { label: "Music files", count: tracks.length, subtitle: "tracks in your library", view: "library" },
-    { label: "Liked songs", count: likedCount, subtitle: "saved favorites", view: "favorites" },
-    { label: "Artists", count: artistCount, subtitle: "in your library", view: "artists" },
-    { label: "Playlists", count: playlists.length, subtitle: "saved playlists", view: "playlists" },
+    { label: t("Music files"), count: tracks.length, subtitle: t("tracks in your library"), view: "library" },
+    { label: t("Liked songs"), count: likedCount, subtitle: t("saved favorites"), view: "favorites" },
+    { label: t("Artists"), count: artistCount, subtitle: t("in your library"), view: "artists" },
+    { label: t("Playlists"), count: playlists.length, subtitle: t("saved playlists"), view: "playlists" },
   ];
 
   if (!account) {
-    return <div className="account-view acct-loading">{error || "Loading account…"}</div>;
+    return <div className="account-view acct-loading">{error || t("Loading account…")}</div>;
   }
 
   return (
     <div className="account-view">
       <section className="acct-card">
-        <button className="acct-avatar" type="button" title="Edit profile photo" aria-label="Edit profile photo" onClick={openPhotoEditor}>
-          {account.photo_url ? <img src={account.photo_url} alt="Profile photo" /> : account.username.slice(0, 1).toUpperCase()}
+        <button className="acct-avatar" type="button" title={t("Edit profile photo")} aria-label={t("Edit profile photo")} onClick={openPhotoEditor}>
+          {account.photo_url ? <img src={account.photo_url} alt={t("Profile photo")} /> : account.username.slice(0, 1).toUpperCase()}
         </button>
-        <div><div className="acct-name">{account.username}</div><div className="acct-sub">{account.email ?? "No email on file"} · Member since {dateLabel(account.created_at)}</div></div>
+        <div><div className="acct-name">{account.username}</div><div className="acct-sub">{account.email ?? t("No email on file")} · {t("Member since")} {dateLabel(account.created_at, language)}</div></div>
       </section>
 
       <div className="acct-grid">
@@ -354,38 +356,44 @@ export default function AccountSettings({
       </div>
 
       <section className="acct-settings">
-        <div className="acct-settings-title">Email address</div>
+        <div className="acct-settings-title">{t("Language")}</div>
+        <p className="acct-danger-copy">{t("Choose the language used by Vervfy.")}</p>
+        <LanguageSelect />
+      </section>
+
+      <section className="acct-settings">
+        <div className="acct-settings-title">{t("Email address")}</div>
         <form className="acct-form" onSubmit={saveEmail}>
           <input type="email" placeholder="you@example.com" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
-          <input type="password" placeholder="Current password" autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
-          <button className="btn btn-primary" type="submit">Save email</button>
-          {account.email ? <button className="btn" type="button" onClick={() => setEmail("")}>Clear email</button> : null}
-          <div className={`acct-form-msg${emailMessage.includes("saved") || emailMessage.includes("removed") ? " ok" : emailMessage && !emailMessage.includes("Saving") ? " error" : ""}`}>{emailMessage || "Email is account information only; sign in with your username."}</div>
+          <input type="password" placeholder={t("Current password")} autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
+          <button className="btn btn-primary" type="submit">{t("Save email")}</button>
+          {account.email ? <button className="btn" type="button" onClick={() => setEmail("")}>{t("Clear email")}</button> : null}
+          <div className={`acct-form-msg${emailMessage.includes("salvo") || emailMessage.includes("removido") || emailMessage.includes("saved") || emailMessage.includes("removed") ? " ok" : emailMessage && !emailMessage.includes("Salvando") && !emailMessage.includes("Saving") ? " error" : ""}`}>{emailMessage || t("Email is account information only; sign in with your username.")}</div>
         </form>
       </section>
 
       <section className="acct-settings">
-        <div className="acct-settings-title">Change password</div>
+        <div className="acct-settings-title">{t("Change password")}</div>
         <form className="acct-form" onSubmit={savePassword}>
-          <input name="current_password" type="password" placeholder="Current password" autoComplete="current-password" required />
-          <input name="new_password" type="password" placeholder="New password (min 8 characters)" autoComplete="new-password" minLength={8} required />
-          <button className="btn btn-primary" type="submit">Update password</button>
-          <div className={`acct-form-msg${passwordMessage === "Password updated." ? " ok" : passwordMessage && passwordMessage !== "Updating…" ? " error" : ""}`}>{passwordMessage}</div>
+          <input name="current_password" type="password" placeholder={t("Current password")} autoComplete="current-password" required />
+          <input name="new_password" type="password" placeholder={t("New password (min 8 characters)")} autoComplete="new-password" minLength={8} required />
+          <button className="btn btn-primary" type="submit">{t("Update password")}</button>
+          <div className={`acct-form-msg${passwordMessage === t("Password updated.") ? " ok" : passwordMessage && passwordMessage !== t("Updating…") ? " error" : ""}`}>{passwordMessage}</div>
         </form>
       </section>
 
       <section className="acct-settings">
-        <div className="acct-settings-title">Session</div>
-        <div className="acct-form"><LogoutButton /><button className="btn" type="button" disabled={pending} onClick={() => void logoutAll()}>Sign out of all devices</button></div>
+        <div className="acct-settings-title">{t("Session")}</div>
+        <div className="acct-form"><LogoutButton /><button className="btn" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button></div>
       </section>
 
       <section className="acct-settings acct-danger-zone">
-        <div className="acct-settings-title">Delete account</div>
-        <p className="acct-danger-copy">Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.</p>
+        <div className="acct-settings-title">{t("Delete account")}</div>
+        <p className="acct-danger-copy">{t("Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.")}</p>
         <form className="acct-form" onSubmit={deleteAccount}>
-          <input name="current_password" type="password" placeholder="Current password" autoComplete="current-password" required />
-          <input name="confirmation" type="text" placeholder="Type DELETE to confirm" autoComplete="off" required />
-          <button className="btn btn-danger" type="submit" disabled={pending}>Delete account</button>
+          <input name="current_password" type="password" placeholder={t("Current password")} autoComplete="current-password" required />
+          <input name="confirmation" type="text" placeholder={t("Type DELETE to confirm")} autoComplete="off" required />
+          <button className="btn btn-danger" type="submit" disabled={pending}>{t("Delete account")}</button>
           <div className={`acct-form-msg${deleteMessage && !deleteMessage.includes("Deleting") ? " error" : ""}`}>{deleteMessage}</div>
         </form>
       </section>
@@ -400,10 +408,10 @@ export default function AccountSettings({
           <section className="photo-editor-card" role="dialog" aria-modal="true" aria-labelledby="photo-editor-title">
             <div className="photo-editor-head">
               <div>
-                <h3 id="photo-editor-title">Profile photo</h3>
-                <p>Choose a photo, adjust its zoom and position, then save.</p>
+                <h3 id="photo-editor-title">{t("Profile photo")}</h3>
+                <p>{t("Choose a photo, adjust its zoom and position, then save.")}</p>
               </div>
-              <button className="btn" type="button" aria-label="Close photo editor" disabled={photoSaving} onClick={closePhotoEditor}>Close</button>
+              <button className="btn" type="button" aria-label={t("Close photo editor")} disabled={photoSaving} onClick={closePhotoEditor}>{t("Close")}</button>
             </div>
 
             <input
@@ -426,7 +434,7 @@ export default function AccountSettings({
                 onPointerUp={() => { photoDragRef.current = null; }}
                 onPointerCancel={() => { photoDragRef.current = null; }}
                 role="img"
-                aria-label="Photo crop preview; drag to reposition"
+                aria-label={t("Photo crop preview; drag to reposition")}
               >
                 <img
                   ref={photoImageRef}
@@ -436,7 +444,7 @@ export default function AccountSettings({
                   onLoad={() => setPhotoImageLoaded(true)}
                   onError={() => {
                     setPhotoImageLoaded(false);
-                    setPhotoMessage("Could not load this photo.");
+                    setPhotoMessage(t("Could not load this photo."));
                   }}
                   style={{
                     width: photoImageRef.current?.naturalWidth && photoStageRef.current
@@ -453,20 +461,20 @@ export default function AccountSettings({
               </div>
             ) : (
               <div className="photo-editor-stage photo-editor-empty" aria-live="polite">
-                {photoRemoved ? "Photo will be removed when you save." : "Choose a photo to get started."}
+                {photoRemoved ? t("Photo will be removed when you save.") : t("Choose a photo to get started.")}
               </div>
             )}
 
             {photoDraftUrl && !photoRemoved ? (
               <label className="photo-editor-zoom">
-                <span>Zoom</span>
+                <span>{t("Zoom")}</span>
                 <input
                   type="range"
                   min="1"
                   max="3"
                   step="0.05"
                   value={photoZoom}
-                  aria-label="Photo zoom"
+                  aria-label={t("Photo zoom")}
                   disabled={!photoImageLoaded || photoSaving}
                   onChange={(event) => setZoom(Number(event.currentTarget.value))}
                 />
@@ -476,7 +484,7 @@ export default function AccountSettings({
 
             <div className="photo-editor-actions">
               <button className="btn" type="button" disabled={photoSaving} onClick={() => photoInputRef.current?.click()}>
-                {account.photo_url ? "Choose another photo" : "Choose photo"}
+                {account.photo_url ? t("Choose another photo") : t("Choose photo")}
               </button>
               {account.photo_url ? (
                 <button

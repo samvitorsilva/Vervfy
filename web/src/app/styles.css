@@ -709,6 +709,9 @@ span.artist-photo{
   background:var(--surface-control);
 }
 .acct-settings-title{ font-weight:600; margin-bottom:12px; }
+.language-select{ display:flex; align-items:center; gap:12px; width:max-content; max-width:100%; color:var(--text-mid); font-size:.85rem; }
+.language-select select{ min-width:170px; padding:9px 32px 9px 12px; border:1px solid var(--border); border-radius:var(--radius-s); background:var(--surface-control); color:var(--text); font:inherit; }
+.auth-language-select{ justify-content:flex-end; }
 .acct-form{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 .acct-form input{
   flex:1 1 200px; padding:10px 12px; border-radius:var(--radius-s);

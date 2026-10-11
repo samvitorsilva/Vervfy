@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { usePlayerStore } from "@/store/player-store";
 import LiquidGlass from "@/components/liquid-glass";
 import ServiceWorkerRegistration from "@/components/service-worker-registration";
+import { LanguageProvider } from "@/lib/i18n";
 
 export default function RootProviders({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -17,11 +18,11 @@ export default function RootProviders({ children }: { children: ReactNode }) {
   }, [setAudioElement]);
 
   return (
-    <>
+    <LanguageProvider>
       <ServiceWorkerRegistration />
       <LiquidGlass />
       {children}
       <audio ref={audioRef} preload="auto" hidden />
-    </>
+    </LanguageProvider>
   );
 }

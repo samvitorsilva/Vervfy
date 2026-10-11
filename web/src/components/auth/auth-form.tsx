@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { getCsrfToken } from "@/lib/api/client";
+import { LanguageSelect, useLanguage } from "@/lib/i18n";
 
 type AuthMode = "login" | "register";
 
 export default function AuthForm({ mode }: { mode: AuthMode }) {
+  const { t } = useLanguage();
   const isLogin = mode === "login";
   const endpoint = `/backend-auth/${mode}`;
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       .catch((reason: unknown) => {
         if (active) {
           setCsrfError(
-            reason instanceof Error ? reason.message : "Could not load the form.",
+            reason instanceof Error ? reason.message : t("Could not load the form."),
           );
         }
       });
@@ -33,7 +35,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [t]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -75,7 +77,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       setError(
         reason instanceof Error
           ? reason.message
-          : "The authentication request could not be completed.",
+          : t("The authentication request could not be completed."),
       );
     } finally {
       setPending(false);
@@ -90,13 +92,14 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           <img src="/gemini-svg.svg" alt="" width={28} height={28} />
           Vervfy
         </div>
+        <LanguageSelect className="auth-language-select" />
         <h1 className="auth-title">
-          {isLogin ? "Welcome back" : "Create your account"}
+          {t(isLogin ? "Welcome back" : "Create your account")}
         </h1>
         <p className="auth-sub">
           {isLogin
-            ? "Log in to reach your synced library."
-            : "Your library, uploads, and covers will be synced to it."}
+            ? t("Log in to reach your synced library.")
+            : t("Your library, uploads, and covers will be synced to it.")}
         </p>
 
         {(error || csrfError) && (
@@ -107,7 +110,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
 
         <form onSubmit={handleSubmit}>
           <div className="auth-field">
-            <label htmlFor="username">Username</label>
+            <label htmlFor="username">{t("Username")}</label>
             <input
               id="username"
               name="username"
@@ -126,7 +129,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           </div>
           {!isLogin && (
             <div className="auth-field">
-              <label htmlFor="email">Email (optional, not used to sign in)</label>
+              <label htmlFor="email">{t("Email (optional, not used to sign in)")}</label>
               <input
                 id="email"
                 name="email"
@@ -138,7 +141,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
             </div>
           )}
           <div className="auth-field">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">{t("Password")}</label>
             <input
               id="password"
               name="password"
@@ -155,18 +158,18 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           >
             {pending
               ? isLogin
-                ? "Logging in…"
-                : "Creating account…"
+                ? t("Logging in…")
+                : t("Creating account…")
               : isLogin
-                ? "Log in"
-                : "Create account"}
+                ? t("Log in")
+                : t("Create account")}
           </button>
         </form>
 
         <div className="auth-footer">
-          {isLogin ? "No account yet? " : "Already have an account? "}
+          {t(isLogin ? "No account yet? " : "Already have an account? ")}
           <Link href={isLogin ? "/register" : "/login"}>
-            {isLogin ? "Create one" : "Log in"}
+            {t(isLogin ? "Create one" : "Log in")}
           </Link>
         </div>
       </section>
