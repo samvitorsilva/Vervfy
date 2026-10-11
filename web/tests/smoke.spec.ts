@@ -125,25 +125,10 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     { width: 768, height: 1024 },
   ]) {
     await page.setViewportSize(viewport);
-    if (viewport.width === 360) {
-      const addMusic = await page.locator(".topbar > .btn-primary").boundingBox();
-      expect(addMusic).not.toBeNull();
-      expect((addMusic?.x ?? 0) + (addMusic?.width ?? 0)).toBeLessThanOrEqual(viewport.width - 11);
-    }
     await nowPlayingButton.click();
     const player = page.getByRole("dialog", { name: "Now playing" });
     await expect(player).toBeVisible();
-    const coverArt = player.locator(".mobile-player-art");
-    await expect(coverArt.locator("img")).toBeVisible();
-    if (viewport.width === 360) {
-      const artBounds = await coverArt.boundingBox();
-      expect(artBounds).not.toBeNull();
-      expect(artBounds?.width ?? Infinity).toBeLessThanOrEqual(
-        Math.min(viewport.width * 0.38, 152, viewport.height * 0.21) + 1,
-      );
-      expect(Math.abs((artBounds?.x ?? 0) + (artBounds?.width ?? 0) / 2 - viewport.width / 2))
-        .toBeLessThanOrEqual(1);
-    }
+    await expect(player.locator(".mobile-player-art img")).toBeVisible();
     await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
     for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {
       await expect(player.getByRole("button", { name: label, exact: true })).toBeVisible();

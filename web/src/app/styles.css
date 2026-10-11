@@ -1439,7 +1439,6 @@ span.artist-photo{
   .view-toggle{ flex:0 0 auto; }
   .btn-primary span{ display:none; }
   .search-wrap{ width:100%; margin-left:0; order:3; }
-  .topbar > .btn-primary{ flex:0 0 auto; margin-left:auto; }
   /* Default clearance for bottom nav; expand when the player is visible.
      body.now-playing is set in JS (reliable); :has() is a progressive fallback. */
   .content{
@@ -1634,7 +1633,7 @@ span.artist-photo{
   .artist-info, .artist-hero{ padding-inline:16px; }
   .acct-card{ align-items:flex-start; padding:16px; }
   .acct-form .btn{ width:100%; justify-content:center; }
-  .mobile-player-art{ width:min(38vw, 152px, 21dvh); margin-bottom:14px; }
+  .mobile-player-art{ width:min(44vw, 200px); margin-bottom:14px; }
   .mobile-lyrics-preview p{ font-size:16px; }
   .rail-btn[data-view][data-tip]::after{ font-size:8px; }
   .rail-btn{ max-width:none; padding:0 1px; }
