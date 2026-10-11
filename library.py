@@ -80,6 +80,7 @@ def _channel_to_artist(part: str) -> str:
 
 def _parse_filename(filename: str):
     stem = os.path.splitext(os.path.basename(filename))[0]
+    stem = re.sub(r"\s*(?:\[[A-Za-z0-9_-]{11}\]|\([A-Za-z0-9_-]{11}\))$", "", stem)
     stem = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
     parts = [part.strip() for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
     topic = len(parts) > 2 and parts[-1].lower() == "topic"
