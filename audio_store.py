@@ -179,31 +179,49 @@ def delete_quietly(path: str | None) -> None:
         log.warning("could not delete storage object %s", path, exc_info=True)
 
 
-def delete_many_quietly(paths: list[str]) -> None:
-    """Bulk best-effort delete (account deletion); never raises."""
+@_wrap_errors
+def delete_many(paths: list[str]) -> None:
+    """Delete account-owned objects, raising if Storage cannot confirm deletion."""
     paths = [p for p in paths if p]
     for i in range(0, len(paths), 100):
         chunk = paths[i : i + 100]
-        try:
-            _, _, bucket = _settings()
-            client = _client()
-            resp = client.request("DELETE", f"/object/{quote(bucket, safe='')}", json={"prefixes": chunk})
-            if resp.status_code >= 300:
-                log.warning("bulk storage delete failed (%s): %s", resp.status_code, resp.text[:200])
-        except Exception:  # noqa: BLE001
-            log.warning("bulk storage delete failed", exc_info=True)
+        _, _, bucket = _settings()
+        client = _client()
+        resp = client.request(
+            "DELETE",
+            f"/object/{quote(bucket, safe='')}",
+            json={"prefixes": chunk},
+        )
+        if resp.status_code >= 300:
+            raise StorageError(
+                f"bulk delete failed ({resp.status_code}): {resp.text[:200]}"
+            )
 
 
 @_wrap_errors
 def read_range(path: str, start: int, end: int) -> bytes:
     """Return bytes ``start..end`` (inclusive) of an object."""
-    client = _client()
-    resp = client.get(_object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"})
-    if resp.status_code == 206:
-        return resp.content
-    if resp.status_code == 200:  # server ignored Range; slice locally
-        return resp.content[start : end + 1]
-    raise StorageError(f"read failed ({resp.status_code}): {resp.text[:200]}")
+    if start < 0 or end < start:
+        raise StorageError("invalid byte range")
+    _, resp = open_range(path, start, end)
+    try:
+        remaining = end - start + 1
+        skip = start if resp.status_code == 200 else 0
+        result = bytearray()
+        for chunk in resp.iter_bytes(64 * 1024):
+            if skip:
+                skipped = min(skip, len(chunk))
+                chunk = chunk[skipped:]
+                skip -= skipped
+            if not chunk:
+                continue
+            result.extend(chunk[:remaining])
+            remaining -= min(remaining, len(chunk))
+            if remaining == 0:
+                break
+        return bytes(result)
+    finally:
+        resp.close()
 
 
 def read_all(path: str, size: int) -> bytes:

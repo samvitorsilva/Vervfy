@@ -167,26 +167,40 @@ export default function ArtistExplorer({
     const key = `${artistKey(currentArtist.name)}:${language}`;
     if (loadedProfiles[key]) return;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let activeController: AbortController | null = null;
     const query = new URLSearchParams({ name: currentArtist.name, language });
-    void apiFetch(`/api/artists/profile?${query}`)
-      .then(async (response) => {
+    const loadProfile = async (attempt: number) => {
+      activeController = new AbortController();
+      const timeout = setTimeout(() => activeController?.abort(), 8_000);
+      try {
+        const response = await apiFetch(`/api/artists/profile?${query}`, {
+          signal: activeController.signal,
+        });
         if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
-        return (await response.json()) as { profile: Record<string, unknown> | null };
-      })
-      .then(({ profile: nextProfile }) => {
+        const { profile: nextProfile } = (await response.json()) as {
+          profile: Record<string, unknown> | null;
+        };
         if (cancelled) return;
         setProfileByArtist((current) => ({ ...current, [key]: nextProfile }));
         setLoadedProfiles((current) => ({ ...current, [key]: true }));
-      })
-      .catch((error) => {
+      } catch (error) {
+        if (cancelled) return;
         console.warn("Artist profile unavailable", error);
-        if (!cancelled) {
+        if (attempt < 2) {
+          retryTimer = setTimeout(() => void loadProfile(attempt + 1), 1_000 * (attempt + 1));
+        } else {
           setProfileByArtist((current) => ({ ...current, [key]: null }));
-          setLoadedProfiles((current) => ({ ...current, [key]: true }));
         }
-      });
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+    void loadProfile(0);
     return () => {
       cancelled = true;
+      activeController?.abort();
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [currentArtist, language, loadedProfiles]);
 

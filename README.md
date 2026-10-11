@@ -84,9 +84,14 @@ Render web service and proxies browser API requests to that backend.
 
 ## Persistent data and deployment
 
-Vervfy stores accounts, bcrypt password hashes, profile photos, tracks/audio,
-cover art, custom lyrics, favorites, and playlists in PostgreSQL. Profile
-photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF. 
+PostgreSQL stores accounts, bcrypt password hashes, profile photos, track
+metadata, cover art, custom lyrics, favorites, and playlists. Legacy audio may
+remain in `tracks.audio_data`; new uploads use the private Supabase Storage
+bucket configured by `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and
+`SUPABASE_BUCKET`. Production startup fails if Storage credentials are absent.
+Use a dedicated PostgreSQL `app_runtime` role without `BYPASSRLS` for the
+application's `DATABASE_URL`; run Alembic migrations separately before deploy.
+Profile photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
 
 ---
 

@@ -51,7 +51,12 @@ class RequestThrottle:
         if redis_url:
             if redis is None:
                 raise RuntimeError("redis is required when REDIS_URL is configured")
-            self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
+            self._redis = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2.0,
+                socket_timeout=2.0,
+            )
 
     def peek(self, key: str, window_seconds: int) -> int:
         now = time.time()
@@ -331,6 +336,79 @@ class SignupThrottle:
             self._limiter.increment(f"signup:{ip}", self.WINDOW_SECONDS)
             return
         self._recent(ip).append(time.time())
+
+
+class SessionStore:
+    """Allowlist signed-cookie session IDs so logout revokes copied cookies."""
+
+    TTL_SECONDS = 60 * 60 * 24 * 30
+    KEY_PREFIX = "vervfy:session:"
+
+    def __init__(self, redis_url: str | None = None):
+        self._redis = None
+        self._sessions: dict[str, tuple[str, float]] = {}
+        self._lock = threading.Lock()
+        if redis_url:
+            if redis is None:
+                raise RuntimeError("redis is required when REDIS_URL is configured")
+            self._redis = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2.0,
+                socket_timeout=2.0,
+            )
+
+    def create(self, user_id: str) -> str:
+        session_id = secrets.token_urlsafe(32)
+        if self._redis is not None:
+            try:
+                self._redis.set(
+                    f"{self.KEY_PREFIX}{session_id}",
+                    user_id,
+                    ex=self.TTL_SECONDS,
+                )
+            except redis.RedisError as exc:
+                raise RuntimeError("session backend unavailable") from exc
+            return session_id
+
+        now = time.time()
+        with self._lock:
+            if len(self._sessions) > 10_000:
+                self._sessions = {
+                    key: value for key, value in self._sessions.items()
+                    if value[1] > now
+                }
+            self._sessions[session_id] = (user_id, now + self.TTL_SECONDS)
+        return session_id
+
+    def is_valid(self, session_id: str, user_id: str) -> bool:
+        if self._redis is not None:
+            try:
+                stored_user_id = self._redis.get(f"{self.KEY_PREFIX}{session_id}")
+            except redis.RedisError as exc:
+                raise RuntimeError("session backend unavailable") from exc
+            return stored_user_id == user_id
+
+        now = time.time()
+        with self._lock:
+            stored = self._sessions.get(session_id)
+            if stored is None:
+                return False
+            if stored[1] <= now:
+                self._sessions.pop(session_id, None)
+                return False
+            return stored[0] == user_id
+
+    def revoke(self, session_id: str) -> None:
+        if self._redis is not None:
+            try:
+                self._redis.delete(f"{self.KEY_PREFIX}{session_id}")
+            except redis.RedisError as exc:
+                raise RuntimeError("session backend unavailable") from exc
+            return
+
+        with self._lock:
+            self._sessions.pop(session_id, None)
 
 
 # ------------------------------------------------------------------------ CSRF

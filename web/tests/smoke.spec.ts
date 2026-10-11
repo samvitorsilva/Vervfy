@@ -34,7 +34,11 @@ function makeWav(): Buffer {
 }
 
 test("login page loads its CSRF token from the JSON API", async ({ page }) => {
-  await page.goto("/login");
+  const response = await page.goto("/login");
+  const csp = response?.headers()["content-security-policy"] ?? "";
+  expect(csp).toContain("script-src 'self' 'nonce-");
+  expect(csp).not.toContain("Content-Security-Policy-Report-Only");
+  expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
   await expect(page.getByLabel("Password")).toBeVisible();
@@ -630,7 +634,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await page.getByRole("button", { name: "Close lyrics" }).click();
   await page.setViewportSize({ width: 1280, height: 900 });
 
-  await page.locator('.nowbar button[title="Play/Pause"]').click();
+  await page.locator('.nowbar button[aria-label="Play"]').click();
 
   const seekBar = page.locator('.nowbar [aria-label="Track progress"]');
   const progressMotion = await page.locator(".nowbar .seek-fill, .nowbar .seek-thumb").evaluateAll(

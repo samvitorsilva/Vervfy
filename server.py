@@ -149,7 +149,9 @@ async def add_security_headers(request: Request, call_next):
             identity = request.session.get("user_id") or auth.client_ip(request)
             key = f"api:{identity}:{path if is_upload else 'mutations'}"
             try:
-                allowed = request_throttle.allow(key, limit, window)
+                allowed = await run_in_threadpool(
+                    request_throttle.allow, key, limit, window
+                )
             except RuntimeError:
                 return JSONResponse({"detail": "Rate-limit service unavailable"}, status_code=503)
             if not allowed:
@@ -160,8 +162,11 @@ async def add_security_headers(request: Request, call_next):
                 )
         elif path in {"/login", "/register"}:
             try:
-                allowed = request_throttle.allow(
-                    f"auth:{auth.client_ip(request)}:{path}", 30, 15 * 60
+                allowed = await run_in_threadpool(
+                    request_throttle.allow,
+                    f"auth:{auth.client_ip(request)}:{path}",
+                    30,
+                    15 * 60,
                 )
             except RuntimeError:
                 return JSONResponse(
@@ -203,6 +208,7 @@ user_store = auth.UserStore()
 request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
+session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
 log = logging.getLogger("vervfy")
 MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
@@ -363,6 +369,7 @@ def get_artist_image(name: str) -> str | None:
 
         image_url: str | None = None
         matched_name = display_name
+        lookup_succeeded = False
         try:
             client = _get_artist_image_http_client()
             for attempt in range(2):
@@ -377,11 +384,14 @@ def get_artist_image(name: str) -> str | None:
                         continue
                     response.raise_for_status()
                     payload = response.json()
-                    results = payload.get("data", []) if isinstance(payload, dict) else []
+                    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                        raise ValueError("invalid Deezer artist search response")
+                    results = payload["data"]
                     artist = _pick_artist_image_match(results, display_name)
                     if artist:
                         matched_name = str(artist.get("name") or display_name)[:200]
                         image_url = _deezer_portrait_url(artist)
+                    lookup_succeeded = True
                     break
                 except httpx.TimeoutException:
                     if attempt == 1:
@@ -393,8 +403,10 @@ def get_artist_image(name: str) -> str | None:
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             log.warning("Artist image lookup failed for %r: %s", display_name, exc)
 
-        _store_artist_image(normalized_name, matched_name, image_url)
-        return image_url
+        if lookup_succeeded:
+            _store_artist_image(normalized_name, matched_name, image_url)
+            return image_url
+        return cached.image_url if cached else None
     except Exception:
         log.exception("Artist image cache failed for %r", display_name)
         return cached.image_url if cached else None
@@ -1295,12 +1307,31 @@ def current_user_row(request: Request):
     user_id = request.session.get("user_id")
     if not user_id:
         return None
+    session_id = request.session.get("sid")
+    session_version = request.session.get("sv")
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or not isinstance(session_version, int)
+        or isinstance(session_version, bool)
+    ):
+        request.session.clear()
+        return None
     row = user_store.get_by_id(user_id)
     if row is None:
         return None
-    if request.session.get("sv", 0) != row["session_version"]:
+    if session_version != row["session_version"]:
         request.session.clear()
         return None
+    try:
+        if not session_store.is_valid(session_id, user_id):
+            request.session.clear()
+            return None
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable",
+        ) from exc
     return row
 
 
@@ -1338,6 +1369,10 @@ def _track_payload(track, artist_image_url: str | None = None) -> dict:
 @app.on_event("startup")
 def startup() -> None:
     if is_production:
+        if not audio_store.enabled():
+            raise RuntimeError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY are required in production"
+            )
         if "VERVFY_TRUSTED_PROXY_HOPS" not in os.environ:
             log.warning(
                 "VERVFY_TRUSTED_PROXY_HOPS is unset in production; rate limits may use the proxy IP"
@@ -1427,9 +1462,17 @@ def login_submit(
         login_throttle.clear(ip, identifier)
     except RuntimeError:
         return fail("Service temporarily unavailable, try again shortly", status_code=503)
+    try:
+        previous_session_id = request.session.get("sid")
+        if isinstance(previous_session_id, str) and previous_session_id:
+            session_store.revoke(previous_session_id)
+        session_id = session_store.create(row["id"])
+    except RuntimeError:
+        return fail("Service temporarily unavailable, try again shortly", status_code=503)
     request.session.clear()
     request.session["user_id"] = row["id"]
     request.session["sv"] = row["session_version"]
+    request.session["sid"] = session_id
     return RedirectResponse("/", status_code=303)
 
 
@@ -1472,9 +1515,14 @@ def register_submit(
     signup_throttle.record_success(ip)
     request.app.state.is_first_account = False
 
+    try:
+        session_id = session_store.create(new_user["id"])
+    except RuntimeError:
+        return fail("Service temporarily unavailable, try again shortly", status_code=503)
     request.session.clear()
     request.session["user_id"] = new_user["id"]
     request.session["sv"] = 0
+    request.session["sid"] = session_id
     return RedirectResponse("/", status_code=303)
 
 
@@ -1489,8 +1537,15 @@ def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     except HTTPException as exc:
         if exc.status_code != 403:
             raise
-    # A copied cookie stays valid after a plain logout until the password
-    # changes or logout-all is used.
+    session_id = request.session.get("sid")
+    if isinstance(session_id, str) and session_id:
+        try:
+            session_store.revoke(session_id)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Logout could not be completed; please retry",
+            ) from exc
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -1614,6 +1669,11 @@ def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearr
     try:
         audio_store.upload(staging_path, data, audio_store.guess_content_type(filename))
         with tenant_session(user_id) as session:
+            owner_id = session.scalar(
+                select(User.id).where(User.id == user_id).with_for_update()
+            )
+            if owner_id is None:
+                raise RuntimeError("account no longer exists")
             session.add(UploadJob(
                 id=job_id,
                 user_id=user_id,
@@ -1792,9 +1852,50 @@ def delete_account(
     if payload.confirmation != "DELETE":
         raise HTTPException(status_code=400, detail='Type DELETE to confirm account deletion')
     verify_current_password(user, payload.current_password)
-    storage_paths = get_library(user["id"]).storage_paths()
-    user_store.delete_user(user["id"])
-    audio_store.delete_many_quietly(storage_paths)
+    with tenant_session(user["id"]) as session:
+        owner_id = session.scalar(
+            select(User.id).where(User.id == user["id"]).with_for_update()
+        )
+        if owner_id is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        storage_paths = list(session.scalars(
+            select(TrackRecord.storage_path).where(
+                TrackRecord.user_id == user["id"],
+                TrackRecord.storage_path.is_not(None),
+            )
+        ).all())
+        storage_paths.extend(session.scalars(
+            select(UploadJob.storage_path).where(UploadJob.user_id == user["id"])
+        ).all())
+        try:
+            audio_store.delete_many(storage_paths)
+        except audio_store.StorageError as exc:
+            log.exception("could not delete account Storage objects")
+            raise HTTPException(
+                status_code=502,
+                detail="Account audio could not be deleted; please retry",
+            ) from exc
+
+        playlist_ids = select(Playlist.id).where(Playlist.user_id == user["id"])
+        session.query(PlaylistTrack).filter(
+            PlaylistTrack.playlist_id.in_(playlist_ids)
+        ).delete(synchronize_session=False)
+        session.query(Favorite).filter_by(user_id=user["id"]).delete(
+            synchronize_session=False
+        )
+        session.query(TrackRecord).filter_by(user_id=user["id"]).delete(
+            synchronize_session=False
+        )
+        session.query(UploadJob).filter_by(user_id=user["id"]).delete(
+            synchronize_session=False
+        )
+        session.query(Playlist).filter_by(user_id=user["id"]).delete(
+            synchronize_session=False
+        )
+        session.query(User).filter_by(id=user["id"]).delete(
+            synchronize_session=False
+        )
+        session.commit()
     _libraries.pop(user["id"], None)
     request.session.clear()
     request.app.state.is_first_account = user_store.count() == 0

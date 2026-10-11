@@ -11,7 +11,7 @@ from online_cover import fetch_track_metadata
 
 log = logging.getLogger(__name__)
 
-Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "25000000"))
+Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "12000000"))
 try:
     from mutagen import File as MutagenFile
     from mutagen.id3 import APIC, ID3
@@ -36,9 +36,7 @@ class AudioUnavailableError(RuntimeError):
 
 
 def track_id_for_bytes(data: BytesLike) -> str:
-    size, sample_size = len(data), 65536; digest = hashlib.sha1(str(size).encode()); digest.update(data[:sample_size])
-    if size > sample_size: digest.update(data[-sample_size:])
-    return digest.hexdigest()[:16]
+    return hashlib.sha256(data).hexdigest()
 
 def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
     seed = sum(map(ord, title)) or 1; image = Image.new("RGB", (size, size), ((seed*47)%180, 55, 90)); draw = ImageDraw.Draw(image)

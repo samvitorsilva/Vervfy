@@ -89,10 +89,16 @@ def fetch_track_metadata(
                 host = urlsplit(art_url).hostname or ""
                 if fetch_artwork and art_url.startswith("https://") and host.endswith(".mzstatic.com"):
                     try:
-                        art = client.get(art_url.replace("100x100bb", "600x600bb"))
-                        art.raise_for_status()
-                        if len(art.content) <= _MAX_COVER_BYTES:
-                            cover = Image.open(io.BytesIO(art.content)).convert("RGB")
+                        image_bytes = bytearray()
+                        with client.stream("GET", art_url.replace("100x100bb", "600x600bb")) as art:
+                            art.raise_for_status()
+                            for chunk in art.iter_bytes(64 * 1024):
+                                if len(image_bytes) + len(chunk) > _MAX_COVER_BYTES:
+                                    image_bytes.clear()
+                                    break
+                                image_bytes.extend(chunk)
+                        if image_bytes:
+                            cover = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                     except Exception:
                         log.warning(
                             "iTunes artwork download failed for %r / %r",

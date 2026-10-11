@@ -12,21 +12,6 @@ if (!["http:", "https:"].includes(backendUrl.protocol)) {
 }
 
 const backendOrigin = backendUrl.origin + backendUrl.pathname.replace(/\/+$/, "");
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https:",
-  "media-src 'self' blob:",
-  "connect-src 'self' https://lrclib.net",
-  "worker-src 'self' blob:",
-  "manifest-src 'self'",
-].join("; ");
 
 const nextConfig: NextConfig = {
   async headers() {
@@ -34,7 +19,6 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: [
-          { key: "Content-Security-Policy-Report-Only", value: contentSecurityPolicy },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "same-origin" },
