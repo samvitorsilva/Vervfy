@@ -1563,14 +1563,14 @@ span.artist-photo{
   .lyrics-player-controls .tbtn{ width:34px; height:34px; }
   .lyrics-player-controls .tbtn-play{ width:42px; height:42px; }
   .lyrics-side{
-    position:relative; flex:0 0 auto; flex-direction:row; width:100%; gap:11px; align-items:center;
-    justify-content:flex-start; padding:10px 12px; border-radius:18px;
+    position:relative; flex:0 0 auto; flex-direction:row; width:100%; gap:14px; align-items:center;
+    justify-content:flex-start; padding:12px; border-radius:24px;
     background:rgba(16,18,28,.92);
   }
-  .lyrics-art{ width:64px; height:64px; border-radius:12px; box-shadow:0 8px 24px rgba(0,0,0,.35); }
+  .lyrics-art{ width:96px; height:96px; border-radius:16px; box-shadow:0 8px 24px rgba(0,0,0,.35); }
   .lyrics-meta{ text-align:left; min-width:0; flex:1; }
-  .lyrics-meta .t{ font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .lyrics-meta .a{ font-size:12px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lyrics-meta .t{ font-size:1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lyrics-meta .a{ font-size:.85rem; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .lyrics-album,.lyrics-source{ display:none; }
   .lyrics-favorite{ position:static; width:34px; height:34px; flex:0 0 auto; }
   .lyrics-favorite svg{ width:17px; height:17px; }
@@ -1648,7 +1648,7 @@ span.artist-photo{
   .lyrics-side{ flex:0 1 min(34vw,250px); width:min(34vw,250px); padding:14px; gap:12px; }
   .lyrics-favorite{ right:28px; top:28px; }
 }
-@media (max-width:900px) and (orientation:portrait){
+@media (min-width:641px) and (max-width:900px) and (orientation:portrait){
   .lyrics-side{ gap:16px; padding:14px; }
   .lyrics-art{
     width:clamp(104px, 34vw, 190px); height:auto; flex:0 0 auto;

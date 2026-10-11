@@ -275,6 +275,12 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
   await expect(lyricsDialog).toBeVisible();
   await expect(lyricsDialog).toContainText("Second lyric line");
+  const phoneTrackCard = lyricsDialog.locator(".lyrics-side");
+  const phoneCoverArt = lyricsDialog.locator(".lyrics-art");
+  await expect.poll(() => phoneTrackCard.evaluate((element) => getComputedStyle(element).padding)).toBe("12px");
+  const phoneCoverBounds = await phoneCoverArt.boundingBox();
+  expect(phoneCoverBounds?.width).toBeCloseTo(96, 0);
+  expect(phoneCoverBounds?.height).toBeCloseTo(96, 0);
   await page.setViewportSize({ width: 768, height: 1024 });
   const trackCardBounds = await lyricsDialog.locator(".lyrics-side").boundingBox();
   const lyricsPlayerBounds = await lyricsDialog.locator(".lyrics-player").boundingBox();
