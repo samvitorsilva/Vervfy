@@ -510,7 +510,7 @@ function getMetaFromStore(): LibraryMeta {
   };
 }
 
-type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "mini" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "drag";
+type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "drag";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -526,7 +526,6 @@ function Icon({ name }: { name: IconName }) {
     shuffle: <><path d="M3 6.5h3.2l7.2 11H21M17.5 4.5 21 6.5l-3.5 2M3 17.5h3.2l3.2-4.9M17.5 19.5 21 17.5l-3.5-2"/></>,
     repeat: <><path d="m17 3.5 3.5 3.5-3.5 3.5M4 11.5V9.2a3.7 3.7 0 0 1 3.7-3.7h12.8M7 20.5 3.5 17 7 13.5M20 12.5v2.3a3.7 3.7 0 0 1-3.7 3.7H3.5"/></>,
     queue: <><path d="M4.5 7h15M4.5 12h9.5M4.5 17h9.5"/></>,
-    mini: <><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><rect x="12" y="12" width="7" height="6.5" rx="2" fill="currentColor" stroke="none"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,
     close: <><path d="m7 7 10 10M17 7 7 17"/></>,
     list: <><path d="M4.5 7h15M4.5 12h15M4.5 17h15"/></>,
@@ -615,7 +614,6 @@ export default function LibraryApp() {
   } | null>(null);
   const [playlistName, setPlaylistName] = useState("");
   const [playlistPicker, setPlaylistPicker] = useState<string | null>(null);
-  const [miniMode, setMiniMode] = useState(false);
   const [expandedPlayerOpen, setExpandedPlayerOpen] = useState(false);
   const [playingFromView, setPlayingFromView] = useState<LibraryView | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -1436,10 +1434,6 @@ export default function LibraryApp() {
         case "F":
           toggleCurrentFavorite();
           break;
-        case "n":
-        case "N":
-          setMiniMode((current) => !current);
-          break;
         case "l":
         case "L":
           setLyricsOpen((current) => !current);
@@ -1629,11 +1623,6 @@ export default function LibraryApp() {
       audioElement.removeEventListener("error", onError);
     };
   }, [audioElement, handleAudioError, setPlaying]);
-
-  useEffect(() => {
-    document.body.classList.toggle("mini-mode", miniMode);
-    return () => document.body.classList.remove("mini-mode");
-  }, [miniMode]);
 
   useEffect(() => {
     const audio = usePlayerStore.getState().audioElement;
@@ -2696,7 +2685,6 @@ export default function LibraryApp() {
           <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title={t("Lyrics (L)")} aria-label={t("Lyrics")} aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
           <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title={t("Visualizer (V)")} aria-label={t("Visualizer")} aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
           <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title={t("Queue")} aria-label={t("Queue")} aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
-          <button className={`icon-btn player-control-mini${miniMode ? " on" : ""}`} type="button" title={t("Mini player")} aria-label={t("Mini player")} aria-pressed={miniMode} onClick={() => setMiniMode(!miniMode)}><Icon name="mini" /></button>
           <button className={`icon-btn player-control-mute${muted ? " on" : ""}`} type="button" title={muted ? "Unmute" : "Mute"} aria-label={muted ? "Unmute" : "Mute"} aria-pressed={muted} onClick={() => {
           const audio = usePlayerStore.getState().audioElement;
           if (!audio) return;
@@ -2736,27 +2724,9 @@ export default function LibraryApp() {
       {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
         <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
           <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
-          <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>N</kbd><span>{t("Mini player")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
+          <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
       </div> : null}
-
-      <div className={`mini-player${miniMode ? " open" : ""}`}>
-        <div className="mini-drag" />
-        <button className="mini-exit" type="button" aria-label={t("Close mini player")} onClick={() => setMiniMode(false)}><Icon name="close" /></button>
-        <div className="mini-body">
-          <div className="mini-art-wrap"><div className="mini-art"><img src={currentTrack?.coverUrl ?? FALLBACK_ART} alt="" /></div></div>
-          <div className="mini-meta"><div className="mini-title">{currentTrack?.title ?? t("Nothing playing")}</div><div className="mini-artist">{currentTrack?.artist ?? t("Pick a track")}</div></div>
-          <PlaybackSeek
-            audioElement={audioElement}
-            duration={duration}
-            onSeek={seekTo}
-            onResume={togglePlayback}
-            variant="player"
-            className="mini-seek"
-          />
-          <div className="mini-btns"><button className="tbtn" type="button" aria-label={t("Previous track")} onClick={playPrevious}><Icon name="prev" /></button><button className="tbtn tbtn-play" type="button" aria-label={t("Play or pause")} onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button><button className="tbtn" type="button" aria-label={t("Next track")} onClick={() => playNext(false)}><Icon name="next" /></button></div>
-        </div>
-      </div>
 
       <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
         <div className="side-head"><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>

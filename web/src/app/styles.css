@@ -182,9 +182,11 @@ input{ background:none; border:none; }
 .search-wrap input{ flex:1; font-size:13.5px; color:var(--text); font-weight:500; }
 .search-wrap input::placeholder{ color:var(--text-dim); font-weight:400; }
 .kbd{
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width:20px; height:20px; flex:0 0 auto; line-height:1; padding:0;
   font-family:var(--font-mono); font-size:10px; color:var(--text-dim);
   background:rgba(255,255,255,0.06); border:1px solid var(--border);
-  padding:2px 6px; border-radius:6px;
+  border-radius:6px;
 }
 
 .btn{
@@ -310,7 +312,7 @@ input{ background:none; border:none; }
 .card-fav svg, .card-queue svg, .card-menu svg{ width:13px; height:13px; }
 .card-fav.on{ color:var(--amber); }
 
-/* list — bottom padding clears the fixed nowbar / mini-player */
+/* list — bottom padding clears the fixed nowbar */
 .list{ display:flex; flex-direction:column; padding-bottom:var(--player-height); }
 .list-head{
   display:grid; grid-template-columns:36px minmax(0, 2fr) minmax(0, 1.2fr) 60px 96px; gap:14px; padding:8px 14px;
@@ -859,43 +861,6 @@ span.artist-photo{
 /* expanded player for touch screens */
 .mobile-player{ display:none; }
 
-/* floating mini player — keeps the library visible underneath, like a desktop
-   player window. It intentionally stays inside the app viewport; browsers
-   cannot place regular web content above unrelated operating-system apps. */
-body.mini-mode .nowbar{ display:none !important; }
-.mini-player{
-  display:none; position:fixed; z-index:75; width:min(320px, calc(100vw - 24px)); border-radius:24px; overflow:hidden;
-  background:#161822;
-  border:1px solid rgba(255,255,255,0.14);
-  box-shadow:var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,0.12);
-}
-body.mini-mode .mini-player{ display:block; }
-.mini-drag{ height:26px; display:flex; align-items:center; justify-content:center; cursor:grab; }
-.mini-drag::before{ content:''; width:36px; height:4px; border-radius:99px; background:rgba(255,255,255,0.18); }
-.mini-drag:active{ cursor:grabbing; }
-.mini-body{ padding:0 20px 20px; display:flex; flex-direction:column; align-items:center; gap:14px; }
-.mini-art-wrap{ position:relative; width:150px; height:150px; }
-.mini-art{
-  position:relative; width:150px; height:150px; border-radius:22px; overflow:hidden;
-  box-shadow:0 14px 36px rgba(0,0,0,.45);
-}
-.mini-art img{ width:100%; height:100%; object-fit:cover; }
-.mini-meta{ text-align:center; }
-.mini-title{ font-size:15px; font-weight:700; letter-spacing:-0.01em; }
-.mini-artist{ font-size:12.5px; color:var(--text-dim); margin-top:3px; }
-.mini-seek{ width:100%; }
-.mini-btns{ display:flex; align-items:center; gap:10px; }
-.mini-exit{
-  position:absolute; top:10px; right:10px; width:26px; height:26px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center; color:var(--text-dim);
-}
-.mini-exit:hover{ color:var(--text); background:var(--surface-control); }
-.mini-exit svg{ width:12px; height:12px; }
-@media (max-width:640px){
-  .mini-player{ width:min(300px, calc(100vw - 20px)); border-radius:20px; }
-  .mini-body{ padding:0 16px 16px; gap:11px; }
-  .mini-art-wrap, .mini-art{ width:124px; height:124px; }
-}
 /* queue panel — edge-to-edge glass */
 .side-panel{
   position:fixed; top:0; right:0; bottom:0; width:340px; z-index:35; padding-bottom:108px;
@@ -1423,7 +1388,7 @@ body.mini-mode .mini-player{ display:block; }
     --safe-bottom:env(safe-area-inset-bottom, 0px);
     --rail-inset:10px;
     --mobile-rail-clear:calc(var(--rail-h) + var(--rail-inset) + var(--safe-bottom) + 16px);
-    /* Full stack: dock + gap + mini-player + safe area + breathing room */
+    /* Dock, player gap, safe area, and breathing room. */
     --mobile-player-clear:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--player-height) + var(--safe-bottom) + 16px);
   }
   body{ overflow:hidden; }
@@ -1515,7 +1480,7 @@ body.mini-mode .mini-player{ display:block; }
   .artist-card.list-mode{ grid-template-columns:minmax(0,1fr) auto; padding:8px 10px; }
   .artist-card.list-mode .artist-card-photo{ width:48px; height:48px; }
   /* Keep --player-height padding from base .list; content expands further
-     via body.now-playing so the last row clears the elevated mini-player. */
+     via body.now-playing so the last row clears the player. */
   .list{ overflow-x:hidden; margin-inline:0; padding-inline:0; }
   .list-head{ display:none; }
   .row{
@@ -1565,7 +1530,7 @@ body.mini-mode .mini-player{ display:block; }
   .time{ width:32px; font-size:10px; }
   .now-extra{ flex:0 0 auto; gap:0; width:auto; }
   .now-artist{ display:none; }
-  /* Keep lyrics, queue, and mute reachable; hide viz/mini to save width.
+  /* Keep lyrics, queue, and mute reachable; hide viz to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
@@ -1682,6 +1647,15 @@ body.mini-mode .mini-player{ display:block; }
   }
   .lyrics-side{ flex:0 1 min(34vw,250px); width:min(34vw,250px); padding:14px; gap:12px; }
   .lyrics-favorite{ right:28px; top:28px; }
+}
+@media (max-width:900px) and (orientation:portrait){
+  .lyrics-side{ gap:16px; padding:14px; }
+  .lyrics-art{
+    width:clamp(104px, 34vw, 190px); height:auto; flex:0 0 auto;
+    border-radius:16px;
+  }
+  .lyrics-meta .t{ font-size:clamp(15px, 2.2vw, 19px); }
+  .lyrics-meta .a{ font-size:13px; }
 }
 @media (max-width:900px){
   .viz-overlay{

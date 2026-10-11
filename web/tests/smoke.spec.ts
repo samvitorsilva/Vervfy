@@ -50,7 +50,7 @@ test("Brazilian Portuguese is detected and the language choice persists", async 
   });
   await page.goto("/login");
 
-  await expect(page.getByRole("heading", { name: "Bem-vindo de volta" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Que bom ter você de volta!" })).toBeVisible();
   await expect(page.getByLabel("Nome de usuário")).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "pt-BR");
 

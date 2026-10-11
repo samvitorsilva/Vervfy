@@ -67,7 +67,7 @@ export default function ArtistExplorer({
   onPlay: (tracks: TrackRecord[], startTrackId?: string) => void;
   renderTrack: (track: TrackRecord, index: number, playList: TrackRecord[]) => ReactNode;
 }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
   const [photoByArtist, setPhotoByArtist] = useState<Record<string, ArtistPhotoData>>({});
@@ -164,10 +164,10 @@ export default function ArtistExplorer({
 
   useEffect(() => {
     if (!currentArtist) return;
-    const key = artistKey(currentArtist.name);
+    const key = `${artistKey(currentArtist.name)}:${language}`;
     if (loadedProfiles[key]) return;
     let cancelled = false;
-    const query = new URLSearchParams({ name: currentArtist.name });
+    const query = new URLSearchParams({ name: currentArtist.name, language });
     void apiFetch(`/api/artists/profile?${query}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
@@ -188,7 +188,7 @@ export default function ArtistExplorer({
     return () => {
       cancelled = true;
     };
-  }, [currentArtist, loadedProfiles]);
+  }, [currentArtist, language, loadedProfiles]);
 
   if (view === "artists") {
     if (tracks.length === 0) {
@@ -214,7 +214,7 @@ export default function ArtistExplorer({
               <button
                 className="artist-card-open"
                 type="button"
-                aria-label={`Open ${artist.name} page`}
+                aria-label={`${t("Open artist page")}: ${artist.name}`}
                 onClick={() => setView(`artist:${encodeURIComponent(artist.name)}`)}
               >
                 {src ? (
@@ -240,7 +240,9 @@ export default function ArtistExplorer({
                   <span className={`artist-card-photo${artistPhoto ? " artist-card-photo-empty" : " artist-card-photo-loading"}`} aria-hidden="true">{artist.name.charAt(0).toLocaleUpperCase()}</span>
                 )}
                 <span className="artist-card-name">{artist.name}</span>
-                <span className="artist-card-count">{artist.tracks.length} song{artist.tracks.length === 1 ? "" : "s"}</span>
+                <span className="artist-card-count">
+                  {artist.tracks.length} {t(artist.tracks.length === 1 ? "song" : "songs")}
+                </span>
               </button>
               <button
                 className="artist-card-play"
@@ -264,8 +266,9 @@ export default function ArtistExplorer({
   }
 
   const currentArtistKey = artistKey(currentArtist.name);
-  const loading = !loadedProfiles[currentArtistKey];
-  const activeProfile = loading ? null : profileByArtist[currentArtistKey];
+  const currentProfileKey = `${currentArtistKey}:${language}`;
+  const loading = !loadedProfiles[currentProfileKey];
+  const activeProfile = loading ? null : profileByArtist[currentProfileKey];
   const currentArtistPhoto = photoByArtist[currentArtistKey];
   const heroSrc = currentArtistPhoto?.picture;
   const facts = ([
@@ -281,7 +284,9 @@ export default function ArtistExplorer({
   );
   const sourceUrl = safeExternalUrl(activeProfile?.source_url);
   const websiteUrl = safeExternalUrl(activeProfile?.website);
-  const websiteLabel = String(activeProfile?.website_label ?? "Official website");
+  const websiteLabel = t(String(activeProfile?.website_label ?? "Official website"));
+  const songLabel = t(currentArtist.tracks.length === 1 ? "song" : "songs");
+  const albumLabel = t(currentArtist.albums.size === 1 ? "album" : "albums");
 
   return (
     <div className="artist-page">
@@ -312,7 +317,9 @@ export default function ArtistExplorer({
         <div className="artist-hero-meta">
           <div className="artist-kicker">{t("Artist")}</div>
           <h1 className="artist-name">{currentArtist.name}</h1>
-          <div className="artist-sub">{currentArtist.tracks.length} song{currentArtist.tracks.length === 1 ? "" : "s"} in your library · {currentArtist.albums.size} album{currentArtist.albums.size === 1 ? "" : "s"}</div>
+          <div className="artist-sub">
+            {currentArtist.tracks.length} {songLabel} {t("in your library")} · {currentArtist.albums.size} {albumLabel}
+          </div>
           <button
             className="btn btn-primary artist-hero-play"
             type="button"
@@ -335,7 +342,7 @@ export default function ArtistExplorer({
         <p className="artist-bio">{loading ? t("Looking up artist details…") : String(activeProfile?.bio ?? t("No verified artist information is available yet."))}</p>
         {facts.length ? <div className="artist-tags">{facts.map(([label, value]) => <span className="artist-tag" key={label}>{label}: {String(value)}</span>)}</div> : null}
         {websiteUrl ? <a className="artist-website" href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteLabel} ↗</a> : null}
-        {sourceUrl ? <><p className="artist-source">{t("Source")}: {String(activeProfile?.source ?? t("Verified artist information"))}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("Source page ↗")}</a></> : null}
+        {sourceUrl ? <><p className="artist-source">{t("Source")}: {t(String(activeProfile?.source ?? t("Verified artist information")))}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("Source page ↗")}</a></> : null}
       </section>
       {artistTracks.length ? (
         listMode === "grid" ? (

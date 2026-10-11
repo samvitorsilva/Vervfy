@@ -19,7 +19,7 @@ import threading
 import time
 import unicodedata
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote, urlsplit
 from pathlib import Path
 
@@ -800,15 +800,121 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
 }
 
 
-def _verified_artist_profile(name: str) -> dict[str, str] | None:
+_VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
+    "tatemcrae": {
+        "bio": "A canadense Tate McRae é cantora, compositora e dançarina. Ela ficou conhecida primeiro pela dança e, depois, construiu carreira na música.",
+        "genre": "Pop",
+    },
+    "morada": {
+        "bio": "A banda MORADA, de Fernandópolis (SP), foi formada em 2009 e faz música cristã contemporânea.",
+        "genre": "Música cristã contemporânea",
+        "source": "Biografia do MORADA",
+    },
+    "marcosnui": {
+        "bio": "Marcos Nui é o artista por trás do single “Mi Tiempo”, lançado em 2024, e de outras músicas em espanhol.",
+        "source": "Perfil de artista de Marcos Nui",
+    },
+    "tommybueno": {
+        "bio": "Tommy Bueno é um artista de Buenos Aires. Entre seus lançamentos estão “Visionario” e “Atmósfera”.",
+        "source": "Página oficial de Tommy Bueno",
+    },
+    "visionofleo": {
+        "bio": "Vision of Leo é um artista pop. Em 2023, lançou o álbum “Legacy of Faith” pelo selo Vision of Leo Records.",
+    },
+    "obros": {
+        "bio": "A dupla alemã O'Bros é de Munique e mistura hip-hop com temas de fé cristã em suas músicas.",
+        "genre": "Hip-hop cristão",
+        "highlights": "Dupla de Munique que mistura hip-hop e fé cristã.",
+    },
+    "kallysmashupcast": {
+        "bio": "KALLY'S Mashup Cast é o grupo responsável pelas músicas da série de TV “KALLY'S Mashup”, da Nickelodeon.",
+    },
+    "viclucas": {
+        "bio": "Vic Lucas é um artista de afrobeat que mistura influências da Nigéria, da África do Sul e dos Estados Unidos. Fé e gratidão também estão no centro de sua música.",
+    },
+    "kaimalachi": {
+        "bio": "Kai Malachi é um projeto de gospel com sonoridade cinematográfica, soul e R&B alternativo, criado, produzido e dirigido por Tim Vishnevskiy.",
+        "genre": "Gospel cinematográfico, soul e R&B alternativo",
+    },
+    "ajvitanza": {
+        "bio": "AJ Vitanza é um artista pop. Seu EP de estreia, “Plastic Heart”, tem nove faixas.",
+    },
+    "mielsanmarcos": {
+        "bio": "Miel San Marcos é uma banda cristã guatemalteca, formada em 2000 pelos irmãos Josh, Luis e Samy Morales.",
+        "genre": "Música cristã contemporânea",
+    },
+    "braydentabakian": {
+        "bio": "Brayden Tabakian é cantor e baterista do estado do Missouri, nos Estados Unidos. Seu repertório também inclui música cristã.",
+        "genre": "Pop e música cristã",
+    },
+    "josephobrien": {
+        "bio": "Joseph O'Brien é um cantor e compositor de Nashville e faz parte do selo Gotee Records. Sua música busca inspirar a fé de quem ouve.",
+        "genre": "Música cristã",
+        "highlights": "Cantor e compositor de Nashville, integrante do selo Gotee Records.",
+    },
+    "stringsheart": {
+        "bio": "Strings & Heart é uma banda cristã independente formada por três irmãos: Angelo, Michael e Eric Espinosa.",
+        "genre": "Indie cristão",
+        "highlights": "Banda formada pelos irmãos Angelo, Michael e Eric Espinosa.",
+    },
+    "gio": {
+        "bio": "gio. é um artista de pop cristão e hip-hop da região de Boston. Influenciado pelo gospel e pela poesia desde cedo, ele busca trazer uma abordagem moderna e criativa à música cristã.",
+        "genre": "Pop cristão e hip-hop",
+    },
+    "kodoku": {
+        "bio": "Kodoku é o artista por trás de lançamentos como “Rose Bath”, “DEVOTED”, com Sam Rivera, e “WATERWALKIN”, com participação de Hulvey.",
+    },
+    "ruayoung": {
+        "bio": "RUA YOUNG é um artista cristão. Entre seus lançamentos estão “God Did”, “Say The Word”, “I’M GOD’S” e “ADONAI”.",
+        "genre": "Música cristã",
+    },
+    "thekidszn": {
+        "bio": "Thekidszn é um artista de hip-hop e rap. Seu catálogo no Deezer inclui “SZN” (2025) e “Elevated” (2024).",
+        "genre": "Hip-hop e rap",
+    },
+    "thekidlaroi": {
+        "bio": "The Kid LAROI (Charlton Howard) é um cantor, rapper e compositor australiano. Seu single “Stay” fez sucesso no mundo todo.",
+        "genre": "Pop e hip-hop",
+    },
+    "shawnmendes": {
+        "bio": "Shawn Mendes é um cantor e compositor canadense. Ele conquistou seu público compartilhando versões de músicas na internet, antes de lançar seu primeiro EP em 2014.",
+        "genre": "Pop",
+    },
+    "maroon5": {
+        "bio": "Maroon 5 é uma banda americana de pop rock formada em Los Angeles. Antes de adotar esse nome e fazer sucesso com “Songs About Jane”, o grupo se chamava Kara’s Flowers.",
+        "genre": "Pop rock",
+    },
+    "theneighborhood": {
+        "bio": "The Neighbourhood é uma banda americana de rock alternativo, formada na Califórnia em 2011. Entre suas músicas mais conhecidas estão “Sweater Weather” e “Daddy Issues”.",
+        "genre": "Rock alternativo",
+    },
+    "theneighbourhood": {
+        "bio": "The Neighbourhood é uma banda americana de rock alternativo, formada na Califórnia em 2011. Entre suas músicas mais conhecidas estão “Sweater Weather” e “Daddy Issues”.",
+        "genre": "Rock alternativo",
+    },
+}
+
+
+def _verified_artist_profile(
+    name: str, language: Literal["en", "pt-BR"] = "en"
+) -> dict[str, str] | None:
     """Return an identity-checked profile for an artist credit, if available."""
     for candidate in _artist_name_candidates(name):
         key = _artist_search_key(candidate)
+        profile_key = key
         profile = _VERIFIED_ARTIST_PROFILES.get(key)
         if profile is None and key == "kidszn":
-            profile = _VERIFIED_ARTIST_PROFILES["thekidszn"]
+            profile_key = "thekidszn"
+            profile = _VERIFIED_ARTIST_PROFILES[profile_key]
+        if profile is None and key == "stringsandheart":
+            profile_key = "stringsheart"
+            profile = _VERIFIED_ARTIST_PROFILES[profile_key]
         if profile:
             result = profile.copy()
+            if language == "pt-BR":
+                result.update(_VERIFIED_ARTIST_PROFILES_PT.get(profile_key, {}))
+                if result.get("source") == "Wikipedia":
+                    result["source"] = "Wikipédia"
             if candidate != name.strip():
                 result["lookup_name"] = candidate
             return result
@@ -1037,6 +1143,13 @@ _MUSIC_PERSON_HINT = re.compile(
     r"r&b|rhythm\s+and\s+blues|pop\s+stars?|rock\s+bands?)\b",
     re.I,
 )
+_MUSIC_PERSON_HINT_PT = re.compile(
+    r"\b(?:m[uú]sic[oa]s?|cantor(?:a|as|es)?|compositor(?:a|as|es)?|"
+    r"rapper(?:s)?|banda(?:s)?|grupo(?:s)?|vocalista(?:s)?|"
+    r"produtor(?:a|es)?|artista(?:s)?|pop|rock|hip[\s-]?hop|"
+    r"gospel|afrobeat|cantautores?)\b",
+    re.I,
+)
 
 
 def _wiki_title_matches(title: str, name: str) -> bool:
@@ -1051,21 +1164,24 @@ def _first_sentences(value: object, limit: int = 3) -> str:
     return " ".join(re.split(r"(?<=[.!?])\s+", text)[:limit])
 
 
-def _wikipedia_summary_to_profile(summary: dict, name: str) -> dict[str, str] | None:
+def _wikipedia_summary_to_profile(
+    summary: dict, name: str, language: Literal["en", "pt-BR"] = "en"
+) -> dict[str, str] | None:
     if summary.get("type") != "standard":
         return None
     if not _wiki_title_matches(str(summary.get("title", "")), name):
         return None
     description = str(summary.get("description", ""))
     extract = str(summary.get("extract", ""))
-    if not _MUSIC_PERSON_HINT.search(f"{description} {extract}"):
+    music_hint = _MUSIC_PERSON_HINT_PT if language == "pt-BR" else _MUSIC_PERSON_HINT
+    if not music_hint.search(f"{description} {extract}"):
         return None
     bio = _first_sentences(extract)
     if not bio:
         return None
     return {
         "bio": bio,
-        "source": "Wikipedia",
+        "source": "Wikipédia" if language == "pt-BR" else "Wikipedia",
         "source_url": (
             summary.get("content_urls", {})
             .get("desktop", {})
@@ -1074,14 +1190,20 @@ def _wikipedia_summary_to_profile(summary: dict, name: str) -> dict[str, str] | 
     }
 
 
-def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str, str] | None:
+def _fetch_wikipedia_artist_profile(
+    client: httpx.Client,
+    name: str,
+    language: Literal["en", "pt-BR"] = "en",
+) -> dict[str, str] | None:
     """Direct summary first, then a title-constrained Wikipedia search."""
+    wiki_language = "pt" if language == "pt-BR" else "en"
+    wiki_root = f"https://{wiki_language}.wikipedia.org"
     try:
         response = client.get(
-            f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(name, safe='')}"
+            f"{wiki_root}/api/rest_v1/page/summary/{quote(name, safe='')}"
         )
         if response.status_code == 200:
-            profile = _wikipedia_summary_to_profile(response.json(), name)
+            profile = _wikipedia_summary_to_profile(response.json(), name, language)
             if profile:
                 return profile
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
@@ -1089,7 +1211,7 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
 
     try:
         search = client.get(
-            "https://en.wikipedia.org/w/api.php",
+            f"{wiki_root}/w/api.php",
             params={
                 "action": "query",
                 "list": "search",
@@ -1110,10 +1232,10 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
             continue
         try:
             response = client.get(
-                f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title, safe='')}"
+                f"{wiki_root}/api/rest_v1/page/summary/{quote(title, safe='')}"
             )
             response.raise_for_status()
-            profile = _wikipedia_summary_to_profile(response.json(), name)
+            profile = _wikipedia_summary_to_profile(response.json(), name, language)
             if profile:
                 return profile
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
@@ -1121,17 +1243,20 @@ def _fetch_wikipedia_artist_profile(client: httpx.Client, name: str) -> dict[str
     return None
 
 
-def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | None:
-    """Return verified Wikipedia biography and Deezer audience information."""
-    manual = _verified_artist_profile(name)
+def _lookup_artist_profile(
+    name: str, titles: list[str], language: Literal["en", "pt-BR"] = "en"
+) -> dict[str, str] | None:
+    """Return localized verified biography and Deezer audience information."""
+    manual = _verified_artist_profile(name, language)
     if manual:
         return manual
     artist = _verified_deezer_artist(name, titles)
     if not artist:
         return None
-    key = _artist_search_key(name)
-    if not key:
+    artist_key = _artist_search_key(name)
+    if not artist_key:
         return None
+    key = f"{language}:{artist_key}"
     now = time.monotonic()
     cached = _artist_profile_cache.get(key)
     if cached and cached[0] > now:
@@ -1144,7 +1269,7 @@ def _lookup_artist_profile(name: str, titles: list[str]) -> dict[str, str] | Non
                 headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
                 follow_redirects=True,
             ) as client:
-                profile = _fetch_wikipedia_artist_profile(client, name) or {}
+                profile = _fetch_wikipedia_artist_profile(client, name, language) or {}
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             log.warning("Wikipedia artist lookup failed for %r: %s", name, exc)
         _cache_artist_result(
@@ -1959,12 +2084,13 @@ def list_artist_images(
 @app.get("/api/artists/profile")
 def artist_profile(
     name: str = Query(min_length=1, max_length=200),
+    language: Literal["en", "pt-BR"] = "en",
     user=Depends(require_api_user),
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
     _throttle_artist_lookup(user["id"])
     own = _library_titles_for_artist(user["id"], name.strip())
-    return {"profile": _lookup_artist_profile(name.strip(), own)}
+    return {"profile": _lookup_artist_profile(name.strip(), own, language)}
 
 
 @app.get("/api/tracks")
