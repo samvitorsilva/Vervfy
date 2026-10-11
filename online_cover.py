@@ -52,6 +52,7 @@ def fetch_track_metadata(
         flags=re.I,
     )
     title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
+    title = re.sub(r"\s*[\[(][^)\]]*&[^)\]]*[)\]]", "", title).strip()
     artist = _lead_credit(artist)
     want_title, want_artist = _squash(title), _squash(artist)
     if not want_title or not want_artist:

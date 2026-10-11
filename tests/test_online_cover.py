@@ -11,6 +11,36 @@ import online_cover
 
 
 class FetchCoverTests(unittest.TestCase):
+    def test_lookup_removes_parenthetical_credit_from_title(self) -> None:
+        def respond(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(
+                request.url.params["term"],
+                "Elevation Worship New Thing Coming",
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "trackName": "New Thing Coming",
+                            "artistName": "Elevation Worship",
+                            "collectionName": "When Wind Meets Fire",
+                        }
+                    ]
+                },
+            )
+
+        with patch.object(online_cover, "_transport", httpx.MockTransport(respond)):
+            metadata = online_cover.fetch_track_metadata(
+                "New Thing Coming (Tiffany Hudson & Steven Furtick)",
+                "Elevation Worship",
+                fetch_artwork=False,
+            )
+
+        self.assertIsNotNone(metadata)
+        assert metadata is not None
+        self.assertEqual(metadata.album, "When Wind Meets Fire")
+
     def test_lookup_uses_lead_credit_and_removes_feature_title_suffix(self) -> None:
         def respond(request: httpx.Request) -> httpx.Response:
             if request.url.host != "itunes.apple.com":

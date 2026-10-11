@@ -68,6 +68,7 @@ def _strip_noise(text: str) -> str:
 
 def _clean_title(title: str) -> str:
     title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
+    title = re.sub(r"\s*[\[(][^)\]]*&[^)\]]*[)\]]", "", title).strip()
     return _strip_noise(title) or title
 
 
@@ -87,6 +88,10 @@ def _parse_filename(filename: str):
     stem = os.path.splitext(os.path.basename(filename))[0]
     stem = re.sub(r"\s*(?:\[[A-Za-z0-9_-]{11}\]|\([A-Za-z0-9_-]{11}\))$", "", stem)
     stem = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
+    if re.search(r"[|｜]", stem):
+        title, artist = (part.strip() for part in re.split(r"\s*[|｜]\s*", stem, maxsplit=1))
+        if title and artist:
+            return _clean_title(title), artist
     parts = [part.strip() for part in re.split(r"\s[-–—]\s", stem) if part.strip()]
     topic = len(parts) > 2 and parts[-1].lower() == "topic"
     if topic:

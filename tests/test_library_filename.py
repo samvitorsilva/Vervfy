@@ -33,6 +33,15 @@ class ParseFilenameTests(unittest.TestCase):
             ("Let The Church Sing", "Tauren Wells, gio."),
         )
 
+    def test_parses_full_width_pipe_artist_suffix_and_removes_credit(self) -> None:
+        self.assertEqual(
+            _parse_filename(
+                "New Thing Coming (Tiffany Hudson & Steven Furtick) "
+                "｜ Elevation Worship [JRRbGCyr2Ac].mp3"
+            ),
+            ("New Thing Coming", "Elevation Worship"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

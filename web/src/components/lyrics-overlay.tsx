@@ -193,6 +193,7 @@ function cleanTitle(value: string): string {
   return value
     .replace(/\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?|with)\s+[^\])]*[\])]/gi, "")
     .replace(/\s+(?:feat(?:uring)?\.?|ft\.?|with)\s+.+$/gi, "")
+    .replace(/\s*[\[(][^\])]*&[^\])]*[\])]/g, "")
     .replace(/\s*[\[(]\s*(?:official\s+)?(?:lyric\s+)?(?:music\s+)?(?:video|audio)\s*[\])]/gi, "")
     .trim();
 }
