@@ -24,6 +24,15 @@ class ParseFilenameTests(unittest.TestCase):
             ("Song", "Artist"),
         )
 
+    def test_strips_feature_credit_after_youtube_video_label(self) -> None:
+        self.assertEqual(
+            _parse_filename(
+                "Tauren Wells, gio. - Let The Church Sing "
+                "(Official Lyric Video) ft. ELEVATION RHYTHM [3oVhViT8-wY].mp3"
+            ),
+            ("Let The Church Sing", "Tauren Wells, gio."),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

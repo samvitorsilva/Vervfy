@@ -193,7 +193,7 @@ function cleanTitle(value: string): string {
   return value
     .replace(/\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?|with)\s+[^\])]*[\])]/gi, "")
     .replace(/\s+(?:feat(?:uring)?\.?|ft\.?|with)\s+.+$/gi, "")
-    .replace(/\s*[\[(]\s*(?:explicit|clean|deluxe|bonus|radio\s+edit|live|remaster(?:ed)?)\s*[\])]/gi, "")
+    .replace(/\s*[\[(]\s*(?:official\s+)?(?:lyric\s+)?(?:music\s+)?(?:video|audio)\s*[\])]/gi, "")
     .trim();
 }
 
@@ -253,8 +253,6 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
   const titleKey = normalized(title);
   const artistKey = normalized(leadArtist);
   const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
-  // Wider window, used only to find a *timed* copy when the close matches have plain text only.
-  const syncedFallbackTolerance = Math.min(20, Math.max(10, track.duration * 0.08));
 
   const sameSong = (entry: LrclibEntry) =>
     normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
@@ -288,7 +286,6 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     const usable = pool.filter((entry) => entry.instrumental !== true);
     return (
       closest(usable.filter((entry) => hasSynced(entry) && within(entry, durationTolerance))) ??
-      closest(usable.filter((entry) => hasSynced(entry) && within(entry, syncedFallbackTolerance))) ??
       closest(usable.filter((entry) => hasPlain(entry) && within(entry, durationTolerance)))
     );
   };

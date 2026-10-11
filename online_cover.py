@@ -32,6 +32,10 @@ def _squash(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
+def _lead_credit(text: str) -> str:
+    return re.split(r"[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b", text, maxsplit=1, flags=re.I)[0].strip()
+
+
 def fetch_track_metadata(
     title: str,
     artist: str,
@@ -41,6 +45,14 @@ def fetch_track_metadata(
     """Return best-effort iTunes album, duration, and cover information."""
     if not title or not artist or artist.strip().lower() == "unknown artist":
         return None
+    title = re.sub(
+        r"\s*[\[(](?:official\s+)?(?:lyric\s+)?(?:music\s+)?(?:video|audio)[)\]]",
+        "",
+        title,
+        flags=re.I,
+    )
+    title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
+    artist = _lead_credit(artist)
     want_title, want_artist = _squash(title), _squash(artist)
     if not want_title or not want_artist:
         return None

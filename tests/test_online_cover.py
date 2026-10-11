@@ -11,6 +11,39 @@ import online_cover
 
 
 class FetchCoverTests(unittest.TestCase):
+    def test_lookup_uses_lead_credit_and_removes_feature_title_suffix(self) -> None:
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.host != "itunes.apple.com":
+                self.fail("No artwork request should be made")
+            self.assertEqual(
+                request.url.params["term"],
+                "Tauren Wells Let The Church Sing",
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "trackName": "Let The Church Sing",
+                            "artistName": "Tauren Wells",
+                            "collectionName": "Citizen of Heaven",
+                            "trackTimeMillis": 200000,
+                        }
+                    ]
+                },
+            )
+
+        with patch.object(online_cover, "_transport", httpx.MockTransport(respond)):
+            metadata = online_cover.fetch_track_metadata(
+                "Let The Church Sing (Official Lyric Video) ft. ELEVATION RHYTHM",
+                "Tauren Wells, gio.",
+                fetch_artwork=False,
+            )
+
+        self.assertIsNotNone(metadata)
+        assert metadata is not None
+        self.assertEqual(metadata.album, "Citizen of Heaven")
+
     def test_fetch_cover_with_mock_transport(self) -> None:
         image_buffer = io.BytesIO()
         Image.new("RGB", (1, 1), color="blue").save(image_buffer, format="PNG")

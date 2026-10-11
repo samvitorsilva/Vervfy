@@ -66,6 +66,11 @@ def _strip_noise(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[(\[]([^)\]]*)[)\]]", repl, text)).strip()
 
 
+def _clean_title(title: str) -> str:
+    title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
+    return _strip_noise(title) or title
+
+
 def _is_channel(part: str) -> bool:
     return bool(re.search(r"vevo", part, re.I))
 
@@ -99,7 +104,7 @@ def _parse_filename(filename: str):
         if len(rest) > 1 and (_is_channel(rest[-1]) or _squash(rest[-1]) == _squash(artist)):
             rest = rest[:-1]
         title = " - ".join(rest)
-    return (_strip_noise(title) or title), artist
+    return _clean_title(title), artist
 
 def _tag_text(value, fallback: str, *, join_values: bool = False) -> str:
     if value is None:
@@ -385,7 +390,7 @@ class Library:
                     audio=MutagenFile(path,easy=True)
                     if audio is None:return None
                     duration=float(getattr(getattr(audio,"info",None),"length",0) or 0);tags=getattr(audio,"tags",None) or {}
-                    title=_tag_text(tags.get("title"), title)
+                    title=_clean_title(_tag_text(tags.get("title"), title))
                     artist=_tag_text(tags.get("artist"), artist, join_values=True)
                     album=_tag_text(tags.get("album"), album)
                 except Exception:return None
