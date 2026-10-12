@@ -351,7 +351,7 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
   const requestOptions: RequestInit = {
     cache: "no-store",
     signal,
-    headers: { "Lrclib-Client": "Vervfy/1.0 (https://github.com/samvitorsilva/Verfy)" },
+    headers: { "Lrclib-Client": "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy)" },
   };
   const response = await fetch(`https://lrclib.net/api/get?${query}`, requestOptions);
   let exact: LrclibEntry | null = response.ok ? ((await response.json()) as LrclibEntry) : null;

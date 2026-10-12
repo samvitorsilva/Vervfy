@@ -731,7 +731,7 @@ def _lookup_artist_profile(
                 headers={
                     "User-Agent": (
                         "Vervfy/1.0 "
-                        "(https://github.com/samvitorsilva/Verfy; "
+                        "(https://github.com/samvitorsilva/Vervfy; "
                         "contact: https://github.com/samvitorsilva)"
                     )
                 },
