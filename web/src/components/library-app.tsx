@@ -32,9 +32,9 @@ interface ServerTrack {
   album: string;
   duration: number;
   has_cover: boolean;
+  cover_source?: "embedded" | "user" | "placeholder" | "unknown";
   cover_url: string;
   stream_url: string;
-  artist_image_url?: string | null;
   custom_lyrics?: string | null;
 }
 
@@ -614,6 +614,15 @@ export default function LibraryApp() {
   } | null>(null);
   const [playlistName, setPlaylistName] = useState("");
   const [playlistPicker, setPlaylistPicker] = useState<string | null>(null);
+  const [coverEditorTrack, setCoverEditorTrack] = useState<TrackRecord | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverPending, setCoverPending] = useState(false);
+  const [coverError, setCoverError] = useState("");
+  const [metadataEditorTrack, setMetadataEditorTrack] = useState<TrackRecord | null>(null);
+  const [metadataDraft, setMetadataDraft] = useState({ title: "", artist: "", album: "" });
+  const [metadataPending, setMetadataPending] = useState(false);
+  const [metadataError, setMetadataError] = useState("");
   const [expandedPlayerOpen, setExpandedPlayerOpen] = useState(false);
   const [playingFromView, setPlayingFromView] = useState<LibraryView | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -627,6 +636,8 @@ export default function LibraryApp() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
+  const coverFileInputRef = useRef<HTMLInputElement>(null);
+  const coverPreviewUrlRef = useRef<string | null>(null);
   const expandedPlayerCloseRef = useRef<HTMLButtonElement>(null);
   const expandedPlayerReturnFocusRef = useRef<HTMLElement | null>(null);
   const queuePanelRef = useRef<HTMLElement>(null);
@@ -788,14 +799,10 @@ export default function LibraryApp() {
       artist: track.artist || "Unknown artist",
       album: track.album || "Unknown album",
       duration: track.duration || 0,
-      coverUrl: track.has_cover
-        ? track.cover_url
-        : generateAura(`${track.artist}|${track.album}|${track.title}`),
-      remoteCoverUrl: track.has_cover
-        ? track.cover_url
-        : generateAura(`${track.artist}|${track.album}|${track.title}`),
+      coverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
+      remoteCoverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
       streamUrl: track.stream_url,
-      artistImageUrl: track.artist_image_url ?? null,
+      coverSource: track.cover_source ?? "unknown",
       offlineUrl: previousById.get(track.id)?.offlineUrl ?? null,
       offline: previousById.get(track.id)?.offline ?? false,
       favorite: previousById.get(track.id)?.favorite ?? false,
@@ -803,6 +810,111 @@ export default function LibraryApp() {
     }));
     setTracks(nextTracks);
   }, [setTracks]);
+
+  function openCoverEditor(track: TrackRecord) {
+    setTrackMenu(null);
+    setCoverFile(null);
+    setCoverError("");
+    setCoverEditorTrack(track);
+  }
+
+  function closeCoverEditor() {
+    if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+    coverPreviewUrlRef.current = null;
+    setCoverPreview(null);
+    setCoverFile(null);
+    setCoverError("");
+    setCoverEditorTrack(null);
+  }
+
+  function openMetadataEditor(track: TrackRecord) {
+    setTrackMenu(null);
+    setMetadataDraft({ title: track.title, artist: track.artist, album: track.album });
+    setMetadataError("");
+    setMetadataEditorTrack(track);
+  }
+
+  async function saveCover() {
+    if (!coverEditorTrack || !coverFile) {
+      setCoverError(t("Choose cover image."));
+      return;
+    }
+    setCoverPending(true);
+    setCoverError("");
+    try {
+      const form = new FormData();
+      form.append("file", coverFile);
+      await expectOk(
+        await apiFetch(
+          `/api/tracks/${encodeURIComponent(coverEditorTrack.id)}/cover`,
+          { method: "PUT", body: form },
+          { csrf: true, retryCsrfOnForbidden: true },
+        ),
+      );
+      await reloadTracks();
+      notify(t("Cover updated."));
+      closeCoverEditor();
+    } catch (error) {
+      setCoverError(error instanceof Error ? error.message : t("Could not update cover."));
+    } finally {
+      setCoverPending(false);
+    }
+  }
+
+  async function removeCover() {
+    if (!coverEditorTrack) return;
+    setCoverPending(true);
+    setCoverError("");
+    try {
+      await expectOk(
+        await apiFetch(
+          `/api/tracks/${encodeURIComponent(coverEditorTrack.id)}/cover`,
+          { method: "DELETE" },
+          { csrf: true, retryCsrfOnForbidden: true },
+        ),
+      );
+      await reloadTracks();
+      notify(t("Cover removed."));
+      closeCoverEditor();
+    } catch (error) {
+      setCoverError(error instanceof Error ? error.message : t("Could not remove cover."));
+    } finally {
+      setCoverPending(false);
+    }
+  }
+
+  async function saveTrackDetails(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!metadataEditorTrack) return;
+    setMetadataPending(true);
+    setMetadataError("");
+    try {
+      await expectOk(
+        await apiFetch(
+          `/api/tracks/${encodeURIComponent(metadataEditorTrack.id)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: metadataDraft.title.trim(),
+              artist: metadataDraft.artist.trim(),
+              album: metadataDraft.album.trim(),
+            }),
+          },
+          { csrf: true, retryCsrfOnForbidden: true },
+        ),
+      );
+      await reloadTracks();
+      setMetadataEditorTrack(null);
+      notify(t("Track details saved."));
+    } catch (error) {
+      setMetadataError(
+        error instanceof Error ? error.message : t("Could not update track details."),
+      );
+    } finally {
+      setMetadataPending(false);
+    }
+  }
 
   const uploadFiles = useCallback(
     async (selectedFiles: FileList | File[]) => {
@@ -1470,14 +1582,10 @@ export default function LibraryApp() {
           artist: track.artist || "Unknown artist",
           album: track.album || "Unknown album",
           duration: track.duration || 0,
-          coverUrl: track.has_cover
-            ? track.cover_url
-            : generateAura(`${track.artist}|${track.album}|${track.title}`),
-          remoteCoverUrl: track.has_cover
-            ? track.cover_url
-            : generateAura(`${track.artist}|${track.album}|${track.title}`),
+          coverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
+          remoteCoverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
           streamUrl: track.stream_url,
-          artistImageUrl: track.artist_image_url ?? null,
+          coverSource: track.cover_source ?? "unknown",
           favorite: false,
           customLyrics: track.custom_lyrics ?? null,
         }));
@@ -1995,7 +2103,7 @@ export default function LibraryApp() {
     const rect = event.currentTarget.getBoundingClientRect();
     const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
     const inPlaylist = playlists.find((playlist) => playlist.id === playlistId)?.trackIds.includes(track.id);
-    const itemCount = 7 + artistNames(track).length + (inPlaylist ? 1 : 0);
+    const itemCount = 9 + artistNames(track).length + (inPlaylist ? 1 : 0);
     const menuHeight = Math.min(16 + itemCount * 38, window.innerHeight - 16);
     const top = Math.max(
       8,
@@ -2065,6 +2173,13 @@ export default function LibraryApp() {
             {t("Remove from this playlist")}
           </button>
         ) : null}
+        <div className="menu-sep" />
+        <button className="menu-item" role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
+          {t("Change cover")}
+        </button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => openMetadataEditor(track)}>
+          {t("Edit track details")}
+        </button>
         <div className="menu-sep" />
         <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); void removeTrack(track); }}>
           {t("Remove from library")}
@@ -2408,6 +2523,8 @@ export default function LibraryApp() {
                       ? t("Couldn't load lyrics. Tap to retry.")
                       : cachedLyrics?.source === "none"
                         ? t("No lyrics found for this track.")
+                        : cachedLyrics?.source === "disabled"
+                          ? t("Paste your own lyrics.")
                         : t("Finding lyrics…")}
                   </p>
                 )}
@@ -2830,6 +2947,111 @@ export default function LibraryApp() {
           </div>
         </div>
       </div>
+
+      {coverEditorTrack ? (
+        <div
+          className="queue-picker-overlay open"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="coverEditorTitle"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !coverPending) closeCoverEditor();
+          }}
+        >
+          <section className="queue-picker-card track-editor-card">
+            <div className="queue-picker-head">
+              <h3 id="coverEditorTitle">{t("Cover for")} {coverEditorTrack.title}</h3>
+              <button className="icon-btn" type="button" aria-label={t("Close")} onClick={closeCoverEditor} disabled={coverPending}>
+                <Icon name="close" />
+              </button>
+            </div>
+            <img
+              className="track-cover-preview"
+              src={coverPreview ?? coverEditorTrack.coverUrl}
+              alt={`${t("Current cover for")} ${coverEditorTrack.title}`}
+            />
+            <p className="track-editor-help">{t("JPEG, PNG, or WebP; up to 5 MB.")}</p>
+            <input
+              ref={coverFileInputRef}
+              className="hidden-input"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={(event) => {
+                const selected = event.currentTarget.files?.[0] ?? null;
+                event.currentTarget.value = "";
+                if (!selected) return;
+                if (selected.size > 5 * 1024 * 1024) {
+                  setCoverError(t("Cover image must be 5 MB or smaller."));
+                  return;
+                }
+                if (!["image/jpeg", "image/png", "image/webp"].includes(selected.type)) {
+                  setCoverError(t("Choose a JPEG, PNG, or WebP image."));
+                  return;
+                }
+                if (coverPreviewUrlRef.current) URL.revokeObjectURL(coverPreviewUrlRef.current);
+                const previewUrl = URL.createObjectURL(selected);
+                coverPreviewUrlRef.current = previewUrl;
+                setCoverFile(selected);
+                setCoverPreview(previewUrl);
+                setCoverError("");
+              }}
+            />
+            <div className="track-editor-error" role="alert">{coverError}</div>
+            <div className="playlist-name-actions">
+              <button className="btn" type="button" onClick={() => coverFileInputRef.current?.click()} disabled={coverPending}>
+                {t("Choose cover image")}
+              </button>
+              {coverEditorTrack.coverSource === "user" ? (
+                <button className="btn btn-danger" type="button" onClick={() => void removeCover()} disabled={coverPending}>
+                  {coverPending ? t("Removing cover…") : t("Remove cover")}
+                </button>
+              ) : null}
+              <button className="btn btn-primary" type="button" onClick={() => void saveCover()} disabled={coverPending || !coverFile}>
+                {coverPending ? t("Saving cover…") : t("Save cover")}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {metadataEditorTrack ? (
+        <div
+          className="queue-picker-overlay open"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="trackDetailsTitle"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !metadataPending) setMetadataEditorTrack(null);
+          }}
+        >
+          <form className="queue-picker-card track-editor-card" onSubmit={saveTrackDetails}>
+            <div className="queue-picker-head">
+              <h3 id="trackDetailsTitle">{t("Track details")}</h3>
+              <button className="icon-btn" type="button" aria-label={t("Close")} onClick={() => setMetadataEditorTrack(null)} disabled={metadataPending}>
+                <Icon name="close" />
+              </button>
+            </div>
+            {(["title", "artist", "album"] as const).map((field) => (
+              <label className="track-editor-field" key={field}>
+                <span>{t(field === "title" ? "Title" : field === "artist" ? "Artist" : "Album")}</span>
+                <input
+                  maxLength={200}
+                  required
+                  value={metadataDraft[field]}
+                  onChange={(event) => setMetadataDraft((current) => ({ ...current, [field]: event.target.value }))}
+                />
+              </label>
+            ))}
+            <div className="track-editor-error" role="alert">{metadataError}</div>
+            <div className="playlist-name-actions">
+              <button className="btn" type="button" onClick={() => setMetadataEditorTrack(null)} disabled={metadataPending}>{t("Cancel")}</button>
+              <button className="btn btn-primary" type="submit" disabled={metadataPending}>
+                {metadataPending ? t("Saving…") : t("Save changes")}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <input
         ref={fileInputRef}

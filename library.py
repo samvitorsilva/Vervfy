@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 import audio_store
 from db import TrackRecord, User, tenant_session
-from online_cover import fetch_track_metadata
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ AUDIO_EXTENSIONS = {".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".o
 BytesLike = bytes | bytearray | memoryview
 @dataclass
 class Track:
-    id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
+    id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; cover_source: str; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
 
 
 class UploadQuotaExceeded(RuntimeError):
@@ -162,6 +161,7 @@ class Library:
             row.album,
             row.duration,
             row.has_cover,
+            row.cover_source,
             row.custom_lyrics,
             bytes(row.audio_data) if include_audio and row.audio_data is not None else b"",
             bytes(row.cover_data) if include_cover and row.cover_data is not None else b"",
@@ -177,6 +177,7 @@ class Library:
                 TrackRecord.album,
                 TrackRecord.duration,
                 TrackRecord.has_cover,
+                TrackRecord.cover_source,
                 TrackRecord.custom_lyrics,
             ]
             rows = s.scalars(select(TrackRecord).options(load_only(*selected)).where(TrackRecord.user_id == self.user_id)).all()
@@ -192,6 +193,7 @@ class Library:
                 TrackRecord.album,
                 TrackRecord.duration,
                 TrackRecord.has_cover,
+                TrackRecord.cover_source,
                 TrackRecord.custom_lyrics,
             ]
             if include_audio:
@@ -256,7 +258,7 @@ class Library:
             # Audio goes to Supabase Storage; Postgres keeps only the object path.
             storage_path=audio_store.object_path(self.user_id,track_id,safe)
             audio_store.upload(storage_path,data,audio_store.guess_content_type(safe))
-        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
+        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,cover_source="embedded" if has_cover else "placeholder",audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
         try:
             with tenant_session(self.user_id) as s:
                 if s.bind.dialect.name == "postgresql":
@@ -318,10 +320,89 @@ class Library:
             return bytes(row) if row is not None else b""
 
     def cover_jpeg(self, track_id: str, size: int=512):
-        cover_data = self.cover_bytes(track_id)
-        if not cover_data:
+        with tenant_session(self.user_id) as s:
+            row = s.execute(
+                select(TrackRecord.cover_data, TrackRecord.title, TrackRecord.cover_source).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            ).one_or_none()
+        if row is None:
             return b""
-        image=Image.open(io.BytesIO(cover_data)).convert("RGB"); image=ImageOps.fit(image,(size,size),method=Image.LANCZOS);out=io.BytesIO();image.save(out,format="JPEG",quality=90);return out.getvalue()
+        cover_data, title, cover_source = row
+        if cover_source == "unknown" or not cover_data:
+            image = make_placeholder_cover(title)
+        else:
+            image = Image.open(io.BytesIO(bytes(cover_data))).convert("RGB")
+        image = ImageOps.fit(image, (size, size), method=Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=90)
+        return output.getvalue()
+
+    def set_user_cover(self, track_id: str, cover_data: bytes):
+        with tenant_session(self.user_id) as s:
+            row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
+            if row is None:
+                return None
+            row.cover_data = cover_data
+            row.has_cover = True
+            row.cover_source = "user"
+            s.commit()
+            return self._track(row)
+
+    def remove_user_cover(self, track_id: str):
+        try:
+            audio, filename = self.audio_bytes(track_id)
+        except AudioUnavailableError:
+            audio, filename = b"", None
+        embedded_cover = None
+        if audio and filename:
+            path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    suffix=os.path.splitext(filename)[1], delete=False
+                ) as audio_file:
+                    path = audio_file.name
+                    audio_file.write(audio)
+                embedded_cover = _extract_cover(
+                    path, os.path.splitext(filename)[1].lower()
+                )
+            finally:
+                if path:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        log.warning("Could not remove temporary audio file %s", path)
+
+        with tenant_session(self.user_id) as s:
+            row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
+            if row is None:
+                return None
+            if embedded_cover is not None:
+                embedded_cover.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                image = embedded_cover.convert("RGB")
+                row.has_cover = True
+                row.cover_source = "embedded"
+            else:
+                image = make_placeholder_cover(row.title)
+                row.has_cover = False
+                row.cover_source = "placeholder"
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=90)
+            row.cover_data = output.getvalue()
+            s.commit()
+            return self._track(row)
+
+    def update_metadata(self, track_id: str, title: str, artist: str, album: str):
+        with tenant_session(self.user_id) as s:
+            row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
+            if row is None:
+                return None
+            row.title = title
+            row.artist = artist
+            row.album = album
+            s.commit()
+            return self._track(row)
 
     def audio_info(self, track_id: str):
         """``(filename, size_bytes, storage_path)`` or None — never touches the audio itself."""
@@ -404,39 +485,9 @@ class Library:
                 embedded_cover = _extract_cover(path, ext)
             else:
                 embedded_cover = None
-            online_metadata = None
-            fetched_cover = None
-            if (
-                embedded_cover is None
-                or album == "Unknown Album"
-                or duration <= 0
-            ):
-                online_metadata = fetch_track_metadata(
-                    title,
-                    artist,
-                    fetch_artwork=embedded_cover is None,
-                )
-            if online_metadata is not None:
-                if album == "Unknown Album" and online_metadata.album:
-                    album = online_metadata.album
-                if duration <= 0 and online_metadata.duration:
-                    duration = online_metadata.duration
-                fetched_cover = online_metadata.cover
             if embedded_cover is not None:
                 cover = embedded_cover
                 has_cover = True
-            elif fetched_cover is not None:
-                cover = fetched_cover
-                has_cover = True
-            log.info(
-                "Cover lookup for %r by %r: embedded=%s fetch_cover=%s",
-                title,
-                artist,
-                embedded_cover is not None,
-                "not_run" if embedded_cover is not None else (
-                    "image" if fetched_cover is not None else "none"
-                ),
-            )
             return title,artist,album,duration,cover,has_cover
         finally:
             try:os.unlink(path)

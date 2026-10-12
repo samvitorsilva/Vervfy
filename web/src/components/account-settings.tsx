@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { apiFetch, expectOk } from "@/lib/api/client";
 import type { Account } from "@/lib/api/types";
@@ -359,6 +360,11 @@ export default function AccountSettings({
         <div className="acct-settings-title">{t("Language")}</div>
         <p className="acct-danger-copy">{t("Choose the language used by Vervfy.")}</p>
         <LanguageSelect />
+      </section>
+
+      <section className="acct-settings">
+        <div className="acct-settings-title">{t("Credits")}</div>
+        <Link className="artist-website" href="/credits">{t("Credits and data sources")} ↗</Link>
       </section>
 
       <section className="acct-settings">

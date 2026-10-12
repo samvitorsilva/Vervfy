@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import json
 import asyncio
-from difflib import SequenceMatcher
 import functools
 import hashlib
 import logging
@@ -15,19 +13,18 @@ import mimetypes
 import os
 import re
 import secrets
-import threading
 import time
 import unicodedata
 import uuid
 from typing import Annotated, Literal
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 import httpx
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -38,7 +35,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from db import Artist, ArtistImageCache, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -87,7 +84,6 @@ app = FastAPI(
 @app.on_event("shutdown")
 def close_audio_store() -> None:
     audio_store.close_client()
-    _close_artist_image_http_client()
 
 
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
@@ -122,7 +118,7 @@ app.add_middleware(
     # CORS only — never use this value as an auth redirect Location.
     allow_origins=[os.environ.get("FRONTEND_URL", "http://localhost:8000")],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
@@ -144,10 +140,15 @@ async def add_security_headers(request: Request, call_next):
     if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
         path = request.url.path
         if path.startswith("/api/"):
-            is_upload = path == "/api/library/upload"
+            is_upload = path == "/api/library/upload" or (
+                request.method == "PUT" and path.endswith("/cover")
+            )
             limit, window = (UPLOADS_PER_10MIN, 10 * 60) if is_upload else (120, 60)
             identity = request.session.get("user_id") or auth.client_ip(request)
-            key = f"api:{identity}:{path if is_upload else 'mutations'}"
+            throttle_path = (
+                "/api/library/upload" if is_upload else "mutations"
+            )
+            key = f"api:{identity}:{throttle_path}"
             try:
                 allowed = await run_in_threadpool(
                     request_throttle.allow, key, limit, window
@@ -215,245 +216,27 @@ USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
 MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
+MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
+MAX_TRACK_COVER_DIMENSION = 8192
+MAX_TRACK_COVER_PIXELS = 12_000_000
+MAX_ARTIST_PROFILE_CACHE_ENTRIES = 1024
 CSP_REPORT_ONLY = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src https://fonts.gstatic.com; "
-    "img-src 'self' data: blob: https://*.dzcdn.net; "
-    "media-src 'self' blob:; "
-    "connect-src 'self' https://lrclib.net; "
-    "frame-ancestors 'none'"
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self' https://lrclib.net; "
+        "frame-ancestors 'none'"
 )
 
 _libraries: dict[str, Library] = {}
-_artist_photo_cache: dict[str, tuple[float, dict | None]] = {}
-_artist_photo_result_cache: dict[str, tuple[float, tuple[str | None, int | None]]] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
-MAX_ARTIST_CACHE_ENTRIES = 1024
-ARTIST_IMAGE_TTL = timedelta(days=7)
-_artist_image_lookups: set[str] = set()
-_artist_image_lookups_lock = threading.Lock()
-_artist_image_rate_lock = threading.Lock()
-_artist_image_last_request = 0.0
-_artist_image_http_client: httpx.Client | None = None
-_artist_image_http_client_lock = threading.Lock()
-
-
-def _get_artist_image_http_client() -> httpx.Client:
-    global _artist_image_http_client
-    with _artist_image_http_client_lock:
-        if _artist_image_http_client is None or _artist_image_http_client.is_closed:
-            _artist_image_http_client = httpx.Client(
-                headers={"User-Agent": "Vervfy/1.0"},
-                timeout=httpx.Timeout(5.0, connect=5.0),
-            )
-        return _artist_image_http_client
-
-
-def _close_artist_image_http_client() -> None:
-    global _artist_image_http_client
-    with _artist_image_http_client_lock:
-        if _artist_image_http_client is not None:
-            _artist_image_http_client.close()
-            _artist_image_http_client = None
-
-
-def _wait_for_artist_image_rate_limit() -> None:
-    global _artist_image_last_request
-    with _artist_image_rate_lock:
-        delay = 0.2 - (time.monotonic() - _artist_image_last_request)
-        if delay > 0:
-            time.sleep(delay)
-        _artist_image_last_request = time.monotonic()
-
-
-def _normalized_artist_name(name: str) -> str:
-    return re.sub(r"\s+", " ", name.strip()).casefold()
-
-
-def _artist_image_record(name: str) -> ArtistImageCache | None:
-    normalized_name = _normalized_artist_name(name)
-    if not normalized_name:
-        return None
-    with SessionLocal() as session:
-        return session.get(ArtistImageCache, normalized_name)
-
-
-def _artist_image_is_stale(record: ArtistImageCache | None, now: datetime | None = None) -> bool:
-    if record is None:
-        return True
-    looked_up_at = record.looked_up_at
-    if looked_up_at.tzinfo is None:
-        looked_up_at = looked_up_at.replace(tzinfo=timezone.utc)
-    return (now or datetime.now(timezone.utc)) - looked_up_at >= ARTIST_IMAGE_TTL
-
-
-def _pick_artist_image_match(results: list, name: str) -> dict | None:
-    key = _artist_search_key(name)
-    if not key:
-        return None
-    ranked: list[tuple[float, int, dict]] = []
-    for result in results:
-        if not isinstance(result, dict) or not isinstance(result.get("name"), str):
-            continue
-        candidate_key = _artist_search_key(result["name"])
-        if not candidate_key:
-            continue
-        score = SequenceMatcher(None, key, candidate_key).ratio()
-        if score < 0.72:
-            continue
-        fans = result.get("nb_fan")
-        ranked.append((score, fans if isinstance(fans, int) else 0, result))
-    if not ranked:
-        return None
-    return max(ranked, key=lambda item: (item[0], item[1]))[2]
-
-
-def _store_artist_image(
-    normalized_name: str,
-    display_name: str,
-    image_url: str | None,
-) -> None:
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-    now = datetime.now(timezone.utc)
-    values = {
-        "normalized_name": normalized_name,
-        "display_name": display_name,
-        "image_url": image_url,
-        "source": "deezer" if image_url else "none",
-        "looked_up_at": now,
-        "updated_at": now,
-    }
-    with SessionLocal() as session:
-        if session.bind is not None and session.bind.dialect.name == "sqlite":
-            statement = sqlite_insert(ArtistImageCache).values(**values)
-        else:
-            statement = pg_insert(ArtistImageCache).values(**values)
-        statement = statement.on_conflict_do_update(
-            index_elements=[ArtistImageCache.normalized_name],
-            set_={
-                "display_name": statement.excluded.display_name,
-                "image_url": statement.excluded.image_url,
-                "source": statement.excluded.source,
-                "looked_up_at": statement.excluded.looked_up_at,
-                "updated_at": statement.excluded.updated_at,
-            },
-        )
-        session.execute(statement)
-        session.commit()
-
-
-def get_artist_image(name: str) -> str | None:
-    """Return a cached Deezer portrait, refreshing misses without surfacing failures."""
-    if not isinstance(name, str):
-        return None
-    normalized_name = _normalized_artist_name(name)
-    if not normalized_name or len(normalized_name) > 200:
-        return None
-    display_name = re.sub(r"\s+", " ", name.strip())
-    cached: ArtistImageCache | None = None
-    claimed_lookup = False
-    try:
-        cached = _artist_image_record(display_name)
-        if not _artist_image_is_stale(cached):
-            return cached.image_url if cached else None
-
-        with _artist_image_lookups_lock:
-            if normalized_name in _artist_image_lookups:
-                return cached.image_url if cached else None
-            _artist_image_lookups.add(normalized_name)
-            claimed_lookup = True
-
-        image_url: str | None = None
-        matched_name = display_name
-        lookup_succeeded = False
-        try:
-            client = _get_artist_image_http_client()
-            for attempt in range(2):
-                try:
-                    _wait_for_artist_image_rate_limit()
-                    response = client.get(
-                        "https://api.deezer.com/search/artist",
-                        params={"q": display_name, "limit": 10},
-                        timeout=5.0,
-                    )
-                    if response.status_code >= 500 and attempt == 0:
-                        continue
-                    response.raise_for_status()
-                    payload = response.json()
-                    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-                        raise ValueError("invalid Deezer artist search response")
-                    results = payload["data"]
-                    artist = _pick_artist_image_match(results, display_name)
-                    if artist:
-                        matched_name = str(artist.get("name") or display_name)[:200]
-                        image_url = _deezer_portrait_url(artist)
-                    lookup_succeeded = True
-                    break
-                except httpx.TimeoutException:
-                    if attempt == 1:
-                        raise
-                except httpx.HTTPStatusError as exc:
-                    if exc.response.status_code >= 500 and attempt == 0:
-                        continue
-                    raise
-        except (httpx.HTTPError, ValueError, TypeError) as exc:
-            log.warning("Artist image lookup failed for %r: %s", display_name, exc)
-
-        if lookup_succeeded:
-            _store_artist_image(normalized_name, matched_name, image_url)
-            return image_url
-        return cached.image_url if cached else None
-    except Exception:
-        log.exception("Artist image cache failed for %r", display_name)
-        return cached.image_url if cached else None
-    finally:
-        if claimed_lookup:
-            with _artist_image_lookups_lock:
-                _artist_image_lookups.discard(normalized_name)
-
-
-def _lookup_artist_images(names: list[str]) -> None:
-    unique_names = list(dict.fromkeys(
-        re.sub(r"\s+", " ", name.strip())
-        for raw_name in names
-        for name in _artist_name_candidates(raw_name)
-        if name.strip() and len(name.strip()) <= 200
-    ))
-    for index, name in enumerate(unique_names):
-        if index:
-            time.sleep(0.2)
-        get_artist_image(name)
-
-
-def _cached_artist_images(names: list[str]) -> dict[str, ArtistImageCache]:
-    normalized_names = {
-        _normalized_artist_name(name)
-        for raw_name in names
-        for name in _artist_name_candidates(raw_name)
-        if name.strip() and len(name.strip()) <= 200
-    }
-    if not normalized_names:
-        return {}
-    with SessionLocal() as session:
-        records = session.scalars(
-            select(ArtistImageCache).where(
-                ArtistImageCache.normalized_name.in_(normalized_names)
-            )
-        ).all()
-        return {record.normalized_name: record for record in records}
-
-
-# Bust portraits cached before the current process started (wrong namesake matches,
-# stylized-credit misses). Fresh lookups remain cached for 30 days as usual.
-_ARTIST_CACHE_EPOCH = datetime.now(timezone.utc)
 
 
 def _artist_search_key(name: str) -> str:
-    """Normalize names before comparing a public catalog search result."""
+    """Normalize artist credits for manual profiles and Wikipedia matching."""
     normalized = unicodedata.normalize("NFKD", name)
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
     # Stylized credits: A$AP↔ASAP, Florence + The Machine↔Florence and the Machine.
@@ -463,36 +246,12 @@ def _artist_search_key(name: str) -> str:
     return "".join(c.lower() for c in normalized if c.isalnum())
 
 
-def _deezer_artist_rank(artist: dict) -> tuple[int, int]:
-    """Prefer portraits, then the catalog entry with the largest audience."""
-    portrait = 1 if _deezer_portrait_url(artist) else 0
-    fans = artist.get("nb_fan")
-    return (portrait, fans if isinstance(fans, int) else 0)
-
-
-def _pick_deezer_artist_match(results: list, name: str) -> dict | None:
-    """Return the best exact-name Deezer artist, ignoring weaker namesakes."""
-    key = _artist_search_key(name)
-    if not key:
-        return None
-    matches = [
-        result
-        for result in results
-        if isinstance(result, dict)
-        and isinstance(result.get("id"), int)
-        and _artist_search_key(str(result.get("name", ""))) == key
-    ]
-    if not matches:
-        return None
-    return max(matches, key=_deezer_artist_rank)
-
-
 def _cache_artist_result(cache, key: str, value, expires_at: float) -> None:
     now = time.monotonic()
     for cached_key, (expiry, _) in list(cache.items()):
         if expiry <= now:
             del cache[cached_key]
-    if len(cache) >= MAX_ARTIST_CACHE_ENTRIES and key not in cache:
+    if len(cache) >= MAX_ARTIST_PROFILE_CACHE_ENTRIES and key not in cache:
         del cache[min(cache, key=lambda item: cache[item][0])]
     cache[key] = (expires_at, value)
 
@@ -531,12 +290,7 @@ def _artist_name_candidates(name: str) -> list[str]:
     return candidates
 
 
-# These entries are deliberately small.  General music catalogs are useful for
-# discovery, but an exact name match is not enough to establish an artist's
-# identity (especially for short, stylised, or shared names).  Each profile
-# below was checked against an authoritative, artist-specific source and is
-# used before a catalog lookup. Do not add an entry without a source that
-# unambiguously identifies the performer.
+# These entries are manually maintained profiles with artist-specific sources.
 _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
     "tatemcrae": {
         "bio": (
@@ -563,17 +317,6 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "source": "MORADA artist biography",
         "source_url": "https://jairproducoes.com.br/morada",
     },
-    "marcosnui": {
-        "bio": (
-            "Marcos Nui is the artist behind the 2024 single Mi Tiempo and "
-            "other Spanish-language releases."
-        ),
-        "highlights": "Released the single Mi Tiempo in 2024.",
-        "website": "https://music.apple.com/us/artist/marcos-nui/1686270730",
-        "website_label": "Artist profile",
-        "source": "Marcos Nui artist profile",
-        "source_url": "https://music.apple.com/us/artist/marcos-nui/1686270730",
-    },
     "tommybueno": {
         "bio": (
             "Tommy Bueno is a Buenos Aires–based artist whose catalog includes "
@@ -584,19 +327,6 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "website_label": "Official artist page",
         "source": "Tommy Bueno official artist page",
         "source_url": "https://linktr.ee/tommybueno",
-    },
-    "visionofleo": {
-        "bio": (
-            "Vision of Leo is a Pop artist whose 2023 album Legacy of Faith "
-            "was released through Vision of Leo Records."
-        ),
-        "genre": "Pop",
-        "label": "Vision of Leo Records",
-        "highlights": "Released the album Legacy of Faith in 2023 through Vision of Leo Records.",
-        "website": "https://music.apple.com/us/artist/vision-of-leo/1461686609",
-        "website_label": "Artist profile",
-        "source": "Vision of Leo release page",
-        "source_url": "https://music.apple.com/us/album/legacy-of-faith/1688293569",
     },
     "obros": {
         "bio": (
@@ -671,18 +401,6 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "source": "Miel San Marcos official artist site",
         "source_url": "https://www.mielsanmarcos.org/artist",
     },
-    "braydentabakian": {
-        "bio": (
-            "Brayden Tabakian is a singer and drummer based in Missouri whose "
-            "work includes Christian music."
-        ),
-        "genre": "Pop, Christian music",
-        "highlights": "Performs as both a singer and drummer from Missouri.",
-        "website": "https://open.spotify.com/artist/0wbQ4YBld5MzVAh9lTZlYy",
-        "website_label": "Artist profile",
-        "source": "Brayden Tabakian artist profile",
-        "source_url": "https://open.spotify.com/artist/0wbQ4YBld5MzVAh9lTZlYy",
-    },
     "josephobrien": {
         "bio": (
             "Joseph O'Brien is a Nashville-based singer-songwriter. He is a "
@@ -721,43 +439,6 @@ _VERIFIED_ARTIST_PROFILES: dict[str, dict[str, str]] = {
         "website_label": "Official artist site",
         "source": "gio. official artist site",
         "source_url": "https://www.wassupgio.com/about/",
-    },
-    "kodoku": {
-        "bio": (
-            "Kodoku is the recording artist behind releases including “Rose Bath,” "
-            '“DEVOTED” with Sam Rivera, and “WATERWALKIN” featuring Hulvey.'
-        ),
-        "highlights": "Notable releases include Rose Bath, DEVOTED with Sam Rivera, and WATERWALKIN featuring Hulvey.",
-        "website": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
-        "website_label": "Spotify artist profile",
-        "source": "Kodoku Spotify artist profile",
-        "source_url": "https://open.spotify.com/artist/2mDygmvuNzsZhLvMfEUfmu",
-    },
-    "ruayoung": {
-        "bio": (
-            "RUA YOUNG is a Christian recording artist whose catalog includes "
-            "God Did, Say The Word, I’M GOD’S, and ADONAI."
-        ),
-        "genre": "Christian",
-        "highlights": (
-            "Recent releases include God Did (Remix Pack), Say The Word, "
-            "I’M GOD’S, Designer, and ADONAI."
-        ),
-        "website": "https://music.apple.com/us/artist/rua-young/1782603897",
-        "website_label": "Apple Music artist profile",
-        "source": "RUA YOUNG Apple Music artist profile",
-        "source_url": "https://music.apple.com/us/artist/rua-young/1782603897",
-    },
-    "thekidszn": {
-        "bio": (
-            "Thekidszn is a hip-hop/rap recording artist. The artist's Deezer "
-            "catalog includes SZN (2025) and Elevated (2024)."
-        ),
-        "genre": "Hip-hop/rap",
-        "website": "https://music.apple.com/us/artist/thekidszn/1454205129",
-        "website_label": "Apple Music artist profile",
-        "source": "Deezer artist catalog",
-        "source_url": "https://www.deezer.com/artist/60286412",
     },
     "thekidlaroi": {
         "bio": (
@@ -822,16 +503,9 @@ _VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
         "genre": "Música cristã contemporânea",
         "source": "Biografia do MORADA",
     },
-    "marcosnui": {
-        "bio": "Marcos Nui é o artista por trás do single “Mi Tiempo”, lançado em 2024, e de outras músicas em espanhol.",
-        "source": "Perfil de artista de Marcos Nui",
-    },
     "tommybueno": {
         "bio": "Tommy Bueno é um artista de Buenos Aires. Entre seus lançamentos estão “Visionario” e “Atmósfera”.",
         "source": "Página oficial de Tommy Bueno",
-    },
-    "visionofleo": {
-        "bio": "Vision of Leo é um artista pop. Em 2023, lançou o álbum “Legacy of Faith” pelo selo Vision of Leo Records.",
     },
     "obros": {
         "bio": "A dupla alemã O'Bros é de Munique e mistura hip-hop com temas de fé cristã em suas músicas.",
@@ -855,10 +529,6 @@ _VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
         "bio": "Miel San Marcos é uma banda cristã guatemalteca, formada em 2000 pelos irmãos Josh, Luis e Samy Morales.",
         "genre": "Música cristã contemporânea",
     },
-    "braydentabakian": {
-        "bio": "Brayden Tabakian é cantor e baterista do estado do Missouri, nos Estados Unidos. Seu repertório também inclui música cristã.",
-        "genre": "Pop e música cristã",
-    },
     "josephobrien": {
         "bio": "Joseph O'Brien é um cantor e compositor de Nashville e faz parte do selo Gotee Records. Sua música busca inspirar a fé de quem ouve.",
         "genre": "Música cristã",
@@ -872,17 +542,6 @@ _VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
     "gio": {
         "bio": "gio. é um artista de pop cristão e hip-hop da região de Boston. Influenciado pelo gospel e pela poesia desde cedo, ele busca trazer uma abordagem moderna e criativa à música cristã.",
         "genre": "Pop cristão e hip-hop",
-    },
-    "kodoku": {
-        "bio": "Kodoku é o artista por trás de lançamentos como “Rose Bath”, “DEVOTED”, com Sam Rivera, e “WATERWALKIN”, com participação de Hulvey.",
-    },
-    "ruayoung": {
-        "bio": "RUA YOUNG é um artista cristão. Entre seus lançamentos estão “God Did”, “Say The Word”, “I’M GOD’S” e “ADONAI”.",
-        "genre": "Música cristã",
-    },
-    "thekidszn": {
-        "bio": "Thekidszn é um artista de hip-hop e rap. Seu catálogo no Deezer inclui “SZN” (2025) e “Elevated” (2024).",
-        "genre": "Hip-hop e rap",
     },
     "thekidlaroi": {
         "bio": "The Kid LAROI (Charlton Howard) é um cantor, rapper e compositor australiano. Seu single “Stay” fez sucesso no mundo todo.",
@@ -915,9 +574,6 @@ def _verified_artist_profile(
         key = _artist_search_key(candidate)
         profile_key = key
         profile = _VERIFIED_ARTIST_PROFILES.get(key)
-        if profile is None and key == "kidszn":
-            profile_key = "thekidszn"
-            profile = _VERIFIED_ARTIST_PROFILES[profile_key]
         if profile is None and key == "stringsandheart":
             profile_key = "stringsheart"
             profile = _VERIFIED_ARTIST_PROFILES[profile_key]
@@ -931,212 +587,6 @@ def _verified_artist_profile(
                 result["lookup_name"] = candidate
             return result
     return None
-
-
-# The British rapper Dave (Santan Dave) shares his stage name with unrelated
-# artists. This Deezer portrait is tied to artist ID 11256100, whose catalog
-# includes Psychodrama, Split Decision, and The Boy Who Played the Harp.
-_DAVE_DEEZER_PHOTO = (
-    "https://cdn-images.dzcdn.net/images/artist/"
-    "eb2c8952b7328fdf32b3546d5ffab8c2/500x500-000000-80-0-0.jpg"
-)
-_VERIFIED_ARTIST_PHOTOS = {
-    "dave": _DAVE_DEEZER_PHOTO,
-    "davesantan": _DAVE_DEEZER_PHOTO,
-    "santandave": _DAVE_DEEZER_PHOTO,
-}
-
-
-def _matching_catalog_artist(
-    results: list[dict], candidates: list[str], name_field: str
-) -> tuple[dict | None, str | None]:
-    best: dict | None = None
-    best_candidate: str | None = None
-    best_rank = (-1, -1)
-    for candidate in candidates:
-        key = _artist_search_key(candidate)
-        if not key:
-            continue
-        for result in results:
-            if not isinstance(result, dict):
-                continue
-            if _artist_search_key(str(result.get(name_field, ""))) != key:
-                continue
-            rank = _deezer_artist_rank(result)
-            if rank > best_rank:
-                best = result
-                best_candidate = candidate
-                best_rank = rank
-    return best, best_candidate
-
-
-def _deezer_artist_for_name(name: str) -> dict | None:
-    key = _artist_search_key(name)
-    if not key:
-        return None
-    now = time.monotonic()
-    cached = _artist_photo_cache.get(key)
-    if cached and cached[0] > now:
-        return cached[1]
-
-    artist: dict | None = None
-    candidates = _artist_name_candidates(name) or [name.strip()]
-    try:
-        with httpx.Client(timeout=4.0) as client:
-            for candidate in candidates:
-                response = client.get(
-                    "https://api.deezer.com/search/artist",
-                    params={"q": candidate, "limit": 10},
-                    headers={"User-Agent": "Vervfy/1.0"},
-                )
-                response.raise_for_status()
-                results = response.json().get("data", [])
-                artist, _ = _matching_catalog_artist(results, [candidate], "name")
-                if artist:
-                    break
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
-        log.warning("Deezer artist lookup failed for %r: %s", name, exc)
-    _cache_artist_result(
-        _artist_photo_cache, key, artist, now + (60 * 60 * 24 if artist else 10 * 60)
-    )
-    return artist
-
-
-def _deezer_artist_has_library_title(artist: dict, titles: list[str]) -> bool:
-    title_keys = {_artist_track_title_key(title) for title in titles if title.strip()}
-    artist_id = artist.get("id")
-    if not artist_id or not title_keys:
-        return False
-    try:
-        with httpx.Client(timeout=3.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
-            try:
-                top = client.get(
-                    f"https://api.deezer.com/artist/{artist_id}/top",
-                    params={"limit": 100},
-                )
-                top.raise_for_status()
-                tracks = top.json().get("data", [])
-                if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
-                    return True
-            except (httpx.HTTPError, ValueError, TypeError) as exc:
-                log.warning("Deezer top-track check failed for artist %r: %s", artist.get("name"), exc)
-
-            albums_response = client.get(
-                f"https://api.deezer.com/artist/{artist_id}/albums",
-                params={"limit": 50},
-            )
-            albums_response.raise_for_status()
-            albums = albums_response.json().get("data", [])
-            for album in albums:
-                if _artist_track_title_key(str(album.get("title", ""))) in title_keys:
-                    return True
-            # Cap album crawls — top + album titles cover most library matches.
-            for album in albums[:5]:
-                album_id = album.get("id")
-                if not album_id:
-                    continue
-                try:
-                    response = client.get(
-                        f"https://api.deezer.com/album/{album_id}/tracks",
-                        params={"limit": 100},
-                    )
-                    response.raise_for_status()
-                    tracks = response.json().get("data", [])
-                    if any(_artist_track_title_key(str(track.get("title", ""))) in title_keys for track in tracks):
-                        return True
-                except (httpx.HTTPError, ValueError, TypeError) as exc:
-                    log.warning("Deezer album-track check failed for artist %r: %s", artist.get("name"), exc)
-    except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
-        log.warning("Deezer catalog verification failed for artist %r: %s", artist.get("name"), exc)
-    return False
-
-
-def _artist_track_title_key(title: str) -> str:
-    cleaned = re.sub(
-        r"\s*[\[(]\s*(?:feat(?:uring)?\.?|ft\.?)\s+[^\])]*[\])]", "", title, flags=re.I
-    )
-    cleaned = re.sub(r"\s+(?:feat(?:uring)?\.?|ft\.?)\s+.+$", "", cleaned, flags=re.I)
-    cleaned = re.sub(r"\s*[\[(]\s*explicit\s*[\])]", "", cleaned, flags=re.I)
-    cleaned = re.sub(
-        r"\s*[-–—]\s*(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?\s*$",
-        "", cleaned, flags=re.I,
-    )
-    return _artist_search_key(cleaned)
-
-
-def _verified_deezer_artist(name: str, titles: list[str]) -> dict | None:
-    """Exact Deezer name match for any credit variant, proven by library titles."""
-    candidate_keys = {
-        _artist_search_key(candidate) for candidate in _artist_name_candidates(name)
-    }
-    artist = _deezer_artist_for_name(name)
-    if not artist:
-        return None
-    if _artist_search_key(str(artist.get("name", ""))) not in candidate_keys:
-        return None
-    return artist if _deezer_artist_has_library_title(artist, titles) else None
-
-
-def _deezer_portrait_url(artist: dict) -> str | None:
-    # Prefer mid-size portraits: artist cards/detail avatars are ~112–256px.
-    photo = (
-        artist.get("picture_medium")
-        or artist.get("picture_big")
-        or artist.get("picture_xl")
-        or artist.get("picture")
-    )
-    try:
-        host = urlsplit(photo).hostname if isinstance(photo, str) else None
-    except ValueError:
-        host = None
-    if (
-        not isinstance(photo, str)
-        or not photo.startswith("https://")
-        or not host
-        or not (host == "dzcdn.net" or host.endswith(".dzcdn.net"))
-        or "/images/artist//" in photo
-    ):
-        return None
-    return photo
-
-
-def _artist_photo_result_key(name: str, titles: list[str]) -> str:
-    key = _artist_search_key(name)
-    title_keys = sorted(
-        {_artist_track_title_key(title) for title in titles if title.strip()}
-    )[:40]
-    return f"{key}|{'|'.join(title_keys)}"
-
-
-def _lookup_artist_photo(name: str, titles: list[str]) -> tuple[str | None, int | None]:
-    """Return a Deezer portrait only after matching this user's catalog titles."""
-    for candidate_name in _artist_name_candidates(name):
-        verified_photo = _VERIFIED_ARTIST_PHOTOS.get(_artist_search_key(candidate_name))
-        if verified_photo:
-            # Hardcoded portraits are already trusted — skip live Deezer verification.
-            return verified_photo, None
-
-    cache_key = _artist_photo_result_key(name, titles)
-    now = time.monotonic()
-    cached = _artist_photo_result_cache.get(cache_key)
-    if cached and cached[0] > now:
-        return cached[1]
-
-    artist = _verified_deezer_artist(name, titles)
-    if not artist:
-        result: tuple[str | None, int | None] = (None, None)
-        _cache_artist_result(_artist_photo_result_cache, cache_key, result, now + 10 * 60)
-        return result
-    photo = _deezer_portrait_url(artist)
-    fans = artist.get("nb_fan")
-    result = (photo, fans if isinstance(fans, int) else None)
-    _cache_artist_result(
-        _artist_photo_result_cache,
-        cache_key,
-        result,
-        now + (60 * 60 * 24 if photo else 10 * 60),
-    )
-    return result
 
 
 _WIKI_TITLE_QUALIFIER = re.compile(
@@ -1194,6 +644,7 @@ def _wikipedia_summary_to_profile(
     return {
         "bio": bio,
         "source": "Wikipédia" if language == "pt-BR" else "Wikipedia",
+        "source_modified": "true",
         "source_url": (
             summary.get("content_urls", {})
             .get("desktop", {})
@@ -1256,15 +707,14 @@ def _fetch_wikipedia_artist_profile(
 
 
 def _lookup_artist_profile(
-    name: str, titles: list[str], language: Literal["en", "pt-BR"] = "en"
+    name: str, language: Literal["en", "pt-BR"] = "en"
 ) -> dict[str, str] | None:
-    """Return localized verified biography and Deezer audience information."""
+    """Return a manually maintained profile or an attributed Wikipedia summary."""
     manual = _verified_artist_profile(name, language)
     if manual:
+        if manual.get("source") in {"Wikipedia", "Wikipédia"}:
+            manual["source_modified"] = "true"
         return manual
-    artist = _verified_deezer_artist(name, titles)
-    if not artist:
-        return None
     artist_key = _artist_search_key(name)
     if not artist_key:
         return None
@@ -1278,7 +728,13 @@ def _lookup_artist_profile(
         try:
             with httpx.Client(
                 timeout=6.0,
-                headers={"User-Agent": "Vervfy/1.0 (artist profile lookup)"},
+                headers={
+                    "User-Agent": (
+                        "Vervfy/1.0 "
+                        "(https://github.com/samvitorsilva/Verfy; "
+                        "contact: https://github.com/samvitorsilva)"
+                    )
+                },
                 follow_redirects=True,
             ) as client:
                 profile = _fetch_wikipedia_artist_profile(client, name, language) or {}
@@ -1288,9 +744,6 @@ def _lookup_artist_profile(
             _artist_profile_cache, key, profile or None,
             now + (60 * 60 * 24 if profile else 10 * 60),
         )
-    fans = artist.get("nb_fan")
-    if isinstance(fans, int):
-        profile["followers"] = str(fans)
     return profile or None
 
 
@@ -1343,15 +796,7 @@ def require_api_user(request: Request):
     return row
 
 
-def _cached_artist_image_url(name: str) -> str | None:
-    names = _artist_name_candidates(name)
-    if not names:
-        return None
-    record = _cached_artist_images(names).get(_normalized_artist_name(names[0]))
-    return record.image_url if record else None
-
-
-def _track_payload(track, artist_image_url: str | None = None) -> dict:
+def _track_payload(track) -> dict:
     return {
         "id": track.id,
         "title": track.title,
@@ -1360,9 +805,9 @@ def _track_payload(track, artist_image_url: str | None = None) -> dict:
         "duration": track.duration,
         "custom_lyrics": track.custom_lyrics,
         "has_cover": track.has_cover,
+        "cover_source": track.cover_source,
         "cover_url": f"/api/tracks/{track.id}/cover",
         "stream_url": f"/api/tracks/{track.id}/stream",
-        "artist_image_url": artist_image_url,
     }
 
 
@@ -1402,6 +847,14 @@ def startup() -> None:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
         if "storage_path" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
+        if "cover_source" not in existing_track_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE tracks ADD COLUMN cover_source "
+                    "VARCHAR(20) NOT NULL DEFAULT 'unknown'"
+                )
+            )
+            connection.execute(text("UPDATE tracks SET cover_source = 'unknown'"))
         existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
         if "position" not in existing_playlist_columns:
             connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
@@ -1647,6 +1100,12 @@ class AccountDeletionRequest(BaseModel):
 
 class TrackLyricsRequest(BaseModel):
     lyrics: str = Field(..., min_length=1, max_length=200_000)
+
+
+class TrackMetadataUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=512)
+    artist: str = Field(..., min_length=1, max_length=512)
+    album: str = Field(..., min_length=1, max_length=512)
 
 
 SafeId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
@@ -1991,32 +1450,6 @@ def save_library_state(
     return state
 
 
-def _library_titles_for_artist(user_id: str, name: str) -> list[str]:
-    """Titles in this user's own library credited to `name` (used to prove identity).
-
-    Derived server-side so identity checks never depend on what the browser sends,
-    which also keeps older cached clients working.
-    """
-    key = _artist_search_key(name)
-    if not key:
-        return []
-    titles: list[str] = []
-    for track in get_library(user_id).list_tracks():
-        credit = getattr(track, "artist", "") or ""
-        names = _artist_name_candidates(credit)
-        title = getattr(track, "title", "") or ""
-        featured = re.search(r"\b(?:feat(?:uring)?\.?|ft\.?|with)\s+(.+)$", title, re.I)
-        if featured:
-            featured_names = re.sub(r"[\])].*$", "", featured.group(1)).strip()
-            names.extend(_artist_name_candidates(featured_names))
-        if key in {_artist_search_key(artist) for artist in names}:
-            if title:
-                titles.append(title)
-        if len(titles) >= 40:
-            break
-    return titles
-
-
 def _throttle_artist_lookup(user_id: str) -> None:
     try:
         allowed = request_throttle.allow(f"artist-lookup:{user_id}", 240, 60)
@@ -2024,162 +1457,6 @@ def _throttle_artist_lookup(user_id: str) -> None:
         raise HTTPException(status_code=503, detail="Rate-limit service unavailable") from exc
     if not allowed:
         raise HTTPException(status_code=429, detail="Too many artist lookups", headers={"Retry-After": "60"})
-
-
-def _deezer_error_is_quota(error: object) -> bool:
-    if not isinstance(error, dict):
-        return False
-    code = str(error.get("code", "")).lower()
-    error_type = str(error.get("type", "")).lower()
-    message = str(error.get("message", "")).lower()
-    return code in {"4", "quota"} or "quota" in error_type or "quota" in message
-
-
-def _fetch_deezer_artist(name: str) -> dict:
-    try:
-        with httpx.Client(timeout=6.0, headers={"User-Agent": "Vervfy/1.0"}) as client:
-            for attempt in range(2):
-                response = client.get(
-                    "https://api.deezer.com/search/artist",
-                    params={"q": name, "limit": 10},
-                )
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
-                error = payload.get("error")
-                if error is not None:
-                    if attempt == 0 and _deezer_error_is_quota(error):
-                        time.sleep(1)
-                        continue
-                    raise HTTPException(status_code=502, detail="Artist provider lookup failed")
-                results = payload.get("data")
-                if not isinstance(results, list):
-                    raise HTTPException(status_code=502, detail="Invalid artist provider response")
-                artist = _pick_deezer_artist_match(results, name)
-                if not isinstance(artist, dict) or not isinstance(artist.get("id"), int):
-                    raise HTTPException(status_code=404, detail="Artist not found")
-                return artist
-    except HTTPException:
-        raise
-    except (httpx.HTTPError, ValueError, TypeError) as exc:
-        log.warning("Deezer artist lookup failed for %r: %s", name, exc)
-        raise HTTPException(status_code=502, detail="Artist provider lookup failed") from exc
-    raise HTTPException(status_code=502, detail="Artist provider lookup failed")
-
-
-@app.get("/artists/{name}")
-def get_artist(name: str, user=Depends(require_api_user)) -> dict:
-    """Return cached artist data, refreshing it from Deezer every 30 days."""
-    normalized_name = name.strip()
-    if not normalized_name or len(normalized_name) > 200:
-        raise HTTPException(status_code=422, detail="Artist name must be 1 to 200 characters")
-    _throttle_artist_lookup(user["id"])
-    now = datetime.now(timezone.utc)
-    with SessionLocal() as session:
-        artist = session.scalar(
-            select(Artist).where(func.lower(Artist.name) == normalized_name.lower())
-        )
-        cached_result = None
-        if artist and artist.fetched_at:
-            fetched_at = artist.fetched_at
-            if fetched_at.tzinfo is None:
-                fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-            if (
-                fetched_at >= _ARTIST_CACHE_EPOCH
-                and now - fetched_at < timedelta(days=30)
-            ):
-                cached_result = {
-                    "deezer_id": artist.deezer_id,
-                    "name": artist.name,
-                    "picture": artist.picture,
-                    "fans": artist.fans,
-                    "url": f"https://www.deezer.com/artist/{artist.deezer_id}",
-                    "fetched_at": fetched_at.astimezone(timezone.utc).isoformat(),
-                }
-    if cached_result:
-        return cached_result
-
-    result = _fetch_deezer_artist(normalized_name)
-    with SessionLocal() as session:
-        artist = session.scalar(
-            select(Artist).where(func.lower(Artist.name) == normalized_name.lower())
-        )
-        deezer_id = result["id"]
-        if artist and artist.deezer_id != deezer_id:
-            session.delete(artist)
-            session.flush()
-        artist = session.get(Artist, deezer_id)
-        if artist is None:
-            artist = Artist(deezer_id=deezer_id, name=str(result.get("name") or normalized_name))
-            session.add(artist)
-        artist.name = str(result.get("name") or normalized_name)
-        artist.picture = _deezer_portrait_url(result)
-        artist.fans = result.get("nb_fan") if isinstance(result.get("nb_fan"), int) else None
-        artist.fetched_at = now
-        session.commit()
-        return {
-            "deezer_id": artist.deezer_id,
-            "name": artist.name,
-            "picture": artist.picture,
-            "fans": artist.fans,
-            "url": f"https://www.deezer.com/artist/{artist.deezer_id}",
-            "fetched_at": artist.fetched_at.astimezone(timezone.utc).isoformat(),
-        }
-
-
-@app.get("/api/artists/photo")
-def artist_photo(
-    background_tasks: BackgroundTasks,
-    name: str = Query(min_length=1, max_length=200),
-    user=Depends(require_api_user),
-) -> dict:
-    """Compatibility route returning a cached portrait and scheduling cache fills."""
-    _throttle_artist_lookup(user["id"])
-    record = _artist_image_record(name)
-    if _artist_image_is_stale(record):
-        background_tasks.add_task(_lookup_artist_images, [name])
-    return {"picture": record.image_url if record else None, "nb_fan": None}
-
-
-@app.get("/api/artists")
-def list_artist_images(
-    background_tasks: BackgroundTasks,
-    user=Depends(require_api_user),
-) -> dict:
-    """Return cached shared images immediately, then refresh missing/stale names."""
-    tracks = get_library(user["id"]).list_tracks()
-    names = list(dict.fromkeys(
-        name
-        for track in tracks
-        for name in _artist_name_candidates(track.artist)
-        if len(name) <= 200
-    ))
-    records = _cached_artist_images(names)
-    now = datetime.now(timezone.utc)
-    stale_names = [
-        name
-        for name in names
-        if _artist_image_is_stale(records.get(_normalized_artist_name(name)), now)
-    ]
-    if stale_names:
-        background_tasks.add_task(_lookup_artist_images, stale_names)
-    return {
-        "artists": [
-            {
-                "name": name,
-                "image_url": (
-                    record.image_url
-                    if (record := records.get(_normalized_artist_name(name)))
-                    else None
-                ),
-                "lookup_pending": _artist_image_is_stale(
-                    records.get(_normalized_artist_name(name)), now
-                ),
-            }
-            for name in names
-        ]
-    }
 
 
 @app.get("/api/artists/profile")
@@ -2190,36 +1467,27 @@ def artist_profile(
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
     _throttle_artist_lookup(user["id"])
-    own = _library_titles_for_artist(user["id"], name.strip())
-    return {"profile": _lookup_artist_profile(name.strip(), own, language)}
+    return {"profile": _lookup_artist_profile(name.strip(), language)}
+
+
+@app.get("/api/config")
+def public_config() -> dict:
+    """Expose only frontend-safe feature flags."""
+    enabled = os.environ.get("LYRICS_PROVIDER_LRCLIB", "1").strip().lower()
+    return {"lyrics_provider_lrclib": enabled not in {"0", "false", "off", "no"}}
 
 
 @app.get("/api/tracks")
 def list_tracks(user=Depends(require_api_user)) -> dict:
     library = get_library(user["id"])
     tracks = library.list_tracks()
-    cached_images = _cached_artist_images([track.artist for track in tracks])
-    return {
-        "tracks": [
-            _track_payload(
-                track,
-                (
-                    cached_images[_normalized_artist_name(names[0])].image_url
-                    if (names := _artist_name_candidates(track.artist))
-                    and _normalized_artist_name(names[0]) in cached_images
-                    else None
-                ),
-            )
-            for track in tracks
-        ]
-    }
+    return {"tracks": [_track_payload(track) for track in tracks]}
 
 
 @app.post("/api/library/upload")
 @limit_upload_processing
 async def upload_track(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
@@ -2279,14 +1547,12 @@ async def upload_track(
         raise HTTPException(status_code=502, detail=f"Audio storage error: {str(exc)[:200]}") from None
     if track is None:
         raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
-    background_tasks.add_task(_lookup_artist_images, [track.artist])
-    return _track_payload(track, _cached_artist_image_url(track.artist))
+    return _track_payload(track)
 
 
 @app.get("/api/library/upload/{job_id}")
 def upload_status(
     job_id: str,
-    background_tasks: BackgroundTasks,
     user=Depends(require_api_user),
 ) -> dict:
     with tenant_session(user["id"]) as session:
@@ -2306,11 +1572,7 @@ def upload_status(
             payload["track_id"] = job.track_id
             track = get_library(user["id"]).get(job.track_id)
             if track:
-                background_tasks.add_task(_lookup_artist_images, [track.artist])
-                payload["track"] = _track_payload(
-                    track,
-                    _cached_artist_image_url(track.artist),
-                )
+                payload["track"] = _track_payload(track)
         return payload
 
 
@@ -2340,6 +1602,46 @@ def save_track_lyrics(
     return {"custom_lyrics": track.custom_lyrics}
 
 
+def _normalize_track_cover(data: bytes) -> bytes:
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    try:
+        with Image.open(BytesIO(data)) as image:
+            if image.format not in {"JPEG", "PNG", "WEBP"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cover must be a JPEG, PNG, or WebP image",
+                )
+            width, height = image.size
+            if (
+                width <= 0
+                or height <= 0
+                or width > MAX_TRACK_COVER_DIMENSION
+                or height > MAX_TRACK_COVER_DIMENSION
+                or width * height > MAX_TRACK_COVER_PIXELS
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cover dimensions exceed the configured limit",
+                )
+            image.verify()
+        with Image.open(BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=90, optimize=True)
+            return output.getvalue()
+    except HTTPException:
+        raise
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail="Invalid cover image") from exc
+
+
 @app.get("/api/tracks/{track_id}/cover")
 def track_cover(
     track_id: str, size: int = Query(default=512, ge=64, le=1024), user=Depends(require_api_user)
@@ -2352,11 +1654,90 @@ def track_cover(
         content=payload,
         media_type="image/jpeg",
         headers={
-            # Covers are private media and may be backfilled after upload.
-            "Cache-Control": "private, no-cache",
+            "Cache-Control": "private, no-store",
             "Content-Length": str(len(payload)),
         },
     )
+
+
+@app.put("/api/tracks/{track_id}/cover")
+@limit_upload_processing
+async def upload_track_cover(
+    track_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_TRACK_COVER_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Cover upload exceeds the 5 MB size limit",
+                )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid upload size") from None
+
+    data = bytearray()
+    while part := await file.read(64 * 1024):
+        data.extend(part)
+        if len(data) > MAX_TRACK_COVER_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Cover upload exceeds the 5 MB size limit",
+            )
+    try:
+        cover = await run_in_threadpool(_normalize_track_cover, bytes(data))
+    finally:
+        await file.close()
+    track = await run_in_threadpool(
+        get_library(user["id"]).set_user_cover, track_id, cover
+    )
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return {"cover_source": track.cover_source}
+
+
+@app.delete("/api/tracks/{track_id}/cover")
+async def remove_track_cover(
+    track_id: str,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    try:
+        track = await run_in_threadpool(
+            get_library(user["id"]).remove_user_cover, track_id
+        )
+    except audio_store.StorageError as exc:
+        log.exception("audio storage read failed while resetting a cover")
+        raise HTTPException(
+            status_code=502, detail="Audio storage is unavailable"
+        ) from exc
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return {"cover_source": track.cover_source}
+
+
+@app.patch("/api/tracks/{track_id}")
+def update_track_metadata(
+    track_id: str,
+    payload: TrackMetadataUpdate,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    values = {
+        "title": payload.title.strip(),
+        "artist": payload.artist.strip(),
+        "album": payload.album.strip(),
+    }
+    if not all(values.values()):
+        raise HTTPException(status_code=422, detail="Track details cannot be empty")
+    track = get_library(user["id"]).update_metadata(track_id, **values)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    return _track_payload(track)
 
 
 @app.get("/api/tracks/{track_id}/stream")

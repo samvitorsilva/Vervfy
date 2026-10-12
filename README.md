@@ -15,7 +15,7 @@ audio streaming. Next.js is the only user-facing frontend.
 Here's roughly what's in there:
 
 **Library**
-Drag-and-drop uploads (whole folders, where the browser allows it), automatic metadata reading, album art extraction — and if a track has no cover, one gets generated so your library doesn't look empty. You can search, remove tracks, and stream everything straight from the backend. Supported formats include MP3, M4A/MP4, AAC, FLAC, OGG/OGA, Opus, WAV, and WebM audio.
+Drag-and-drop uploads (whole folders, where the browser allows it), metadata and embedded artwork read only from your audio files, user-uploaded cover replacements, and generated placeholders when a file has no art. Track details come from the file tags, with filename parsing as a fallback. Supported formats include MP3, M4A/MP4, AAC, FLAC, OGG/OGA, Opus, WAV, and WebM audio.
 
 The interface supports English and Brazilian Portuguese. It follows the browser language by default, and users can choose a language on the sign-in screen or in account settings.
 
@@ -26,7 +26,7 @@ The basics you'd expect — play/pause, next/previous, seeking, volume, mute —
 Favorite tracks, build playlists, and keep it all sorted per user. Libraries are kept fully separate between accounts.
 
 **Lyrics**
-This ended up being one of the more involved parts. Vervfy checks embedded ID3 lyrics first (plain and synced), then falls back to an online lookup through LRCLIB. Lyrics scroll in sync with playback and highlight the current line. Custom lyrics can be pasted or typed in and are saved to the account.
+Vervfy checks embedded ID3 lyrics first (plain and synced), then can look up lyrics through LRCLIB. Fetched lyrics are cached only in the browser for three days; they are not saved to the account. Set `LYRICS_PROVIDER_LRCLIB=0` to disable external lookups. Custom lyrics can be pasted or typed in and are saved to the account.
 
 **Visualizer**
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
@@ -35,7 +35,7 @@ A Web Audio API–based visualizer that reacts to whatever's currently playing.
 Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is account information only and is not used for sign-in or password recovery. Every user gets their own isolated library.
 
 **Artist info**
-Artist profiles prefer manually checked entries, then use an exact Deezer artist match tied to a title in the user's library before fetching a matching Wikipedia summary. Verified profiles can also link directly to an artist's official website. Portraits use the same catalog/title verification, with a manually verified portrait for the ambiguous artist Dave. The profile shows its source, and artist lookup failures leave the library usable.
+Artist profiles use manually maintained entries or a matching Wikipedia summary. Wikipedia-derived text links to its article and the CC BY-SA 4.0 license, with shortened or adapted text identified. Artist avatars are generated locally from each name; no artist photos or follower counts are fetched.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
@@ -57,7 +57,7 @@ It's built to feel like an app, not a website: responsive on desktop, tablet, an
 ```text
 vervfy/
 ├── auth.py            # accounts, sessions, CSRF, throttling
-├── library.py         # tracks, metadata, artwork, lyrics storage
+├── library.py         # tracks, file-tag metadata, user artwork, lyrics storage
 ├── server.py           # the FastAPI app itself — routes, streaming, uploads
 ├── requirements.txt
 │
@@ -93,6 +93,15 @@ Use a dedicated PostgreSQL `app_runtime` role without `BYPASSRLS` for the
 application's `DATABASE_URL`; run Alembic migrations separately before deploy.
 Profile photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
 
+Before applying an Alembic migration to a live database, create and verify a
+`pg_dump` backup. The cover-source migration labels existing covers `unknown`;
+after deploying it, `scripts/rebuild_covers.py` can recover embedded art from
+stored audio and replace other old covers with placeholders. It is a dry run by
+default; review its summary, then pass `--apply` to write changes. The script
+processes one track at a time and never overwrites a user-uploaded cover.
+
+The public `/credits` page lists external data sources and attribution.
+
 ---
 
 ## Keyboard shortcuts
@@ -122,8 +131,8 @@ Things I'd like to get to eventually:
 
 - [x] Cloud deployment support (Supabase PostgreSQL + Render)
 - [x] Multi-device sync
-- [x] More metadata providers
-- [x] Artist detail view and verified profile links
+- [x] User-owned artwork and file-tag metadata
+- [x] Artist detail view and attributed profile links
 - [x] Responsive desktop, tablet, and mobile layouts
 - [ ] Smarter playlists
 - [ ] Better offline support

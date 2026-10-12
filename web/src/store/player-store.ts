@@ -22,7 +22,7 @@ export interface TrackRecord {
   duration: number;
   coverUrl: string;
   streamUrl: string;
-  artistImageUrl?: string | null;
+  coverSource?: "embedded" | "user" | "placeholder" | "unknown";
   offlineUrl?: string | null;
   offline?: boolean;
   remoteCoverUrl?: string;

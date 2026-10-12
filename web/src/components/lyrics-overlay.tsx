@@ -165,6 +165,74 @@ async function readEmbeddedLyrics(trackId: string, signal: AbortSignal): Promise
 
 type LyricsData = CachedLyrics;
 
+const LYRICS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+const LYRICS_CACHE_PREFIX = "vervfy:lrclib:v1:";
+let lyricsProviderEnabledPromise: Promise<boolean> | null = null;
+
+async function isLrclibEnabled(): Promise<boolean> {
+  if (!lyricsProviderEnabledPromise) {
+    lyricsProviderEnabledPromise = apiFetch("/api/config", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Feature configuration returned HTTP ${response.status}`);
+        const config = (await response.json()) as { lyrics_provider_lrclib?: unknown };
+        return config.lyrics_provider_lrclib !== false;
+      })
+      .catch((error: unknown) => {
+        console.warn("Could not load lyrics provider configuration; using the default enabled state.", error);
+        return true;
+      });
+  }
+  return lyricsProviderEnabledPromise;
+}
+
+function readBrowserLyricsCache(trackId: string): LyricsData | null {
+  try {
+    const raw = window.localStorage.getItem(`${LYRICS_CACHE_PREFIX}${trackId}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as { savedAt?: unknown; lyrics?: unknown };
+    if (
+      typeof cached.savedAt !== "number" ||
+      Date.now() - cached.savedAt > LYRICS_CACHE_TTL_MS ||
+      typeof cached.lyrics !== "object" ||
+      cached.lyrics === null
+    ) {
+      window.localStorage.removeItem(`${LYRICS_CACHE_PREFIX}${trackId}`);
+      return null;
+    }
+    const lyrics = cached.lyrics as LyricsData;
+    if (!["online-synced", "online-plain"].includes(lyrics.source)) return null;
+    if (
+      (lyrics.text !== undefined && typeof lyrics.text !== "string") ||
+      (lyrics.lines !== undefined &&
+        (!Array.isArray(lyrics.lines) ||
+          !lyrics.lines.every(
+            (line) =>
+              typeof line?.time === "number" &&
+              typeof line?.text === "string",
+          )))
+    ) {
+      window.localStorage.removeItem(`${LYRICS_CACHE_PREFIX}${trackId}`);
+      return null;
+    }
+    return lyrics;
+  } catch (error) {
+    console.warn("Could not read the browser lyrics cache.", error);
+    return null;
+  }
+}
+
+function writeBrowserLyricsCache(trackId: string, lyrics: LyricsData): void {
+  if (!["online-synced", "online-plain"].includes(lyrics.source)) return;
+  try {
+    window.localStorage.setItem(
+      `${LYRICS_CACHE_PREFIX}${trackId}`,
+      JSON.stringify({ savedAt: Date.now(), lyrics }),
+    );
+  } catch (error) {
+    console.warn("Could not cache fetched lyrics in this browser.", error);
+  }
+}
+
 function parseLrc(value: string): TimedLine[] {
   const lines: TimedLine[] = [];
   const stamp = /\[(\d{1,2}):(\d{2}(?:[.:]\d{1,3})?)\]/g;
@@ -237,10 +305,7 @@ export function parseLyricsText(value: string, source: string): LyricsData {
 
 export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Promise<LyricsData> {
   if (track.customLyrics?.trim()) return parseLyricsText(track.customLyrics, "custom");
-
-  const leadArtist = track.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
-  const title = cleanTitle(track.title);
-  if (!title || !leadArtist || /^unknown artist$/i.test(leadArtist)) return { source: "none" };
+  if (!(await isLrclibEnabled())) return { source: "disabled" };
 
   let embedded: LyricsData | null = null;
   try {
@@ -249,6 +314,12 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     if (error instanceof DOMException && error.name === "AbortError") throw error;
   }
   if (embedded) return embedded;
+  const cached = readBrowserLyricsCache(track.id);
+  if (cached) return cached;
+
+  const leadArtist = track.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
+  const title = cleanTitle(track.title);
+  if (!title || !leadArtist || /^unknown artist$/i.test(leadArtist)) return { source: "none" };
 
   type LrclibEntry = Record<string, unknown>;
   const leadOf = (value: string) => value.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "";
@@ -277,7 +348,12 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     ...(track.album && !/^unknown album$/i.test(track.album) ? { album_name: track.album } : {}),
     ...(track.duration > 0 ? { duration: String(Math.round(track.duration)) } : {}),
   });
-  const response = await fetch(`https://lrclib.net/api/get?${query}`, { cache: "no-store", signal });
+  const requestOptions: RequestInit = {
+    cache: "no-store",
+    signal,
+    headers: { "Lrclib-Client": "Vervfy/1.0 (https://github.com/samvitorsilva/Verfy)" },
+  };
+  const response = await fetch(`https://lrclib.net/api/get?${query}`, requestOptions);
   let exact: LrclibEntry | null = response.ok ? ((await response.json()) as LrclibEntry) : null;
   if (exact && !(sameSong(exact) && within(exact, durationTolerance))) exact = null;
   if (exact?.instrumental === true) return { source: "none" };
@@ -305,8 +381,7 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     const seen = new Set<unknown>(pool.map((entry) => entry.id));
     for (const search of searches) {
       const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
-        cache: "no-store",
-        signal,
+        ...requestOptions,
       });
       if (!searchResponse.ok) continue;
       const results: unknown = await searchResponse.json();
@@ -324,8 +399,13 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
   if (!candidate) return { source: "none" };
   const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
   const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
-  if (synced && parseLrc(synced).length) return parseLyricsText(synced, "online-synced");
-  return plain ? { source: "online-plain", text: plain } : { source: "none" };
+  const result = synced && parseLrc(synced).length
+    ? parseLyricsText(synced, "online-synced")
+    : plain
+      ? { source: "online-plain", text: plain }
+      : { source: "none" };
+  writeBrowserLyricsCache(track.id, result);
+  return result;
 }
 
 function formatTime(value: number): string {
@@ -619,7 +699,9 @@ export default function LyricsOverlay({
     "custom-synced": "Synced · adjusted",
     "online-synced": "Synced · LRCLIB",
     "online-plain": "Lyrics · LRCLIB",
+    disabled: t("LRCLIB disabled"),
   };
+  const lrclibDisabled = lyrics?.source === "disabled";
 
   return (
     <div className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label={t("Lyrics")}>
@@ -688,7 +770,7 @@ export default function LyricsOverlay({
           ) : lyrics?.text ? (
             <div className="lyrics-plain"><p>{lyrics.text}</p><button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>{t("Sync to audio")}</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>{t("Edit lyrics")}</button></div>
           ) : (
-            <div className="lyrics-empty"><div className="empty-orb" /><h3>{t("No lyrics available")}</h3><p>{t("Vervfy could not find lyrics for this track. Add your own below.")}</p><button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
+            <div className="lyrics-empty"><div className="empty-orb" /><h3>{t(lrclibDisabled ? "Lyrics lookup is disabled." : "No lyrics available")}</h3><p>{t(lrclibDisabled ? "Only your own pasted lyrics are shown." : "Vervfy could not find lyrics for this track. Add your own below.")}</p><button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
           )}
         </div>
       </div>

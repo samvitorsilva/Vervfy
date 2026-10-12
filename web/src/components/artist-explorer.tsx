@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { usePlayerStore, type ListMode, type TrackRecord } from "@/store/player-store";
 import { useLanguage } from "@/lib/i18n";
@@ -11,16 +11,6 @@ interface Artist {
   tracks: TrackRecord[];
   albums: Set<string>;
   duration: number;
-}
-
-interface ArtistPhotoData {
-  picture: string | null;
-  nb_fan: number | null;
-  lookupPending: boolean;
-}
-
-interface ArtistImagesResponse {
-  artists: Array<{ name: string; image_url: string | null; lookup_pending: boolean }>;
 }
 
 export function artistNames(track: TrackRecord): string[] {
@@ -54,6 +44,29 @@ function artistKey(name: string): string {
   return name.toLocaleLowerCase();
 }
 
+function artistInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length > 1) return `${parts[0][0]}${parts.at(-1)?.[0]}`.toLocaleUpperCase();
+  return (parts[0]?.slice(0, 2) || "?").toLocaleUpperCase();
+}
+
+function ArtistAvatar({ name, className }: { name: string; className: string }) {
+  let hash = 2_166_136_261;
+  for (const character of name) {
+    hash = Math.imul(hash ^ character.codePointAt(0)!, 16_777_619);
+  }
+  const hue = (hash >>> 0) % 360;
+  const style = {
+    "--artist-avatar-start": `hsl(${hue} 72% 28%)`,
+    "--artist-avatar-end": `hsl(${(hue + 52) % 360} 76% 36%)`,
+  } as CSSProperties;
+  return (
+    <span className={`${className} artist-avatar`} style={style} role="img" aria-label={name}>
+      {artistInitials(name)}
+    </span>
+  );
+}
+
 export default function ArtistExplorer({
   view,
   search,
@@ -70,16 +83,10 @@ export default function ArtistExplorer({
   const { language, t } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
-  const [photoByArtist, setPhotoByArtist] = useState<Record<string, ArtistPhotoData>>({});
-  const photoByArtistRef = useRef(photoByArtist);
   const [profileByArtist, setProfileByArtist] = useState<
     Record<string, Record<string, unknown> | null>
   >({});
   const [loadedProfiles, setLoadedProfiles] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    photoByArtistRef.current = photoByArtist;
-  }, [photoByArtist]);
 
   const artists = useMemo(() => {
     const map = new Map<string, Artist>();
@@ -120,47 +127,6 @@ export default function ArtistExplorer({
   const artistTracks = currentArtist?.tracks.filter((track) =>
     `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
   ) ?? [];
-
-  useEffect(() => {
-    if (view !== "artists") return;
-    const needsRefresh = artists.some((artist) => {
-      const cached = photoByArtistRef.current[artistKey(artist.name)];
-      return !cached || cached.lookupPending;
-    });
-    if (!needsRefresh) return;
-
-    let cancelled = false;
-    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = async () => {
-      try {
-        const response = await apiFetch("/api/artists");
-        if (!response.ok) throw new Error(`Artist image lookup failed (${response.status})`);
-        const payload = (await response.json()) as ArtistImagesResponse;
-        if (cancelled) return;
-        setPhotoByArtist((current) => {
-          const next = { ...current };
-          for (const artist of payload.artists) {
-            next[artistKey(artist.name)] = {
-              picture: artist.image_url,
-              nb_fan: null,
-              lookupPending: artist.lookup_pending,
-            };
-          }
-          return next;
-        });
-        if (payload.artists.some((artist) => artist.lookup_pending)) {
-          refreshTimer = setTimeout(() => void refresh(), 2500);
-        }
-      } catch (error) {
-        console.warn("Artist images unavailable", error);
-      }
-    };
-    void refresh();
-    return () => {
-      cancelled = true;
-      if (refreshTimer) clearTimeout(refreshTimer);
-    };
-  }, [artists, view]);
 
   useEffect(() => {
     if (!currentArtist) return;
@@ -214,11 +180,6 @@ export default function ArtistExplorer({
     return (
       <div className={`artist-grid${listMode === "list" ? " list-mode" : ""}`}>
         {visibleArtists.map((artist) => {
-          const key = artistKey(artist.name);
-          const artistPhoto = photoByArtist[key];
-          const src = artistPhoto
-            ? artistPhoto.picture
-            : artist.tracks.find((track) => track.artistImageUrl)?.artistImageUrl ?? null;
           return (
             <article
               className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
@@ -231,28 +192,7 @@ export default function ArtistExplorer({
                 aria-label={`${t("Open artist page")}: ${artist.name}`}
                 onClick={() => setView(`artist:${encodeURIComponent(artist.name)}`)}
               >
-                {src ? (
-                  <img
-                    className="artist-card-photo"
-                    src={src}
-                    alt=""
-                    width={128}
-                    height={128}
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    onError={() => {
-                      setPhotoByArtist((current) => {
-                        const data = current[key];
-                        return data?.picture
-                          ? { ...current, [key]: { ...data, picture: null } }
-                          : current;
-                      });
-                    }}
-                  />
-                ) : (
-                  <span className={`artist-card-photo${artistPhoto ? " artist-card-photo-empty" : " artist-card-photo-loading"}`} aria-hidden="true">{artist.name.charAt(0).toLocaleUpperCase()}</span>
-                )}
+                <ArtistAvatar name={artist.name} className="artist-card-photo" />
                 <span className="artist-card-name">{artist.name}</span>
                 <span className="artist-card-count">
                   {artist.tracks.length} {t(artist.tracks.length === 1 ? "song" : "songs")}
@@ -279,24 +219,21 @@ export default function ArtistExplorer({
     return <div className="empty"><div className="empty-orb" /><h3>{t("Artist not found")}</h3><p>{t("This artist no longer has songs in your library.")}</p><button className="btn" type="button" onClick={() => setView("artists")}>{t("Back to artists")}</button></div>;
   }
 
-  const currentArtistKey = artistKey(currentArtist.name);
-  const currentProfileKey = `${currentArtistKey}:${language}`;
+  const currentProfileKey = `${artistKey(currentArtist.name)}:${language}`;
   const loading = !loadedProfiles[currentProfileKey];
   const activeProfile = loading ? null : profileByArtist[currentProfileKey];
-  const currentArtistPhoto = photoByArtist[currentArtistKey];
-  const heroSrc = currentArtistPhoto?.picture;
   const facts = ([
     [t("Genre"), activeProfile?.genre],
     [t("Style"), activeProfile?.style],
     [t("Mood"), activeProfile?.mood],
     [t("Formed"), activeProfile?.formed_year],
     [t("Label"), activeProfile?.label],
-    [t("Followers"), activeProfile?.followers],
-    [t("Popularity"), activeProfile?.popularity],
   ] satisfies Array<[string, unknown]>).filter(
     (entry): entry is [string, unknown] => Boolean(entry[1]),
   );
   const sourceUrl = safeExternalUrl(activeProfile?.source_url);
+  const wikipediaSource =
+    activeProfile?.source === "Wikipedia" || activeProfile?.source === "Wikipédia";
   const websiteUrl = safeExternalUrl(activeProfile?.website);
   const websiteLabel = t(String(activeProfile?.website_label ?? "Official website"));
   const songLabel = t(currentArtist.tracks.length === 1 ? "song" : "songs");
@@ -305,29 +242,7 @@ export default function ArtistExplorer({
   return (
     <div className="artist-page">
       <header className="artist-hero">
-        {heroSrc ? (
-          <img
-            className="artist-photo"
-            src={heroSrc}
-            alt={currentArtist.name}
-            width={320}
-            height={320}
-            loading="lazy"
-            decoding="async"
-            referrerPolicy="no-referrer"
-            onError={() => {
-              const key = artistKey(currentArtist.name);
-              setPhotoByArtist((current) => {
-                const data = current[key];
-                return data
-                  ? { ...current, [key]: { ...data, picture: null } }
-                  : current;
-              });
-            }}
-          />
-        ) : (
-          <span className={`artist-photo${currentArtistPhoto ? " artist-photo-empty" : " artist-photo-loading"}`} aria-hidden="true">{currentArtist.name.charAt(0).toLocaleUpperCase()}</span>
-        )}
+        <ArtistAvatar name={currentArtist.name} className="artist-photo" />
         <div className="artist-hero-meta">
           <div className="artist-kicker">{t("Artist")}</div>
           <h1 className="artist-name">{currentArtist.name}</h1>
@@ -353,10 +268,28 @@ export default function ArtistExplorer({
       </section>
       <section className="artist-info" aria-busy={loading}>
         <h2>{t("About")}</h2>
-        <p className="artist-bio">{loading ? t("Looking up artist details…") : String(activeProfile?.bio ?? t("No verified artist information is available yet."))}</p>
+        <p className="artist-bio">{loading ? t("Looking up artist details…") : String(activeProfile?.bio ?? t("No artist information is available yet."))}</p>
+        {sourceUrl && wikipediaSource ? (
+          <p className="artist-source">
+            <a href={sourceUrl} target="_blank" rel="noopener noreferrer">
+              {t("Source: Wikipedia")}
+            </a>
+            {" · "}
+            <a
+              href="https://creativecommons.org/licenses/by-sa/4.0/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              CC BY-SA 4.0
+            </a>
+            {activeProfile?.source_modified === "true"
+              ? ` · ${t("Shortened or adapted")}`
+              : ""}
+          </p>
+        ) : null}
         {facts.length ? <div className="artist-tags">{facts.map(([label, value]) => <span className="artist-tag" key={label}>{label}: {String(value)}</span>)}</div> : null}
         {websiteUrl ? <a className="artist-website" href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteLabel} ↗</a> : null}
-        {sourceUrl ? <><p className="artist-source">{t("Source")}: {t(String(activeProfile?.source ?? t("Verified artist information")))}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("Source page ↗")}</a></> : null}
+        {sourceUrl && !wikipediaSource ? <><p className="artist-source">{t("Source")}: {t(String(activeProfile?.source ?? t("Artist profile")))}</p><a className="artist-website" href={sourceUrl} target="_blank" rel="noopener noreferrer">{t("Source page ↗")}</a></> : null}
       </section>
       {artistTracks.length ? (
         listMode === "grid" ? (

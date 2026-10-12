@@ -76,12 +76,6 @@ test("login displays JSON authentication errors", async ({ page }) => {
 });
 
 test("tablet and mobile can open the full now-playing screen", async ({ page }) => {
-  await page.route("https://cdn-images.dzcdn.net/**", (route) =>
-    route.fulfill({
-      contentType: "image/svg+xml",
-      body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#8b7fff"/></svg>',
-    }),
-  );
   await page.goto("/login");
   await page.evaluate(() => localStorage.removeItem("vervfy:list-mode"));
   await page.getByLabel("Username").fill("playwright");
@@ -89,7 +83,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
-  await page.locator(".hidden-input").first().setInputFiles({
+  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
     name: "responsive-player.wav",
     mimeType: "audio/wav",
     buffer: makeWav(),
@@ -174,33 +168,30 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await expect(artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" })).toBeVisible();
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
-  const artistPhoto = page.locator(".artist-photo");
+  const artistAvatar = page.locator(".artist-photo");
   await expect(page.locator(".artist-bio")).toHaveText(
     "Vervfy Test Artist is a verified test profile.",
   );
-  await expect(page.locator(".artist-info")).toContainText("Followers: 10");
   await expect(page.locator(".artist-info")).toContainText("Genre: Pop");
-  await expect(page.getByRole("link", { name: "Source page ↗" })).toHaveAttribute(
+  await expect(page.locator(".artist-info")).not.toContainText(/followers|fans/i);
+  await expect(page.locator(".artist-info img")).toHaveCount(0);
+  await expect(artistAvatar).toHaveAttribute("role", "img");
+  await expect(artistAvatar).toHaveAttribute("aria-label", "Vervfy Test Artist");
+  await expect(artistAvatar).toHaveAttribute("style", /--artist-avatar-start: hsl/);
+  await expect(page.getByRole("link", { name: "Source: Wikipedia" })).toHaveAttribute(
     "href",
-    "https://example.com/artist",
+    "https://en.wikipedia.org/wiki/Vervfy_Test_Artist",
   );
-  await expect(artistPhoto).toHaveAttribute(
-    "src",
-    "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
+  await expect(page.getByRole("link", { name: "CC BY-SA 4.0" })).toHaveAttribute(
+    "href",
+    "https://creativecommons.org/licenses/by-sa/4.0/",
   );
-  await expect
-    .poll(() => artistPhoto.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-    .toBeGreaterThan(0);
+  await expect(page.locator(".artist-source")).toContainText("Shortened or adapted");
 
   await page.getByRole("button", { name: "Artists" }).click();
-  const artistCardPhoto = page.locator(".artist-card-photo").first();
-  await expect(artistCardPhoto).toHaveAttribute(
-    "src",
-    "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
-  );
-  await expect
-    .poll(() => artistCardPhoto.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-    .toBeGreaterThan(0);
+  const artistCardAvatar = page.locator(".artist-card-photo").first();
+  await expect(artistCardAvatar).toHaveAttribute("role", "img");
+  await expect(page.locator(".artist-card img")).toHaveCount(0);
 
   await nowPlayingButton.click();
   await page.locator(".mobile-secondary").filter({ hasText: "Lyrics" }).click();
@@ -208,6 +199,92 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await expect(lyricsArtist).toBeVisible();
   await lyricsArtist.click();
   await expect(page.locator(".artist-name")).toHaveText(artistName!);
+});
+
+test("public credits page keeps the nonce CSP and lists attribution", async ({ page }) => {
+  const response = await page.goto("/credits");
+  const csp = response?.headers()["content-security-policy"] ?? "";
+  expect(csp).toContain("script-src 'self' 'nonce-");
+  expect(csp).toContain("img-src 'self' data: blob:");
+  expect(csp).not.toMatch(/img-src[^;]*https:/);
+  await expect(page.getByRole("heading", { name: "Credits and data sources" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Wikipedia" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "CC BY-SA 4.0" })).toHaveAttribute(
+    "href",
+    "https://creativecommons.org/licenses/by-sa/4.0/",
+  );
+  await expect(page.getByRole("link", { name: "LRCLIB" })).toHaveAttribute(
+    "href",
+    "https://lrclib.net/",
+  );
+});
+
+test("disabled LRCLIB lookup makes no external lyrics request", async ({ page }) => {
+  let lrclibRequests = 0;
+  await page.route("**/api/config", (route) =>
+    route.fulfill({ json: { lyrics_provider_lrclib: false } }),
+  );
+  await page.route("https://lrclib.net/**", (route) => {
+    lrclibRequests += 1;
+    return route.abort();
+  });
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
+    name: "lyrics-disabled.wav",
+    mimeType: "audio/wav",
+    buffer: makeWav(),
+  });
+  await expect(page.locator(".card").filter({ hasText: "lyrics-disabled" })).toBeVisible();
+  await page.locator(".card").filter({ hasText: "lyrics-disabled" }).click();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.locator(".now-track-open").click();
+  const player = page.getByRole("dialog", { name: "Now playing" });
+  const lyricsPreview = player.locator(".mobile-lyrics-preview");
+  await expect(lyricsPreview).toContainText("Paste your own lyrics.");
+  await lyricsPreview.click();
+  const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyricsDialog.getByRole("heading", { name: "Lyrics lookup is disabled." })).toBeVisible();
+  expect(lrclibRequests).toBe(0);
+});
+
+test("track cover can be changed and reverted in the library", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
+    name: "cover-flow.wav",
+    mimeType: "audio/wav",
+    buffer: makeWav(),
+  });
+  const track = page.locator(".card").filter({ hasText: "cover-flow" });
+  await expect(track).toBeVisible();
+  await track.getByRole("button", { name: "More options for cover-flow" }).click();
+  await page.getByRole("menuitem", { name: "Change cover" }).click();
+  const coverInput = page.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]');
+  await coverInput.setInputFiles({
+    name: "cover.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.locator(".track-cover-preview")).toHaveAttribute("src", /^blob:/);
+  await page.getByRole("button", { name: "Save cover" }).click();
+  await expect(page.getByRole("dialog", { name: /Cover for/ })).toHaveCount(0);
+
+  await track.getByRole("button", { name: "More options for cover-flow" }).click();
+  await page.getByRole("menuitem", { name: "Change cover" }).click();
+  await page.getByRole("button", { name: "Remove cover" }).click();
+  await expect(page.getByRole("dialog", { name: /Cover for/ })).toHaveCount(0);
 });
 
 test("expanded mobile player shows playback-synced lyric lines", async ({ page }) => {
@@ -228,8 +305,10 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   await page.route("**/api/tracks/responsive-preview-track/stream", (route) =>
     route.fulfill({ contentType: "audio/wav", body: makeWav() }),
   );
-  await page.route("https://lrclib.net/api/get**", (route) =>
-    route.fulfill({
+  let lrclibClientHeader = "";
+  await page.route("https://lrclib.net/api/get**", (route) => {
+    lrclibClientHeader = route.request().headers()["lrclib-client"] ?? "";
+    return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         trackName: track.title,
@@ -238,8 +317,8 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
         syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
         plainLyrics: "First lyric line\nSecond lyric line",
       }),
-    }),
-  );
+    });
+  });
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
@@ -263,6 +342,9 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   });
   const lyricsPreview = player.locator(".mobile-lyrics-preview");
   await expect(lyricsPreview.locator(".lyric-active")).toHaveText("First lyric line");
+  await expect.poll(() => lrclibClientHeader).toBe(
+    "Vervfy/1.0 (https://github.com/samvitorsilva/Verfy)",
+  );
   await page.locator("audio").evaluate(async (audio: HTMLAudioElement) => {
     if (audio.paused) await audio.play();
   });

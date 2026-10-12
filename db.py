@@ -6,12 +6,10 @@ URL in tests without changing application code.
 """
 from __future__ import annotations
 
-from datetime import datetime
 import os
 from sqlalchemy import (
     Boolean,
-    BigInteger,
-    DateTime,
+    CheckConstraint,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -104,7 +102,13 @@ class User(Base):
 
 class TrackRecord(Base):
     __tablename__ = "tracks"
-    __table_args__ = (UniqueConstraint("user_id", "id", name="uq_tracks_user_id_id"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "id", name="uq_tracks_user_id_id"),
+        CheckConstraint(
+            "cover_source IN ('embedded', 'user', 'placeholder', 'unknown')",
+            name="ck_tracks_cover_source",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -113,6 +117,9 @@ class TrackRecord(Base):
     album: Mapped[str] = mapped_column(String(512), nullable=False)
     duration: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     has_cover: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cover_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unknown", server_default="unknown"
+    )
     custom_lyrics: Mapped[str | None] = mapped_column(Text)
     # Legacy rows keep their audio here; new uploads live in Supabase Storage and
     # only ``storage_path`` is stored.  ``deferred`` stops ordinary row loads
@@ -163,22 +170,3 @@ class UploadJob(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
-
-
-class Artist(Base):
-    __tablename__ = "artists"
-    deezer_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    picture: Mapped[str | None] = mapped_column(Text)
-    fans: Mapped[int | None] = mapped_column(BigInteger)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ArtistImageCache(Base):
-    __tablename__ = "artist_image_cache"
-    normalized_name: Mapped[str] = mapped_column(String(200), primary_key=True)
-    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    image_url: Mapped[str | None] = mapped_column(Text)
-    source: Mapped[str] = mapped_column(String(10), nullable=False)
-    looked_up_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

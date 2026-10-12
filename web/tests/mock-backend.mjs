@@ -57,7 +57,8 @@ function trackPayload(id, title) {
     album: "Playwright Test Album",
     duration: 6,
     has_cover: false,
-    cover_url: "",
+    cover_source: "placeholder",
+    cover_url: `/api/tracks/${id}/cover`,
     stream_url: `/api/tracks/${id}/stream`,
     custom_lyrics: null,
   };
@@ -118,6 +119,11 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/config" && request.method === "GET") {
+    json(response, 200, { lyrics_provider_lrclib: true });
+    return;
+  }
+
   if (!isAuthenticated(request)) {
     json(response, 401, { detail: "Not authenticated" });
     return;
@@ -130,45 +136,14 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (url.pathname.startsWith("/artists/") && request.method === "GET") {
-    json(response, 200, {
-      deezer_id: 123,
-      name: decodeURIComponent(url.pathname.slice("/artists/".length)),
-      picture: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
-      fans: 10,
-      url: "https://www.deezer.com/artist/123",
-      fetched_at: "2026-10-03T00:00:00+00:00",
-    });
-    return;
-  }
-
-  if (url.pathname === "/api/artists/photo" && request.method === "GET") {
-    json(response, 200, {
-      picture: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
-      nb_fan: 10,
-    });
-    return;
-  }
-
-  if (url.pathname === "/api/artists" && request.method === "GET") {
-    json(response, 200, {
-      artists: [...new Set(tracks.map((track) => track.artist))].map((name) => ({
-        name,
-        image_url: "https://cdn-images.dzcdn.net/verified-test-photo.jpg",
-        lookup_pending: false,
-      })),
-    });
-    return;
-  }
-
   if (url.pathname === "/api/artists/profile" && request.method === "GET") {
     json(response, 200, {
       profile: {
         bio: "Vervfy Test Artist is a verified test profile.",
         genre: "Pop",
-        followers: "10",
-        source: "Test artist source",
-        source_url: "https://example.com/artist",
+        source: "Wikipedia",
+        source_url: "https://en.wikipedia.org/wiki/Vervfy_Test_Artist",
+        source_modified: "true",
       },
     });
     return;
@@ -176,6 +151,64 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/api/tracks" && request.method === "GET") {
     json(response, 200, { tracks });
+    return;
+  }
+
+  const trackCover = url.pathname.match(/^\/api\/tracks\/([^/]+)\/cover$/);
+  if (trackCover && request.method === "GET") {
+    const track = tracks.find((item) => item.id === decodeURIComponent(trackCover[1]));
+    if (!track) {
+      json(response, 404, { detail: "Track not found" });
+      return;
+    }
+    send(response, 200, '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#8b7fff"/></svg>', {
+      "Content-Type": "image/svg+xml",
+    });
+    return;
+  }
+
+  if (trackCover && ["PUT", "DELETE"].includes(request.method ?? "")) {
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "CSRF verification failed" });
+      return;
+    }
+    const track = tracks.find((item) => item.id === decodeURIComponent(trackCover[1]));
+    if (!track) {
+      json(response, 404, { detail: "Track not found" });
+      return;
+    }
+    if (request.method === "PUT") {
+      let uploadedBytes = 0;
+      for await (const chunk of request) uploadedBytes += chunk.length;
+      if (!uploadedBytes) {
+        json(response, 400, { detail: "Empty image upload" });
+        return;
+      }
+      track.cover_source = "user";
+      track.has_cover = true;
+    } else {
+      track.cover_source = "placeholder";
+      track.has_cover = false;
+    }
+    json(response, 200, { cover_source: track.cover_source });
+    return;
+  }
+
+  const trackDetails = url.pathname.match(/^\/api\/tracks\/([^/]+)$/);
+  if (trackDetails && request.method === "PATCH") {
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "CSRF verification failed" });
+      return;
+    }
+    const track = tracks.find((item) => item.id === decodeURIComponent(trackDetails[1]));
+    if (!track) {
+      json(response, 404, { detail: "Track not found" });
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    Object.assign(track, JSON.parse(Buffer.concat(chunks).toString()));
+    json(response, 200, track);
     return;
   }
 
