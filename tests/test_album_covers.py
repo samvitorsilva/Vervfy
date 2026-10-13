@@ -125,6 +125,33 @@ class AlbumCoverTests(unittest.TestCase):
         )
         self.assertIsNone(album_library.set_album_user_cover("missing", b"cover"))
 
+    def test_custom_track_cover_uses_user_scoped_storage_path(self) -> None:
+        album_library = library.Library("album-user-a")
+        with (
+            patch.object(library.audio_store, "enabled", return_value=True),
+            patch.object(library.audio_store, "upload") as upload,
+        ):
+            track = album_library.set_user_cover("placeholder", b"normalized-jpeg")
+
+        self.assertEqual(track.cover_source, "user")
+        self.assertEqual(track.cover_path, "covers/album-user-a/placeholder.jpg")
+        upload.assert_called_once_with(
+            "covers/album-user-a/placeholder.jpg",
+            b"normalized-jpeg",
+            "image/jpeg",
+        )
+        with self.sessions() as session:
+            row = session.scalar(
+                select(TrackRecord)
+                .options(undefer(TrackRecord.cover_data))
+                .where(
+                    TrackRecord.id == "placeholder",
+                    TrackRecord.user_id == "album-user-a",
+                )
+            )
+        self.assertIsNone(row.cover_data)
+        self.assertEqual(row.cover_path, "covers/album-user-a/placeholder.jpg")
+
 
 if __name__ == "__main__":
     unittest.main()

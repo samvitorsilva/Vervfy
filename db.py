@@ -130,7 +130,8 @@ class TrackRecord(Base):
     audio_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     storage_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    cover_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    cover_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
 
 
 class ArtistPhoto(Base):
@@ -167,6 +168,26 @@ class ArtistImage(Base):
     audiodb_id: Mapped[str | None] = mapped_column(String(32))
     image_url: Mapped[str | None] = mapped_column(Text)
     banner_url: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TrackCoverCache(Base):
+    __tablename__ = "track_cover_cache"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('found', 'not_found')",
+            name="ck_track_cover_cache_status",
+        ),
+    )
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    normalized_artist: Mapped[str] = mapped_column(String(512), nullable=False)
+    normalized_title: Mapped[str] = mapped_column(String(512), nullable=False)
+    audiodb_album_id: Mapped[str | None] = mapped_column(String(32))
+    cover_url: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(10), nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

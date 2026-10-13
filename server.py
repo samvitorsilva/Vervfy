@@ -36,13 +36,16 @@ from database import Base, engine
 import audio_store
 import auth
 from artist_images import (
-    ArtistImageQueue,
+    TheAudioDBQueue,
     artists_from_credit,
+    clean_artist_name,
     is_stale as artist_image_is_stale,
+    is_track_cover_stale,
     normalize_artist_name,
+    track_cover_cache_key,
 )
-from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
-from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
+from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackCoverCache, TrackRecord, UploadJob, User, tenant_session
+from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
 ROOT = Path(__file__).resolve().parent
@@ -214,7 +217,7 @@ app.add_middleware(
 
 user_store = auth.UserStore()
 request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
-artist_image_queue = ArtistImageQueue(request_throttle.allow)
+audiodb_queue = TheAudioDBQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
@@ -984,6 +987,8 @@ def startup() -> None:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
         if "storage_path" not in existing_track_columns:
             connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
+        if "cover_path" not in existing_track_columns:
+            connection.execute(text("ALTER TABLE tracks ADD COLUMN cover_path VARCHAR(600)"))
         if "cover_source" not in existing_track_columns:
             connection.execute(
                 text(
@@ -992,6 +997,10 @@ def startup() -> None:
                 )
             )
             connection.execute(text("UPDATE tracks SET cover_source = 'unknown'"))
+        connection.execute(text(
+            "UPDATE tracks SET cover_source = 'embedded' "
+            "WHERE cover_source = 'unknown' AND has_cover IS TRUE"
+        ))
         existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
         if "position" not in existing_playlist_columns:
             connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
@@ -1010,6 +1019,12 @@ def startup() -> None:
             if audio_data_col is not None and not audio_data_col.get("nullable", True):
                 # Audio moved to Supabase Storage, so the blob column may now be empty.
                 connection.execute(text("ALTER TABLE tracks ALTER COLUMN audio_data DROP NOT NULL"))
+            cover_data_col = next(
+                (c for c in inspect(engine).get_columns("tracks") if c["name"] == "cover_data"),
+                None,
+            )
+            if cover_data_col is not None and not cover_data_col.get("nullable", True):
+                connection.execute(text("ALTER TABLE tracks ALTER COLUMN cover_data DROP NOT NULL"))
             connection.execute(text(
                 "UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0 AND audio_data IS NOT NULL"
             ))
@@ -1685,7 +1700,7 @@ def artist_images(
             else None
         )
         if pending:
-            artist_image_queue.enqueue(name)
+            audiodb_queue.enqueue(name)
         photo_key = _artist_search_key(name)
         cached_value["user_photo_url"] = (
             "/api/artists/photo?name=" + quote(name, safe="")
@@ -1854,6 +1869,77 @@ def list_tracks(user=Depends(require_api_user)) -> dict:
     return {"tracks": [_track_payload(track) for track in tracks]}
 
 
+@app.get("/api/tracks/covers")
+def track_covers(user=Depends(require_api_user)) -> dict:
+    """Return cached TheAudioDB covers and queue stale/missing placeholders."""
+    try:
+        allowed = request_throttle.allow(
+            f"track-cover-lookup:{user['id']}", 120, 60
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Rate-limit service unavailable"
+        ) from exc
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many cover lookups",
+            headers={"Retry-After": "60"},
+        )
+
+    tracks = get_library(user["id"]).list_tracks()
+    normalized: dict[str, list[LibraryTrack]] = {}
+    for track in tracks:
+        if track.has_cover or track.cover_source in {"embedded", "user"}:
+            continue
+        key, normalized_artist, normalized_title = track_cover_cache_key(
+            track.artist, track.title
+        )
+        if (
+            key
+            and normalized_artist not in {"unknown", "unknownartist"}
+            and normalized_title not in {"unknown", "unknowntrack"}
+        ):
+            normalized.setdefault(key, []).append(track)
+
+    if not normalized:
+        return {"covers": {}, "pending": False}
+
+    with SessionLocal() as session:
+        cache_rows = session.scalars(
+            select(TrackCoverCache).where(
+                TrackCoverCache.cache_key.in_(set(normalized))
+            )
+        ).all()
+    cached_by_key = {row.cache_key: row for row in cache_rows}
+
+    results: dict[str, dict[str, object]] = {}
+    pending = False
+    for key, matching_tracks in normalized.items():
+        cached = cached_by_key.get(key)
+        stale = is_track_cover_stale(
+            {
+                "status": cached.status,
+                "fetched_at": cached.fetched_at,
+            }
+            if cached is not None
+            else None
+        )
+        if stale:
+            track = matching_tracks[0]
+            audiodb_queue.enqueue_track(
+                track.artist, track.title, track.album
+            )
+        pending = pending or stale
+        for track in matching_tracks:
+            results[track.id] = {
+                "cover_url": cached.cover_url if cached else None,
+                "status": cached.status if cached else "pending",
+                "pending": stale,
+            }
+    return {"covers": results, "pending": pending}
+
+
 @app.post("/api/library/upload")
 @limit_upload_processing
 async def upload_track(
@@ -1997,7 +2083,7 @@ def _normalize_track_cover(data: bytes) -> bytes:
             image.verify()
         with Image.open(BytesIO(data)) as image:
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            image.thumbnail((600, 600), Image.Resampling.LANCZOS)
             output = BytesIO()
             image.save(output, format="JPEG", quality=90, optimize=True)
             return output.getvalue()
@@ -2019,6 +2105,20 @@ def track_cover(
     library = get_library(user["id"])
     if library.get(track_id) is None:
         raise HTTPException(status_code=404, detail="Track not found")
+    storage_path = library.cover_storage_path(track_id)
+    if storage_path:
+        try:
+            signed_url = audio_store.create_signed_url(storage_path)
+        except audio_store.StorageError as exc:
+            log.exception("track cover storage URL creation failed")
+            raise HTTPException(
+                status_code=502, detail="Cover storage is unavailable"
+            ) from exc
+        return RedirectResponse(
+            signed_url,
+            status_code=307,
+            headers={"Cache-Control": "private, no-store"},
+        )
     payload = library.cover_jpeg(track_id, size)
     return Response(
         content=payload,
@@ -2071,12 +2171,18 @@ async def upload_track_cover(
         await file.close()
     library = get_library(user["id"])
     if apply_to_album:
-        updated_count = await run_in_threadpool(
-            library.set_album_user_cover,
-            track_id,
-            cover,
-            replace_user_covers=replace_user_covers,
-        )
+        try:
+            updated_count = await run_in_threadpool(
+                library.set_album_user_cover,
+                track_id,
+                cover,
+                replace_user_covers=replace_user_covers,
+            )
+        except audio_store.StorageError as exc:
+            log.exception("track cover storage failed")
+            raise HTTPException(
+                status_code=502, detail="Cover storage is unavailable"
+            ) from exc
         if updated_count is None:
             raise HTTPException(status_code=404, detail="Track not found")
         if updated_count == 0:
@@ -2085,7 +2191,13 @@ async def upload_track_cover(
                 detail="This track does not have an album name",
             )
         return {"cover_source": "user", "updated_count": updated_count}
-    track = await run_in_threadpool(library.set_user_cover, track_id, cover)
+    try:
+        track = await run_in_threadpool(library.set_user_cover, track_id, cover)
+    except audio_store.StorageError as exc:
+        log.exception("track cover storage failed")
+        raise HTTPException(
+            status_code=502, detail="Cover storage is unavailable"
+        ) from exc
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return {"cover_source": track.cover_source, "updated_count": 1}

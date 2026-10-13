@@ -39,7 +39,10 @@ function coverUrlsForArtist(artist: Artist): string[] {
   const covers: string[] = [];
   const seen = new Set<string>();
   for (const track of artist.tracks) {
-    if (!track.coverUrl || !["embedded", "user"].includes(track.coverSource ?? "")) continue;
+    if (
+      !track.coverUrl ||
+      (!track.hasCover && !["embedded", "user", "audiodb"].includes(track.coverSource ?? ""))
+    ) continue;
     const album = track.album.trim().toLocaleLowerCase();
     const key = album && !/^unknown album$/i.test(album)
       ? `album:${album}`

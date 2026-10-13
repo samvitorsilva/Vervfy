@@ -136,6 +136,162 @@ class ArtistImageLookupTests(unittest.TestCase):
         record["fetched_at"] = now - timedelta(days=31)
         self.assertTrue(artist_images.is_stale(record, now))
 
+    def test_track_lookup_matches_artist_and_title_then_uses_album_id(self) -> None:
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append((endpoint, params))
+            if endpoint == "searchtrack.php":
+                return {
+                    "track": [
+                        {
+                            "strArtist": "Yellow Tribute",
+                            "strTrack": "Yellow",
+                            "idAlbum": "wrong",
+                        },
+                        {
+                            "strArtist": "Coldplay",
+                            "strTrack": "Yellow",
+                            "idAlbum": "1234",
+                        },
+                    ]
+                }
+            return {
+                "album": [
+                    {
+                        "idAlbum": "1234",
+                        "strArtist": "Coldplay",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/album.jpg",
+                    }
+                ]
+            }
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay feat. Guest", "Yellow", "Ignored Album", request_json
+        )
+        self.assertEqual(result["status"], "found")
+        self.assertEqual(result["audiodb_album_id"], "1234")
+        self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/album.jpg")
+        self.assertEqual(calls[0], ("searchtrack.php", {"s": "Coldplay", "t": "Yellow"}))
+        self.assertEqual(calls[1], ("album.php", {"m": "1234"}))
+
+    def test_track_lookup_falls_back_to_a_matched_artist_and_tagged_album(self) -> None:
+        calls: list[str] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append(endpoint)
+            if endpoint == "searchtrack.php":
+                return {"track": None}
+            self.assertEqual(params, {"s": "Coldplay", "a": "Parachutes"})
+            return {
+                "album": [
+                    {
+                        "idAlbum": "bad",
+                        "strArtist": "Coldplay Tribute",
+                        "strAlbum": "Parachutes",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/wrong.jpg",
+                    },
+                    {
+                        "idAlbum": "2109615",
+                        "strArtist": "Coldplay",
+                        "strAlbum": "Parachutes",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/right.jpg",
+                    },
+                ]
+            }
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "Parachutes", request_json
+        )
+        self.assertEqual(calls, ["searchtrack.php", "searchalbum.php"])
+        self.assertEqual(result["audiodb_album_id"], "2109615")
+        self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/right.jpg")
+
+    def test_track_search_failure_falls_back_without_accepting_wrong_artist(self) -> None:
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            if endpoint == "searchtrack.php":
+                raise httpx.HTTPStatusError(
+                    "premium-only title parameter",
+                    request=httpx.Request("GET", "https://example.test"),
+                    response=httpx.Response(403),
+                )
+            return {"album": [{"strArtist": "Different Artist", "strAlbumThumb": "https://r2.theaudiodb.com/wrong.jpg"}]}
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "Parachutes", request_json
+        )
+        self.assertEqual(result["status"], "not_found")
+        self.assertIsNone(result["cover_url"])
+
+    def test_free_artist_search_can_match_the_requested_track(self) -> None:
+        calls: list[dict[str, str]] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append(params)
+            if "t" in params:
+                raise httpx.HTTPStatusError(
+                    "title search is premium-only",
+                    request=httpx.Request("GET", "https://example.test"),
+                    response=httpx.Response(403),
+                )
+            if endpoint == "searchtrack.php":
+                return {
+                    "track": [
+                        {
+                            "strArtist": "Coldplay",
+                            "strTrack": "Yellow",
+                            "idAlbum": "2109615",
+                        }
+                    ]
+                }
+            return {
+                "album": [
+                    {
+                        "idAlbum": "2109615",
+                        "strArtist": "Coldplay",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/thumb.jpg",
+                    }
+                ]
+            }
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "", request_json
+        )
+        self.assertEqual(calls, [{"s": "Coldplay", "t": "Yellow"}, {"s": "Coldplay"}, {"m": "2109615"}])
+        self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/thumb.jpg")
+
+    def test_artist_and_title_form_the_global_cache_key(self) -> None:
+        first = artist_images.track_cover_cache_key("Beyoncé feat. Guest", "Halo!")
+        second = artist_images.track_cover_cache_key("Beyonce", "Halo")
+        self.assertEqual(first, second)
+
+    def test_shared_queue_throttles_each_external_request(self) -> None:
+        decisions: list[tuple[str, int, int]] = []
+        queue = artist_images.TheAudioDBQueue(
+            lambda key, limit, window: decisions.append((key, limit, window)) or True
+        )
+        original_client = httpx.Client
+        with (
+            patch.object(
+                artist_images.httpx,
+                "Client",
+                side_effect=lambda *args, **kwargs: original_client(
+                    *args,
+                    transport=httpx.MockTransport(
+                        lambda request: httpx.Response(200, json={}, request=request)
+                    ),
+                    **kwargs,
+                ),
+            ),
+            patch.object(artist_images.time, "sleep"),
+        ):
+            queue._request_json("searchtrack.php", {"s": "Artist", "t": "Title"})
+            queue._request_json("album.php", {"m": "42"})
+        self.assertEqual(
+            decisions,
+            [("theaudiodb:global", 25, 60), ("theaudiodb:global", 25, 60)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

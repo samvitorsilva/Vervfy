@@ -210,6 +210,11 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/api/tracks/covers" && request.method === "GET") {
+    json(response, 200, { covers: {}, pending: false });
+    return;
+  }
+
   const trackCover = url.pathname.match(/^\/api\/tracks\/([^/]+)\/cover$/);
   if (trackCover && request.method === "GET") {
     const track = tracks.find((item) => item.id === decodeURIComponent(trackCover[1]));

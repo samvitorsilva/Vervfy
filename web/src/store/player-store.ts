@@ -20,9 +20,10 @@ export interface TrackRecord {
   artist: string;
   album: string;
   duration: number;
+  hasCover?: boolean;
   coverUrl: string;
   streamUrl: string;
-  coverSource?: "embedded" | "user" | "placeholder" | "unknown";
+  coverSource?: "embedded" | "user" | "audiodb" | "placeholder" | "unknown";
   offlineUrl?: string | null;
   offline?: boolean;
   remoteCoverUrl?: string;

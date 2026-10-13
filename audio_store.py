@@ -145,6 +145,11 @@ def object_path(user_id: str, track_id: str, filename: str) -> str:
     return f"{user_id}/{track_id}{ext}"
 
 
+def cover_object_path(user_id: str, track_id: str) -> str:
+    """Stable user-scoped object key for a normalized JPEG track cover."""
+    return f"covers/{user_id}/{track_id}.jpg"
+
+
 def guess_content_type(filename: str) -> str:
     return mimetypes.guess_type(filename)[0] or "audio/mpeg"
 

@@ -143,6 +143,33 @@ function activePreviewLine(lines: NonNullable<CachedLyrics["lines"]>, timeMs: nu
   return active;
 }
 
+const LoadedTrackImage = memo(function LoadedTrackImage({
+  src,
+  className = "",
+}: {
+  src: string;
+  className?: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <img
+      className={`${className} media-image${loaded ? " media-image-ready" : ""}`}
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onLoad={() => setLoaded(true)}
+      onError={(event) => {
+        if (event.currentTarget.src !== new URL(FALLBACK_ART, window.location.href).href) {
+          event.currentTarget.src = FALLBACK_ART;
+        } else {
+          setLoaded(true);
+        }
+      }}
+    />
+  );
+});
+
 const TrackImage = memo(function TrackImage({
   track,
   className = "",
@@ -150,19 +177,8 @@ const TrackImage = memo(function TrackImage({
   track: TrackRecord;
   className?: string;
 }) {
-  return (
-    <img
-      className={className}
-      src={track.coverUrl || FALLBACK_ART}
-      alt=""
-      loading="lazy"
-      onError={(event) => {
-        if (event.currentTarget.src !== new URL(FALLBACK_ART, window.location.href).href) {
-          event.currentTarget.src = FALLBACK_ART;
-        }
-      }}
-    />
-  );
+  const src = track.coverUrl || FALLBACK_ART;
+  return <LoadedTrackImage key={src} src={src} className={className} />;
 });
 
 function PlaybackSeek({
@@ -652,6 +668,8 @@ export default function LibraryApp() {
   const nextRef = useRef<(automatic: boolean) => void>(() => undefined);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineObjectUrlsRef = useRef(new Set<string>());
+  const trackCoverPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
 
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
     setProfile((current) => current ? { ...current, photo_url: photoUrl } : current);
@@ -795,23 +813,90 @@ export default function LibraryApp() {
     const payload = (await response.json()) as { tracks: ServerTrack[] };
     const previousTracks = usePlayerStore.getState().tracks;
     const previousById = new Map(previousTracks.map((track) => [track.id, track]));
-    const nextTracks = payload.tracks.map((track): TrackRecord => ({
-      id: track.id,
-      title: track.title || "Unknown title",
-      artist: track.artist || "Unknown artist",
-      album: track.album || "Unknown album",
-      duration: track.duration || 0,
-      coverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
-      remoteCoverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
-      streamUrl: track.stream_url,
-      coverSource: track.cover_source ?? "unknown",
-      offlineUrl: previousById.get(track.id)?.offlineUrl ?? null,
-      offline: previousById.get(track.id)?.offline ?? false,
-      favorite: previousById.get(track.id)?.favorite ?? false,
-      customLyrics: track.custom_lyrics ?? previousById.get(track.id)?.customLyrics ?? null,
-    }));
+    const nextTracks = payload.tracks.map((track): TrackRecord => {
+      const previous = previousById.get(track.id);
+      const keepCachedImage =
+        previous?.coverSource === "audiodb" &&
+        !track.has_cover &&
+        track.cover_source === "placeholder";
+      const fallback = track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`);
+      return {
+        id: track.id,
+        title: track.title || "Unknown title",
+        artist: track.artist || "Unknown artist",
+        album: track.album || "Unknown album",
+        duration: track.duration || 0,
+        hasCover: track.has_cover,
+        coverUrl: keepCachedImage ? previous.coverUrl : fallback,
+        remoteCoverUrl: keepCachedImage ? previous.remoteCoverUrl : fallback,
+        streamUrl: track.stream_url,
+        coverSource: keepCachedImage ? "audiodb" : track.cover_source ?? "unknown",
+        offlineUrl: previous?.offlineUrl ?? null,
+        offline: previous?.offline ?? false,
+        favorite: previous?.favorite ?? false,
+        customLyrics: track.custom_lyrics ?? previous?.customLyrics ?? null,
+      };
+    });
     setTracks(nextTracks);
+    void refreshTrackCoversRef.current();
   }, [setTracks]);
+
+  const refreshTrackCovers = useCallback(async () => {
+    try {
+      const response = await expectOk(
+        await fetchWithRetry("/api/tracks/covers", { cache: "no-store" }, 2),
+      );
+      const payload = (await response.json()) as {
+        covers: Record<string, { cover_url: string | null; status: string }>;
+        pending: boolean;
+      };
+      const cached = payload.covers ?? {};
+      setTracks(
+        usePlayerStore.getState().tracks.map((track) => {
+          const result = cached[track.id];
+          if (
+            !result?.cover_url ||
+            track.offline ||
+            track.hasCover ||
+            track.coverSource === "embedded" ||
+            track.coverSource === "user"
+          ) {
+            return track;
+          }
+          return {
+            ...track,
+            coverUrl: result.cover_url,
+            remoteCoverUrl: result.cover_url,
+            coverSource: "audiodb",
+          };
+        }),
+      );
+      if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
+      if (payload.pending) {
+        trackCoverPollRef.current = setTimeout(
+          () => void refreshTrackCoversRef.current(),
+          12_000,
+        );
+      }
+    } catch (error) {
+      console.warn("[covers] Could not refresh TheAudioDB track covers.", error);
+      if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
+      trackCoverPollRef.current = setTimeout(
+        () => void refreshTrackCoversRef.current(),
+        30_000,
+      );
+    }
+  }, [setTracks]);
+  useEffect(() => {
+    refreshTrackCoversRef.current = refreshTrackCovers;
+  }, [refreshTrackCovers]);
+
+  useEffect(
+    () => () => {
+      if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
+    },
+    [],
+  );
 
   function openCoverEditor(track: TrackRecord) {
     setTrackMenu(null);
@@ -1590,6 +1675,7 @@ export default function LibraryApp() {
           artist: track.artist || "Unknown artist",
           album: track.album || "Unknown album",
           duration: track.duration || 0,
+          hasCover: track.has_cover,
           coverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
           remoteCoverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
           streamUrl: track.stream_url,
@@ -1650,6 +1736,8 @@ export default function LibraryApp() {
         if (cancelled) return;
         setProfile(account);
         setTracks(nextTracks);
+        void refreshTrackCoversRef.current();
+        void refreshTrackCoversRef.current();
         baselineRef.current = remoteMeta;
         etagRef.current = stateResponse.headers.get("ETag");
         if (

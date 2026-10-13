@@ -23,7 +23,7 @@ AUDIO_EXTENSIONS = {".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".o
 BytesLike = bytes | bytearray | memoryview
 @dataclass
 class Track:
-    id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; cover_source: str; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes
+    id: str; filename: str; title: str; artist: str; album: str; duration: float; has_cover: bool; cover_source: str; custom_lyrics: str | None; audio_data: bytes; cover_data: bytes; cover_path: str | None
 
 
 class UploadQuotaExceeded(RuntimeError):
@@ -165,6 +165,7 @@ class Library:
             row.custom_lyrics,
             bytes(row.audio_data) if include_audio and row.audio_data is not None else b"",
             bytes(row.cover_data) if include_cover and row.cover_data is not None else b"",
+            row.cover_path,
         )
 
     def list_tracks(self):
@@ -179,6 +180,7 @@ class Library:
                 TrackRecord.has_cover,
                 TrackRecord.cover_source,
                 TrackRecord.custom_lyrics,
+                TrackRecord.cover_path,
             ]
             rows = s.scalars(select(TrackRecord).options(load_only(*selected)).where(TrackRecord.user_id == self.user_id)).all()
             return sorted((self._track(r) for r in rows), key=lambda t: (t.artist.lower(), t.title.lower()))
@@ -195,6 +197,7 @@ class Library:
                 TrackRecord.has_cover,
                 TrackRecord.cover_source,
                 TrackRecord.custom_lyrics,
+                TrackRecord.cover_path,
             ]
             if include_audio:
                 selected.append(TrackRecord.audio_data)
@@ -241,7 +244,7 @@ class Library:
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta
         try:
-            cover.thumbnail((1024,1024), Image.LANCZOS)
+            cover.thumbnail((600,600), Image.Resampling.LANCZOS)
             output=io.BytesIO()
             cover.save(output,format="JPEG",quality=90)
         except Exception:
@@ -252,13 +255,22 @@ class Library:
             output=io.BytesIO()
             make_placeholder_cover(title).save(output,format="JPEG",quality=90)
         storage_path=None
+        cover_path=None
         if storage_path_override:
             storage_path = storage_path_override
         elif audio_store.enabled():
             # Audio goes to Supabase Storage; Postgres keeps only the object path.
             storage_path=audio_store.object_path(self.user_id,track_id,safe)
             audio_store.upload(storage_path,data,audio_store.guess_content_type(safe))
-        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,cover_source="embedded" if has_cover else "placeholder",audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=output.getvalue())
+        try:
+            if has_cover and audio_store.enabled():
+                cover_path = audio_store.cover_object_path(self.user_id, track_id)
+                audio_store.upload(cover_path, output.getvalue(), "image/jpeg")
+        except Exception:
+            if storage_path and not storage_path_override:
+                audio_store.delete_quietly(storage_path)
+            raise
+        row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,cover_source="embedded" if has_cover else "placeholder",audio_data=None if storage_path else data,storage_path=storage_path,size_bytes=len(data),cover_data=None if cover_path else output.getvalue(),cover_path=cover_path)
         try:
             with tenant_session(self.user_id) as s:
                 if s.bind.dialect.name == "postgresql":
@@ -290,8 +302,10 @@ class Library:
             try:
                 with tenant_session(self.user_id) as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
             except Exception:still_used=True
-            if not still_used and not storage_path_override:
-                audio_store.delete_quietly(storage_path)
+            if not still_used:
+                if not storage_path_override:
+                    audio_store.delete_quietly(storage_path)
+                audio_store.delete_quietly(cover_path)
             raise
 
     def remove(self, track_id: str):
@@ -300,6 +314,7 @@ class Library:
             row=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
             if not row:return False
             storage_path=row.storage_path
+            cover_path=row.cover_path
             s.delete(row)
             s.query(Favorite).filter_by(user_id=self.user_id,track_id=track_id).delete()
             owned_playlist_ids = s.scalars(select(Playlist.id).where(Playlist.user_id == self.user_id)).all()
@@ -310,7 +325,32 @@ class Library:
                 ).delete(synchronize_session=False)
             s.commit()
         audio_store.delete_quietly(storage_path)
+        audio_store.delete_quietly(cover_path)
         return True
+
+    def cover_storage_path(self, track_id: str) -> str | None:
+        with tenant_session(self.user_id) as s:
+            return s.scalar(
+                select(TrackRecord.cover_path).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            )
+
+    def _delete_unreferenced_cover(self, path: str | None) -> None:
+        if not path:
+            return
+        with tenant_session(self.user_id) as s:
+            referenced = s.scalar(
+                select(TrackRecord.id)
+                .where(
+                    TrackRecord.user_id == self.user_id,
+                    TrackRecord.cover_path == path,
+                )
+                .limit(1)
+            )
+        if not referenced:
+            audio_store.delete_quietly(path)
 
     def cover_bytes(self, track_id: str):
         with tenant_session(self.user_id) as s:
@@ -340,19 +380,30 @@ class Library:
         return output.getvalue()
 
     def set_user_cover(self, track_id: str, cover_data: bytes):
+        stored_path = None
         with tenant_session(self.user_id) as s:
             row = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
             if row is None:
                 return None
-            row.cover_data = cover_data
+            old_path = row.cover_path
+            if audio_store.enabled():
+                stored_path = audio_store.cover_object_path(self.user_id, track_id)
+                audio_store.upload(stored_path, cover_data, "image/jpeg")
+            row.cover_data = None if stored_path else cover_data
+            row.cover_path = stored_path
             row.has_cover = True
             row.cover_source = "user"
             s.commit()
-            return self._track(row)
+            track = self._track(row)
+        if old_path != stored_path:
+            self._delete_unreferenced_cover(old_path)
+        return track
 
     def set_album_user_cover(
         self, track_id: str, cover_data: bytes, *, replace_user_covers: bool = False
     ) -> int | None:
+        old_paths: set[str] = set()
+        new_path = None
         with tenant_session(self.user_id) as s:
             track = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
             if track is None:
@@ -361,6 +412,23 @@ class Library:
                 r"unknown album", track.album.strip(), re.IGNORECASE
             ):
                 return 0
+            if audio_store.enabled():
+                album_key = hashlib.sha256(
+                    f"{track.artist.casefold()}\0{track.album.casefold()}".encode("utf-8")
+                ).hexdigest()[:24]
+                image_key = hashlib.sha256(cover_data).hexdigest()[:16]
+                new_path = (
+                    f"covers/{self.user_id}/albums/{album_key}-{image_key}.jpg"
+                )
+                audio_store.upload(new_path, cover_data, "image/jpeg")
+            old_paths = set(s.scalars(
+                select(TrackRecord.cover_path).where(
+                    TrackRecord.user_id == self.user_id,
+                    TrackRecord.artist == track.artist,
+                    TrackRecord.album == track.album,
+                    TrackRecord.cover_path.is_not(None),
+                )
+            ).all())
             statement = update(TrackRecord).where(
                 TrackRecord.user_id == self.user_id,
                 TrackRecord.artist == track.artist,
@@ -369,12 +437,19 @@ class Library:
             if not replace_user_covers:
                 statement = statement.where(TrackRecord.cover_source != "user")
             result = s.execute(statement.values(
-                cover_data=cover_data,
+                cover_data=None if new_path else cover_data,
+                cover_path=new_path,
                 has_cover=True,
                 cover_source="user",
             ))
             s.commit()
-            return result.rowcount
+            updated_count = result.rowcount
+        for old_path in old_paths:
+            if old_path != new_path:
+                self._delete_unreferenced_cover(old_path)
+        if not updated_count and new_path:
+            audio_store.delete_quietly(new_path)
+        return updated_count
 
     def remove_user_cover(self, track_id: str):
         try:
@@ -405,7 +480,7 @@ class Library:
             if row is None:
                 return None
             if embedded_cover is not None:
-                embedded_cover.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                embedded_cover.thumbnail((600, 600), Image.Resampling.LANCZOS)
                 image = embedded_cover.convert("RGB")
                 row.has_cover = True
                 row.cover_source = "embedded"
@@ -415,9 +490,18 @@ class Library:
                 row.cover_source = "placeholder"
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=90)
-            row.cover_data = output.getvalue()
+            old_path = row.cover_path
+            new_path = None
+            if embedded_cover is not None and audio_store.enabled():
+                new_path = audio_store.cover_object_path(self.user_id, track_id)
+                audio_store.upload(new_path, output.getvalue(), "image/jpeg")
+            row.cover_path = new_path
+            row.cover_data = None if new_path else output.getvalue()
             s.commit()
-            return self._track(row)
+            track = self._track(row)
+        if old_path != new_path:
+            self._delete_unreferenced_cover(old_path)
+        return track
 
     def update_metadata(self, track_id: str, title: str, artist: str, album: str):
         with tenant_session(self.user_id) as s:

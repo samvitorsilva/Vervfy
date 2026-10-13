@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+from datetime import datetime, timezone
 from io import BytesIO
 import os
 import unittest
@@ -39,6 +41,13 @@ class FakeLibrary:
 
     def get(self, track_id: str):
         return self.tracks.get(track_id)
+
+    def list_tracks(self):
+        return list(self.tracks.values())
+
+    def cover_storage_path(self, track_id: str):
+        track = self.get(track_id)
+        return getattr(track, "cover_path", None) if track else None
 
     def set_user_cover(self, track_id: str, cover_data: bytes):
         track = self.get(track_id)
@@ -117,7 +126,7 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertEqual(response.json()["cover_source"], "user")
         with Image.open(BytesIO(self.library.get("owned-track").cover_data)) as result:
             self.assertEqual(result.format, "JPEG")
-            self.assertEqual(result.size, (1024, 683))
+            self.assertEqual(result.size, (600, 400))
             self.assertEqual(result.getexif(), {})
 
     def test_rejects_non_image_oversized_and_unsupported_format(self) -> None:
@@ -170,6 +179,96 @@ class TrackCoverApiTests(unittest.TestCase):
         removed = self.client.delete("/api/tracks/owned-track/cover")
         self.assertEqual(removed.status_code, 200)
         self.assertEqual(removed.json()["cover_source"], "placeholder")
+
+    def test_cover_lookup_queues_missing_and_returns_immediately(self) -> None:
+        with (
+            patch.object(
+                server,
+                "SessionLocal",
+                return_value=nullcontext(SimpleNamespace(
+                    scalars=lambda _query: SimpleNamespace(all=lambda: [])
+                )),
+            ),
+            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
+        ):
+            response = self.client.get("/api/tracks/covers")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["pending"])
+        self.assertIsNone(response.json()["covers"]["owned-track"]["cover_url"])
+        enqueue.assert_called_once_with("Test artist", "Owned track", "Test album")
+
+    def test_embedded_cover_is_not_queued_or_overwritten(self) -> None:
+        track = self.library.get("owned-track")
+        track.has_cover = True
+        track.cover_source = "embedded"
+        with patch.object(server.audiodb_queue, "enqueue_track") as enqueue:
+            response = self.client.get("/api/tracks/covers")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["pending"])
+        self.assertEqual(response.json()["covers"], {})
+        enqueue.assert_not_called()
+
+    def test_storage_cover_redirects_without_proxying_bytes(self) -> None:
+        self.library.get("owned-track").cover_path = (
+            "covers/user-a/owned-track.jpg"
+        )
+        with patch.object(
+            server.audio_store,
+            "create_signed_url",
+            return_value="https://project.supabase.co/storage/v1/object/sign/song.jpg",
+        ) as create_signed_url:
+            response = self.client.get(
+                "/api/tracks/owned-track/cover",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"],
+            "https://project.supabase.co/storage/v1/object/sign/song.jpg",
+        )
+        create_signed_url.assert_called_once_with("covers/user-a/owned-track.jpg")
+
+    def test_cover_lookup_returns_cached_url_for_duplicate_track_keys(self) -> None:
+        second = SimpleNamespace(
+            **{
+                **vars(self.library.get("owned-track")),
+                "id": "owned-track-copy",
+            }
+        )
+        self.library.tracks[second.id] = second
+        cached = SimpleNamespace(
+            cache_key=server.track_cover_cache_key("Test artist", "Owned track")[0],
+            status="found",
+            cover_url="https://r2.theaudiodb.com/cover.jpg",
+            fetched_at=datetime.now(timezone.utc),
+        )
+        with (
+            patch.object(
+                server,
+                "SessionLocal",
+                return_value=nullcontext(SimpleNamespace(
+                    scalars=lambda _query: SimpleNamespace(all=lambda: [cached])
+                )),
+            ),
+            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
+        ):
+            response = self.client.get("/api/tracks/covers")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        covers = response.json()["covers"]
+        self.assertEqual(
+            covers["owned-track"]["cover_url"],
+            "https://r2.theaudiodb.com/cover.jpg",
+        )
+        self.assertEqual(
+            covers["owned-track-copy"]["cover_url"],
+            "https://r2.theaudiodb.com/cover.jpg",
+        )
+        self.assertFalse(response.json()["pending"])
+        enqueue.assert_not_called()
 
 
 if __name__ == "__main__":
