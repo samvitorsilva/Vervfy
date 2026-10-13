@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { usePlayerStore, type ListMode, type TrackRecord } from "@/store/player-store";
@@ -48,15 +48,6 @@ interface CommonsPhotoCredit {
   resized: boolean;
 }
 
-function decodePhotoHeader(value: string | null): string | null {
-  if (!value) return null;
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
 function commonsPhotoCredit(
   value: Record<string, unknown> | null | undefined,
 ): CommonsPhotoCredit | null {
@@ -73,60 +64,6 @@ function commonsPhotoCredit(
     commonsPageUrl,
     resized: value.resized_for_display === true,
   };
-}
-
-const pendingArtistPhotoLoads = new Map<
-  string,
-  Promise<{ blob: Blob; credit: CommonsPhotoCredit | null } | null>
->();
-
-function loadArtistPhoto(
-  photoUrl: string,
-): Promise<{ blob: Blob; credit: CommonsPhotoCredit | null } | null> {
-  const existing = pendingArtistPhotoLoads.get(photoUrl);
-  if (existing) return existing;
-  const request = apiFetch(photoUrl).then(async (response) => {
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    if (response.headers.get("X-Artist-Photo-Source") !== "commons") {
-      return { blob, credit: null };
-    }
-    const author = decodePhotoHeader(response.headers.get("X-Artist-Photo-Author"));
-    const licenseName = decodePhotoHeader(
-      response.headers.get("X-Artist-Photo-License-Name"),
-    );
-    const licenseUrl = safeExternalUrl(
-      decodePhotoHeader(response.headers.get("X-Artist-Photo-License-URL")),
-    );
-    const commonsPageUrl = safeExternalUrl(
-      decodePhotoHeader(response.headers.get("X-Artist-Photo-Commons-Page")),
-    );
-    const credit =
-      author && licenseName && licenseUrl && commonsPageUrl
-        ? {
-            author,
-            licenseName,
-            licenseUrl,
-            commonsPageUrl,
-            resized: response.headers.get("X-Artist-Photo-Resized") === "true",
-          }
-        : null;
-    return { blob, credit };
-  });
-  pendingArtistPhotoLoads.set(photoUrl, request);
-  void request.then(
-    () => {
-      if (pendingArtistPhotoLoads.get(photoUrl) === request) {
-        pendingArtistPhotoLoads.delete(photoUrl);
-      }
-    },
-    () => {
-      if (pendingArtistPhotoLoads.get(photoUrl) === request) {
-        pendingArtistPhotoLoads.delete(photoUrl);
-      }
-    },
-  );
-  return request;
 }
 
 function artistKey(name: string): string {
@@ -149,50 +86,12 @@ function ArtistAvatar({
   name,
   className,
   photoUrl,
-  onCommonsCredit,
 }: {
   name: string;
   className: string;
   photoUrl?: string;
-  onCommonsCredit?: (credit: CommonsPhotoCredit | null) => void;
 }) {
   const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
-  const [loadedPhoto, setLoadedPhoto] = useState<{
-    requestUrl: string;
-    imageUrl: string;
-  } | null>(null);
-  useEffect(() => {
-    if (!photoUrl || !onCommonsCredit) return;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    void loadArtistPhoto(photoUrl)
-      .then((result) => {
-        if (cancelled) return;
-        if (!result) {
-          setFailedPhotoUrl(photoUrl);
-          onCommonsCredit(null);
-          return;
-        }
-        objectUrl = URL.createObjectURL(result.blob);
-        setLoadedPhoto({ requestUrl: photoUrl, imageUrl: objectUrl });
-        onCommonsCredit(result.credit);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        console.warn("Artist photo unavailable", error);
-        setFailedPhotoUrl(photoUrl);
-        onCommonsCredit(null);
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [photoUrl, onCommonsCredit]);
-  const imageSource = onCommonsCredit
-    ? loadedPhoto && loadedPhoto.requestUrl === photoUrl
-      ? loadedPhoto.imageUrl
-      : null
-    : photoUrl;
   let hash = 2_166_136_261;
   for (const character of name) {
     hash = Math.imul(hash ^ character.codePointAt(0)!, 16_777_619);
@@ -202,15 +101,14 @@ function ArtistAvatar({
     "--artist-avatar-start": `hsl(${hue} 72% 28%)`,
     "--artist-avatar-end": `hsl(${(hue + 52) % 360} 76% 36%)`,
   } as CSSProperties;
-  if (photoUrl && imageSource && failedPhotoUrl !== photoUrl) {
+  if (photoUrl && failedPhotoUrl !== photoUrl) {
     return (
       <img
         className={className}
-        src={imageSource}
+        src={photoUrl}
         alt={name}
         onError={() => {
           setFailedPhotoUrl(photoUrl);
-          onCommonsCredit?.(null);
         }}
       />
     );
@@ -266,32 +164,15 @@ function ArtistCardPhoto({
   photoUrl: string;
   onOpen: () => void;
 }) {
-  const [credit, setCredit] = useState<CommonsPhotoCredit | null>(null);
-  const updateCredit = useCallback(
-    (nextCredit: CommonsPhotoCredit | null) => setCredit(nextCredit),
-    [],
-  );
   return (
-    <>
-      <button
-        className="artist-card-photo-open"
-        type="button"
-        aria-label={`${t("Open artist page")}: ${name}`}
-        onClick={onOpen}
-      >
-        <ArtistAvatar
-          name={name}
-          className="artist-card-photo"
-          photoUrl={photoUrl}
-          onCommonsCredit={updateCredit}
-        />
-      </button>
-      <ArtistPhotoCreditLine
-        credit={credit}
-        t={t}
-        className="artist-photo-credit artist-card-photo-credit"
-      />
-    </>
+    <button
+      className="artist-card-photo-open"
+      type="button"
+      aria-label={`${t("Open artist page")}: ${name}`}
+      onClick={onOpen}
+    >
+      <ArtistAvatar name={name} className="artist-card-photo" photoUrl={photoUrl} />
+    </button>
   );
 }
 

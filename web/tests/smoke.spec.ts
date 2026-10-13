@@ -168,16 +168,14 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await expect(artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" })).toBeVisible();
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
-  const artistAvatar = page.locator(".artist-photo");
+  const artistAvatar = page.getByRole("img", { name: "Vervfy Test Artist" });
   await expect(page.locator(".artist-bio")).toHaveText(
     "Vervfy Test Artist is a verified test profile.",
   );
   await expect(page.locator(".artist-info")).toContainText("Genre: Pop");
   await expect(page.locator(".artist-info")).not.toContainText(/followers|fans/i);
   await expect(page.locator(".artist-info img")).toHaveCount(0);
-  await expect(artistAvatar).toHaveAttribute("role", "img");
-  await expect(artistAvatar).toHaveAttribute("aria-label", "Vervfy Test Artist");
-  await expect(artistAvatar).toHaveAttribute("style", /--artist-avatar-start: hsl/);
+  await expect(artistAvatar).toBeVisible();
   await expect(page.getByRole("link", { name: "Source: Wikipedia" })).toHaveAttribute(
     "href",
     "https://en.wikipedia.org/wiki/Vervfy_Test_Artist",
@@ -195,16 +193,9 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
 
   await page.getByRole("button", { name: "Artists" }).click();
   const artistCardAvatar = page.locator(".artist-card-photo").first();
-  await expect(artistCardAvatar).toHaveAttribute("role", "img");
-  await expect(page.locator(".artist-card img")).toHaveCount(0);
+  await expect(artistCardAvatar).toBeVisible();
   const artistCardCredit = page.locator(".artist-card-photo-credit");
-  await expect(artistCardCredit).toContainText("Test Photographer");
-  await expect(
-    artistCardCredit.getByRole("link", { name: "via Wikimedia Commons" }),
-  ).toHaveAttribute(
-    "href",
-    "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
-  );
+  await expect(artistCardCredit).toHaveCount(0);
 
   await nowPlayingButton.click();
   await page.locator(".mobile-secondary").filter({ hasText: "Lyrics" }).click();
