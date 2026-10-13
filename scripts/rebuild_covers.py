@@ -5,14 +5,23 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import sys
 import tempfile
+from pathlib import Path
 
-from PIL import Image
-from sqlalchemy import select
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import audio_store
-from db import SessionLocal, TrackRecord, User, tenant_session
-from library import AudioUnavailableError, Library, _extract_cover, make_placeholder_cover
+from PIL import Image  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
+import audio_store  # noqa: E402
+from db import SessionLocal, TrackRecord, User, tenant_session  # noqa: E402
+from library import (  # noqa: E402
+    AudioUnavailableError,
+    Library,
+    _extract_cover,
+    make_placeholder_cover,
+)
 
 
 def _jpeg_bytes(image: Image.Image) -> bytes:
@@ -44,15 +53,28 @@ def main() -> None:
         action="store_true",
         help="write rebuilt covers (default is a dry run)",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="process at most N tracks (0 = all)",
+    )
     args = parser.parse_args()
+    if args.limit < 0:
+        parser.error("--limit must be 0 or greater")
 
     with SessionLocal() as session:
         user_ids = session.scalars(select(User.id).order_by(User.id)).all()
 
-    processed = embedded = placeholders = updated = 0
+    processed = embedded = placeholders = skipped = updated = 0
+    skipped_ids = []
     for user_id in user_ids:
+        if args.limit and processed >= args.limit:
+            break
         last_id = ""
         while True:
+            if args.limit and processed >= args.limit:
+                break
             with tenant_session(user_id) as session:
                 row = session.execute(
                     select(
@@ -74,8 +96,15 @@ def main() -> None:
             try:
                 audio, audio_filename = Library(user_id).audio_bytes(track_id)
             except AudioUnavailableError:
-                audio, audio_filename = b"", filename
-            image = _embedded_cover(audio_filename or filename, audio) if audio else None
+                audio = b""
+                audio_filename = filename
+            if not audio:
+                skipped += 1
+                skipped_ids.append(track_id)
+                print(f"{track_id}: skipped (audio unavailable or empty)")
+                continue
+
+            image = _embedded_cover(audio_filename or filename, audio)
             source = "embedded" if image is not None else "placeholder"
             if image is None:
                 image = make_placeholder_cover(title)
@@ -103,8 +132,9 @@ def main() -> None:
 
     print(
         f"Processed {processed}; embedded {embedded}; placeholders {placeholders}; "
-        f"written {updated}."
+        f"skipped {skipped}; written {updated}."
     )
+    print(f"Skipped track ids: {', '.join(skipped_ids) if skipped_ids else 'none'}")
     audio_store.close_client()
 
 
