@@ -84,6 +84,13 @@ def _channel_to_artist(part: str) -> str:
 def _parse_filename(filename: str):
     stem = os.path.splitext(os.path.basename(filename))[0]
     stem = re.sub(r"\s*(?:\[[A-Za-z0-9_-]{11}\]|\([A-Za-z0-9_-]{11}\))$", "", stem)
+    underscore_parts = [part.strip() for part in stem.split("_")]
+    if (
+        len(underscore_parts) == 2
+        and all(underscore_parts)
+        and not re.search(r"\s[-–—]\s|[|｜]", stem)
+    ):
+        return _clean_title(underscore_parts[1]), underscore_parts[0]
     stem = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
     if re.search(r"[|｜]", stem):
         title, artist = (part.strip() for part in re.split(r"\s*[|｜]\s*", stem, maxsplit=1))

@@ -6,6 +6,18 @@ from library import _parse_filename
 
 
 class ParseFilenameTests(unittest.TestCase):
+    def test_parses_simple_artist_title_underscore_filename(self) -> None:
+        self.assertEqual(
+            _parse_filename("Coldplay_Yellow.mp3"),
+            ("Yellow", "Coldplay"),
+        )
+
+    def test_underscores_inside_hyphen_delimited_title_become_spaces(self) -> None:
+        self.assertEqual(
+            _parse_filename("Coldplay - Yellow_Submarine.mp3"),
+            ("Yellow Submarine", "Coldplay"),
+        )
+
     def test_strips_trailing_youtube_video_id(self) -> None:
         self.assertEqual(
             _parse_filename("Tauren Wells - Come Home (Live) [lA6QdRXIDSU].mp3"),

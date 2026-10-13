@@ -48,7 +48,9 @@ Embedded artwork is already extracted from MP3 ID3/APIC, FLAC, M4A/MP4, and
 Ogg/Opus during upload. New embedded and user-selected cover images are
 normalized to at most 600x600 JPEG and stored in the private Supabase Storage
 bucket under `covers/<user_id>/...`; the database keeps only the user-scoped
-path. Older covers are already present in `tracks.cover_data`, so the
+path. When tags are absent, a simple `Artist_Title.ext` filename is parsed as
+the artist/title pair, and existing `Artist - Track_Title.ext` names remain
+supported. Older covers are already present in `tracks.cover_data`, so the
 backfill uses those first and reads at most one legacy audio blob at a time
 only when an embedded image is missing from `cover_data`.
 
