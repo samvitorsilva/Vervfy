@@ -162,6 +162,32 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
 
 
 @_wrap_errors
+def create_signed_url(path: str, expires_in: int = 3600) -> str:
+    """Create a direct-to-Storage URL for one object in the private bucket."""
+    _, _, bucket = _settings()
+    client = _client()
+    response = client.post(
+        f"/object/sign/{quote(bucket, safe='')}/{quote(path, safe='/')}",
+        json={"expiresIn": expires_in},
+    )
+    if response.status_code >= 300:
+        raise StorageError(
+            f"signed URL creation failed ({response.status_code}): {response.text[:200]}"
+        )
+    payload = response.json()
+    signed_path = payload.get("signedURL") if isinstance(payload, dict) else None
+    if not isinstance(signed_path, str) or not signed_path:
+        raise StorageError("signed URL creation returned no URL")
+    if signed_path.startswith("https://"):
+        if not signed_path.startswith(_settings()[0] + "/"):
+            raise StorageError("signed URL points outside the configured Supabase project")
+        return signed_path
+    if not signed_path.startswith("/"):
+        signed_path = "/" + signed_path
+    return f"{_settings()[0]}/storage/v1{signed_path}"
+
+
+@_wrap_errors
 def delete(path: str) -> None:
     client = _client()
     resp = client.delete(_object_url(path))

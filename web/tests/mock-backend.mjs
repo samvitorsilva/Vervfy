@@ -28,7 +28,7 @@ for (let index = 0; index < sampleCount; index += 1) {
 let playlists = [];
 let tracks = [];
 let rateLimitedUploads = 1;
-let artistPhotoSource = "commons";
+let artistPhotoSource = "none";
 const artistPhoto = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
   "base64",
@@ -96,7 +96,7 @@ const server = createServer(async (request, response) => {
     playlists = [];
     tracks = [];
     rateLimitedUploads = 1;
-    artistPhotoSource = "commons";
+    artistPhotoSource = "none";
     send(response, 303, "", {
       Location: "/",
       "Set-Cookie": `${testCookie}; Path=/; HttpOnly; SameSite=Lax`,
@@ -151,33 +151,36 @@ const server = createServer(async (request, response) => {
         source_url: "https://en.wikipedia.org/wiki/Vervfy_Test_Artist",
         source_modified: "true",
       },
-      photo: {
-        source: artistPhotoSource,
-        author: "Test Photographer",
-        license_name: "CC BY-SA 4.0",
-        license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
-        commons_page_url: "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
-        resized_for_display: true,
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/artists/images" && request.method === "GET") {
+    json(response, 200, {
+      artists: {
+        vervfytestartist: {
+          audiodb_id: null,
+          image_url: null,
+          banner_url: null,
+          status: "not_found",
+          user_photo_url:
+            artistPhotoSource === "user"
+              ? "/api/artists/photo?name=Vervfy%20Test%20Artist"
+              : null,
+          pending: false,
+        },
       },
     });
     return;
   }
 
   if (url.pathname === "/api/artists/photo" && request.method === "GET") {
+    if (artistPhotoSource !== "user") {
+      json(response, 404, { detail: "No artist photo" });
+      return;
+    }
     send(response, 200, artistPhoto, {
       "Content-Type": "image/png",
-      ...(artistPhotoSource === "commons"
-        ? {
-            "X-Artist-Photo-Source": "commons",
-            "X-Artist-Photo-Author": "Test%20Photographer",
-            "X-Artist-Photo-License-Name": "CC%20BY-SA%204.0",
-            "X-Artist-Photo-License-URL":
-              "https%3A%2F%2Fcreativecommons.org%2Flicenses%2Fby-sa%2F4.0%2F",
-            "X-Artist-Photo-Commons-Page":
-              "https%3A%2F%2Fcommons.wikimedia.org%2Fwiki%2FFile%3AVervfy_Test.jpg",
-            "X-Artist-Photo-Resized": "true",
-          }
-        : {}),
     });
     return;
   }
@@ -196,7 +199,7 @@ const server = createServer(async (request, response) => {
       }
       artistPhotoSource = "user";
     } else {
-      artistPhotoSource = "commons";
+      artistPhotoSource = "none";
     }
     json(response, 200, { photo_url: "/api/artists/photo?name=Vervfy%20Test%20Artist" });
     return;

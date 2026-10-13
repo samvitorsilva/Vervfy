@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-import html
 import json
 import asyncio
 import functools
@@ -18,7 +17,7 @@ import time
 import unicodedata
 import uuid
 from typing import Annotated, Literal
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, urlparse
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -36,7 +35,13 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from db import ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from artist_images import (
+    ArtistImageQueue,
+    artists_from_credit,
+    is_stale as artist_image_is_stale,
+    normalize_artist_name,
+)
+from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -209,6 +214,7 @@ app.add_middleware(
 
 user_store = auth.UserStore()
 request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
+artist_image_queue = ArtistImageQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
@@ -222,16 +228,14 @@ MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
 MAX_TRACK_COVER_DIMENSION = 8192
 MAX_TRACK_COVER_PIXELS = 12_000_000
 MAX_ARTIST_PHOTO_BYTES = 5 * 1024 * 1024
-MAX_COMMONS_PHOTO_BYTES = 3 * 1024 * 1024
 MAX_ARTIST_PHOTO_DIMENSION = 800
 MAX_ARTIST_PROFILE_CACHE_ENTRIES = 1024
-ARTIST_PHOTO_NEGATIVE_CACHE_SECONDS = 30 * 24 * 60 * 60
 CSP_REPORT_ONLY = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com data:; "
-        "img-src 'self' data: blob:; "
+        "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com https://*.supabase.co; "
         "media-src 'self' blob:; "
         "connect-src 'self' https://lrclib.net; "
         "frame-ancestors 'none'"
@@ -239,7 +243,6 @@ CSP_REPORT_ONLY = (
 
 _libraries: dict[str, Library] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
-_artist_commons_photo_cache: dict[str, tuple[float, dict[str, object] | None]] = {}
 
 
 def _artist_search_key(name: str) -> str:
@@ -633,21 +636,6 @@ def _first_sentences(value: object, limit: int = 3) -> str:
     return " ".join(re.split(r"(?<=[.!?])\s+", text)[:limit])
 
 
-def _commons_summary_image_url(summary: dict) -> str | None:
-    for image in (summary.get("originalimage"), summary.get("thumbnail")):
-        source = image.get("source") if isinstance(image, dict) else None
-        if not isinstance(source, str):
-            continue
-        parsed = urlparse(source)
-        if (
-            parsed.scheme == "https"
-            and parsed.hostname == "upload.wikimedia.org"
-            and parsed.path.startswith("/wikipedia/commons/")
-        ):
-            return source
-    return None
-
-
 def _wikipedia_summary_to_profile(
     summary: dict, name: str, language: Literal["en", "pt-BR"] = "en"
 ) -> dict[str, str] | None:
@@ -673,9 +661,6 @@ def _wikipedia_summary_to_profile(
             .get("page", "")
         ),
     }
-    image_url = _commons_summary_image_url(summary)
-    if image_url:
-        profile["commons_image_url"] = image_url
     return profile
 
 
@@ -773,31 +758,13 @@ def _lookup_artist_profile(
     return profile or None
 
 
-def _artist_photos_commons_enabled() -> bool:
-    value = os.environ.get("ARTIST_PHOTOS_COMMONS", "1").strip().lower()
-    return value not in {"0", "false", "off", "no"}
-
-
-def _artist_photos_commons_blocked(name: str) -> bool:
-    blocked = {
-        _artist_search_key(entry.strip())
-        for entry in os.environ.get("ARTIST_PHOTOS_COMMONS_BLOCKLIST", "").split(",")
-        if entry.strip()
-    }
-    return _artist_search_key(name) in blocked
-
-
 def _artist_photo_record(user_id: str, normalized_name: str) -> dict[str, object] | None:
     with tenant_session(user_id) as session:
         row = session.execute(
             select(
                 ArtistPhoto.jpeg_data,
+                ArtistPhoto.storage_path,
                 ArtistPhoto.source,
-                ArtistPhoto.author,
-                ArtistPhoto.license_name,
-                ArtistPhoto.license_url,
-                ArtistPhoto.commons_page_url,
-                ArtistPhoto.resized_for_display,
             ).where(
                 ArtistPhoto.user_id == user_id,
                 ArtistPhoto.normalized_artist_name == normalized_name,
@@ -806,26 +773,19 @@ def _artist_photo_record(user_id: str, normalized_name: str) -> dict[str, object
     if row is None:
         return None
     return {
-        "jpeg_data": bytes(row.jpeg_data),
+        "jpeg_data": bytes(row.jpeg_data) if row.jpeg_data is not None else None,
+        "storage_path": row.storage_path,
         "source": row.source,
-        "author": row.author,
-        "license_name": row.license_name,
-        "license_url": row.license_url,
-        "commons_page_url": row.commons_page_url,
-        "resized_for_display": row.resized_for_display,
     }
 
 
 def _save_artist_photo(
     user_id: str,
     normalized_name: str,
-    jpeg_data: bytes,
+    jpeg_data: bytes | None,
     *,
     source: str,
-    author: str | None = None,
-    license_name: str | None = None,
-    license_url: str | None = None,
-    commons_page_url: str | None = None,
+    storage_path: str | None = None,
     resized_for_display: bool = False,
 ) -> None:
     with tenant_session(user_id) as session:
@@ -841,20 +801,19 @@ def _save_artist_photo(
                 user_id=user_id,
                 normalized_artist_name=normalized_name,
                 jpeg_data=jpeg_data,
+                storage_path=storage_path,
                 source=source,
             )
             session.add(row)
         row.jpeg_data = jpeg_data
+        row.storage_path = storage_path
         row.source = source
-        row.author = author
-        row.license_name = license_name
-        row.license_url = license_url
-        row.commons_page_url = commons_page_url
         row.resized_for_display = resized_for_display
         session.commit()
 
 
-def _delete_artist_photo(user_id: str, normalized_name: str) -> None:
+def _delete_artist_photo(user_id: str, normalized_name: str) -> str | None:
+    storage_path = None
     with tenant_session(user_id) as session:
         row = session.get(
             ArtistPhoto,
@@ -864,8 +823,10 @@ def _delete_artist_photo(user_id: str, normalized_name: str) -> None:
             },
         )
         if row is not None:
+            storage_path = row.storage_path
             session.delete(row)
             session.commit()
+    return storage_path
 
 
 def _normalize_artist_photo(data: bytes) -> tuple[bytes, bool]:
@@ -912,246 +873,15 @@ def _normalize_artist_photo(data: bytes) -> tuple[bytes, bool]:
         raise HTTPException(status_code=400, detail="Invalid artist photo") from exc
 
 
-def _commons_license(metadata: dict) -> tuple[str, str] | None:
-    def value(name: str) -> str:
-        item = metadata.get(name)
-        return str(item.get("value", "") if isinstance(item, dict) else "").strip()
-
-    short_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value("LicenseShortName")))).strip()
-    license_url = html.unescape(re.sub(r"<[^>]*>", "", value("LicenseUrl"))).strip()
-    parsed = urlparse(license_url)
-    name_key = short_name.casefold()
-    supported = {
-        "cc by 2.0": ("CC BY 2.0", "/licenses/by/2.0/"),
-        "cc by 3.0": ("CC BY 3.0", "/licenses/by/3.0/"),
-        "cc by 4.0": ("CC BY 4.0", "/licenses/by/4.0/"),
-        "cc by-sa 2.0": ("CC BY-SA 2.0", "/licenses/by-sa/2.0/"),
-        "cc by-sa 3.0": ("CC BY-SA 3.0", "/licenses/by-sa/3.0/"),
-        "cc by-sa 4.0": ("CC BY-SA 4.0", "/licenses/by-sa/4.0/"),
-        "cc0 1.0": ("CC0 1.0", "/publicdomain/zero/1.0/"),
-        "cc0 1.0 universal": ("CC0 1.0", "/publicdomain/zero/1.0/"),
-    }
-    accepted = supported.get(name_key)
-    if accepted:
-        display_name, expected_path = accepted
-        if (
-            parsed.scheme == "https"
-            and parsed.hostname == "creativecommons.org"
-            and parsed.path.rstrip("/") == expected_path.rstrip("/")
-        ):
-            return display_name, license_url
-        return None
-    if name_key == "public domain":
-        allowed_public_domain_urls = {
-            ("commons.wikimedia.org", "/wiki/Template:PD-old"),
-            ("creativecommons.org", "/publicdomain/zero/1.0"),
-            ("en.wikipedia.org", "/wiki/Public_domain"),
-        }
-        if parsed.scheme == "https" and any(
-            parsed.hostname == host
-            and (
-                parsed.path == path
-                or (host == "commons.wikimedia.org" and parsed.path.startswith(path))
-            )
-            for host, path in allowed_public_domain_urls
-        ):
-            return "Public domain", license_url
-    return None
-
-
-def _commons_metadata_text(value: object) -> str:
-    text = html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _commons_author(metadata: dict) -> str | None:
-    artist = _commons_metadata_text(
-        metadata.get("Artist", {}).get("value")
-        if isinstance(metadata.get("Artist"), dict)
-        else ""
-    )
-    credit = _commons_metadata_text(
-        metadata.get("Credit", {}).get("value")
-        if isinstance(metadata.get("Credit"), dict)
-        else ""
-    )
-    ambiguous = {"", "unknown", "unknown author", "not provided", "anonymous"}
-    if artist.casefold() in ambiguous or credit.casefold() in ambiguous:
-        return None
-    return artist[:1000]
-
-
-def _fetch_commons_artist_photo(
-    name: str, image_url: str
-) -> dict[str, object] | None:
-    parsed = urlparse(image_url)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != "upload.wikimedia.org"
-        or not parsed.path.startswith("/wikipedia/commons/")
-    ):
-        return None
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if "thumb" in path_parts and len(path_parts) >= 2:
-        filename = unquote(path_parts[-2]).strip()
-    else:
-        filename = unquote(path_parts[-1]).strip() if path_parts else ""
-    if not filename or filename in {".", ".."}:
-        return None
-    user_agent = (
-        "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy; "
-        "contact: https://github.com/samvitorsilva)"
-    )
-    try:
-        with httpx.Client(
-            timeout=6.0,
-            headers={"User-Agent": user_agent},
-            follow_redirects=False,
-        ) as client:
-            response = client.get(
-                "https://commons.wikimedia.org/w/api.php",
-                params={
-                    "action": "query",
-                    "prop": "imageinfo",
-                    "iiprop": "url|extmetadata",
-                    "titles": f"File:{filename}",
-                    "format": "json",
-                    "formatversion": "2",
-                },
-            )
-            response.raise_for_status()
-            pages = response.json().get("query", {}).get("pages", [])
-            page = pages[0] if isinstance(pages, list) and pages else None
-            imageinfo = page.get("imageinfo", []) if isinstance(page, dict) else []
-            info = imageinfo[0] if imageinfo else None
-            if not isinstance(info, dict):
-                return None
-            metadata = info.get("extmetadata", {})
-            if not isinstance(metadata, dict):
-                return None
-            license_info = _commons_license(metadata)
-            author = _commons_author(metadata)
-            credit = _commons_metadata_text(
-                metadata.get("Credit", {}).get("value")
-                if isinstance(metadata.get("Credit"), dict)
-                else ""
-            )
-            if not license_info or not author or not credit:
-                return None
-            file_url = info.get("url")
-            file_parsed = urlparse(file_url) if isinstance(file_url, str) else None
-            if (
-                file_parsed is None
-                or file_parsed.scheme != "https"
-                or file_parsed.hostname != "upload.wikimedia.org"
-                or not file_parsed.path.startswith("/wikipedia/commons/")
-            ):
-                return None
-            description_url = info.get("descriptionurl")
-            description_parsed = (
-                urlparse(description_url) if isinstance(description_url, str) else None
-            )
-            if (
-                description_parsed is None
-                or description_parsed.scheme != "https"
-                or description_parsed.hostname != "commons.wikimedia.org"
-                or not description_parsed.path.startswith("/wiki/File:")
-            ):
-                return None
-            with client.stream(
-                "GET", file_url, follow_redirects=False
-            ) as image_response:
-                image_response.raise_for_status()
-                content_length = image_response.headers.get("content-length")
-                if content_length and int(content_length) > MAX_COMMONS_PHOTO_BYTES:
-                    return None
-                payload = bytearray()
-                for chunk in image_response.iter_bytes():
-                    payload.extend(chunk)
-                    if len(payload) > MAX_COMMONS_PHOTO_BYTES:
-                        return None
-            jpeg_data, resized = _normalize_artist_photo(bytes(payload))
-            return {
-                "jpeg_data": jpeg_data,
-                "source": "commons",
-                "author": author,
-                "license_name": license_info[0],
-                "license_url": license_info[1],
-                "commons_page_url": description_url,
-                "resized_for_display": resized,
-            }
-    except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError) as exc:
-        log.warning("Wikimedia Commons artist photo lookup failed for %r: %s", name, exc)
-        return None
-    except HTTPException as exc:
-        log.info("Rejected Wikimedia Commons photo for %r: %s", name, exc.detail)
-        return None
-
-
 def _artist_photo_for_user(
     user_id: str, name: str, *, lookup_throttled: bool = False
 ) -> dict[str, object] | None:
+    del lookup_throttled
     normalized_name = _artist_search_key(name)
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Invalid artist name")
     stored = _artist_photo_record(user_id, normalized_name)
-    if stored and stored["source"] == "user":
-        return stored
-    if (
-        not _artist_photos_commons_enabled()
-        or _artist_photos_commons_blocked(name)
-    ):
-        return None
-    if stored and stored["source"] == "commons":
-        return stored
-
-    now = time.monotonic()
-    cached = _artist_commons_photo_cache.get(normalized_name)
-    if cached and cached[0] > now:
-        photo = cached[1]
-    else:
-        if not lookup_throttled:
-            _throttle_artist_lookup(user_id)
-        for cache_key, (expires_at, _) in list(_artist_commons_photo_cache.items()):
-            if expires_at <= now:
-                del _artist_commons_photo_cache[cache_key]
-        profile = _lookup_artist_profile(name, "en")
-        image_url = profile.get("commons_image_url") if profile else None
-        if not image_url and profile and profile.get("source") in {"Wikipedia", "Wikipédia"}:
-            try:
-                with httpx.Client(
-                    timeout=6.0,
-                    headers={
-                        "User-Agent": (
-                            "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy; "
-                            "contact: https://github.com/samvitorsilva)"
-                        )
-                    },
-                    follow_redirects=True,
-                ) as client:
-                    fetched = _fetch_wikipedia_artist_profile(client, name, "en")
-                    image_url = fetched.get("commons_image_url") if fetched else None
-            except httpx.HTTPError as exc:
-                log.warning("Wikipedia artist image lookup failed for %r: %s", name, exc)
-        photo = (
-            _fetch_commons_artist_photo(name, image_url)
-            if isinstance(image_url, str)
-            else None
-        )
-        if len(_artist_commons_photo_cache) >= MAX_ARTIST_PROFILE_CACHE_ENTRIES:
-            oldest_key = min(
-                _artist_commons_photo_cache,
-                key=lambda cache_key: _artist_commons_photo_cache[cache_key][0],
-            )
-            del _artist_commons_photo_cache[oldest_key]
-        _artist_commons_photo_cache[normalized_name] = (
-            now + ARTIST_PHOTO_NEGATIVE_CACHE_SECONDS,
-            photo,
-        )
-    if photo is None:
-        return None
-    _save_artist_photo(user_id, normalized_name, **photo)
-    return photo
+    return stored if stored and stored["source"] == "user" else None
 
 
 def get_library(user_id: str) -> Library:
@@ -1265,6 +995,13 @@ def startup() -> None:
         existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
         if "position" not in existing_playlist_columns:
             connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
+        existing_artist_photo_columns = {
+            column["name"] for column in inspect(engine).get_columns("artist_photos")
+        }
+        if "storage_path" not in existing_artist_photo_columns:
+            connection.execute(
+                text("ALTER TABLE artist_photos ADD COLUMN storage_path VARCHAR(600)")
+            )
         if engine.dialect.name == "postgresql":
             audio_data_col = next(
                 (c for c in inspect(engine).get_columns("tracks") if c["name"] == "audio_data"),
@@ -1874,29 +1611,90 @@ def artist_profile(
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
     _throttle_artist_lookup(user["id"])
-    profile = _lookup_artist_profile(name.strip(), language)
-    if profile:
-        profile.pop("commons_image_url", None)
-    photo = _artist_photo_for_user(
-        user["id"], name.strip(), lookup_throttled=True
+    return {"profile": _lookup_artist_profile(name.strip(), language)}
+
+
+@app.get("/api/artists/images")
+def artist_images(
+    user=Depends(require_api_user),
+) -> dict:
+    """Return cached global artist images for this user's library and queue misses."""
+    _throttle_artist_lookup(user["id"])
+    artist_names = sorted(
+        {
+            name
+            for track in get_library(user["id"]).list_tracks()
+            for name in artists_from_credit(track.artist)
+        },
+        key=str.casefold,
     )
-    photo_metadata = None
-    if photo:
-        photo_metadata = {
-            key: photo[key]
-            for key in (
-                "source",
-                "author",
-                "license_name",
-                "license_url",
-                "commons_page_url",
-                "resized_for_display",
+    normalized_names = {
+        normalize_artist_name(name): name for name in artist_names
+    }
+    if not normalized_names:
+        return {"artists": {}}
+
+    keys = set(normalized_names)
+    with SessionLocal() as session:
+        image_rows = session.scalars(
+            select(ArtistImage).where(
+                ArtistImage.normalized_artist_name.in_(keys)
             )
-        }
-        photo_metadata["photo_url"] = "/api/artists/photo?name=" + quote(
-            name.strip(), safe=""
+        ).all()
+    cached_by_key = {row.normalized_artist_name: row for row in image_rows}
+
+    user_photo_names = {
+        _artist_search_key(name): name for name in artist_names
+    }
+    with tenant_session(user["id"]) as session:
+        photo_rows = session.execute(
+            select(ArtistPhoto.normalized_artist_name).where(
+                ArtistPhoto.user_id == user["id"],
+                ArtistPhoto.normalized_artist_name.in_(set(user_photo_names)),
+                ArtistPhoto.source == "user",
+            )
+        ).scalars().all()
+    user_photos = set(photo_rows)
+
+    result: dict[str, dict[str, object]] = {}
+    for key, name in normalized_names.items():
+        cached = cached_by_key.get(key)
+        cached_value = (
+            {
+                "audiodb_id": cached.audiodb_id,
+                "image_url": cached.image_url,
+                "banner_url": cached.banner_url,
+                "status": cached.status,
+                "fetched_at": cached.fetched_at.isoformat(),
+            }
+            if cached is not None
+            else {
+                "audiodb_id": None,
+                "image_url": None,
+                "banner_url": None,
+                "status": "pending",
+                "fetched_at": None,
+            }
         )
-    return {"profile": profile, "photo": photo_metadata}
+        pending = artist_image_is_stale(
+            {
+                "status": cached.status,
+                "fetched_at": cached.fetched_at,
+            }
+            if cached is not None
+            else None
+        )
+        if pending:
+            artist_image_queue.enqueue(name)
+        photo_key = _artist_search_key(name)
+        cached_value["user_photo_url"] = (
+            "/api/artists/photo?name=" + quote(name, safe="")
+            if photo_key in user_photos
+            else None
+        )
+        cached_value["pending"] = pending
+        result[key] = cached_value
+    return {"artists": result}
 
 
 @app.get("/api/artists/photo")
@@ -1907,7 +1705,24 @@ def artist_photo(
     photo = _artist_photo_for_user(user["id"], name.strip())
     if not photo:
         raise HTTPException(status_code=404, detail="No artist photo")
-    data = photo["jpeg_data"]
+    storage_path = photo.get("storage_path")
+    if isinstance(storage_path, str) and storage_path:
+        try:
+            signed_url = audio_store.create_signed_url(storage_path)
+        except audio_store.StorageError as exc:
+            log.error("Could not create artist image URL: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Artist image storage is temporarily unavailable",
+            ) from exc
+        return RedirectResponse(
+            signed_url,
+            status_code=307,
+            headers={"Cache-Control": "private, no-store"},
+        )
+    data = photo.get("jpeg_data")
+    if not isinstance(data, bytes):
+        raise HTTPException(status_code=404, detail="No artist photo")
     return Response(
         content=data,
         media_type="image/jpeg",
@@ -1915,27 +1730,6 @@ def artist_photo(
             "Cache-Control": "private, no-store",
             "Content-Length": str(len(data)),
             "X-Artist-Photo-Source": str(photo["source"]),
-            **(
-                {
-                    "X-Artist-Photo-Author": quote(
-                        str(photo["author"]), safe=""
-                    ),
-                    "X-Artist-Photo-License-Name": quote(
-                        str(photo["license_name"]), safe=""
-                    ),
-                    "X-Artist-Photo-License-URL": quote(
-                        str(photo["license_url"]), safe=""
-                    ),
-                    "X-Artist-Photo-Commons-Page": quote(
-                        str(photo["commons_page_url"]), safe=""
-                    ),
-                    "X-Artist-Photo-Resized": str(
-                        bool(photo["resized_for_display"])
-                    ).lower(),
-                }
-                if photo["source"] == "commons"
-                else {}
-            ),
         },
     )
 
@@ -1976,14 +1770,50 @@ async def upload_artist_photo(
         )
     finally:
         await file.close()
-    await run_in_threadpool(
-        _save_artist_photo,
+    existing_photo = await run_in_threadpool(
+        _artist_photo_record,
         user["id"],
         normalized_name,
-        jpeg_data,
-        source="user",
-        resized_for_display=resized,
     )
+    storage_path = None
+    if audio_store.enabled():
+        storage_path = (
+            f"artist-photos/{user['id']}/{normalized_name}/{uuid.uuid4().hex}.jpg"
+        )
+        try:
+            await run_in_threadpool(
+                audio_store.upload,
+                storage_path,
+                jpeg_data,
+                "image/jpeg",
+            )
+        except audio_store.StorageError as exc:
+            log.error("Could not store artist image: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Artist image storage is temporarily unavailable",
+            ) from exc
+    try:
+        await run_in_threadpool(
+            _save_artist_photo,
+            user["id"],
+            normalized_name,
+            None if storage_path else jpeg_data,
+            source="user",
+            storage_path=storage_path,
+            resized_for_display=resized,
+        )
+    except Exception:
+        if storage_path:
+            audio_store.delete_quietly(storage_path)
+        raise
+    old_storage_path = existing_photo.get("storage_path") if existing_photo else None
+    if (
+        storage_path
+        and isinstance(old_storage_path, str)
+        and old_storage_path != storage_path
+    ):
+        audio_store.delete_quietly(old_storage_path)
     return {"photo_url": "/api/artists/photo?name=" + quote(name.strip(), safe="")}
 
 
@@ -1996,8 +1826,17 @@ def remove_artist_photo(
     normalized_name = _artist_search_key(name.strip())
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Invalid artist name")
+    photo = _artist_photo_record(user["id"], normalized_name)
+    if photo and isinstance(photo.get("storage_path"), str):
+        try:
+            audio_store.delete(str(photo["storage_path"]))
+        except audio_store.StorageError as exc:
+            log.error("Could not remove artist image from Storage: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Artist image storage is temporarily unavailable",
+            ) from exc
     _delete_artist_photo(user["id"], normalized_name)
-    _artist_commons_photo_cache.pop(normalized_name, None)
     return {"photo_url": None}
 
 

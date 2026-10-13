@@ -15,11 +15,41 @@ interface Artist {
 
 export function artistNames(track: TrackRecord): string[] {
   const names = track.artist
-    .split(/\s*(?:,|;|\/|\bfeat(?:uring)?\.?|\bft\.?|\bwith\b)\s*/i)
-    .flatMap((part) => part.split(/\s+and\s+/i))
+    .split(/\s*(?:,|;|\/|&|\bfeat(?:uring)?\.?|\bft\.?|\bwith\b)\s*/i)
+    .flatMap((part) =>
+      part
+        .split(/\s+and\s+/i)
+        .flatMap((name) => name.split(/\s+x\s+/)),
+    )
     .map((part) => part.trim())
     .filter(Boolean);
   return [...new Set(names)];
+}
+
+interface ArtistImageInfo {
+  audiodb_id: string | null;
+  image_url: string | null;
+  banner_url: string | null;
+  status: "found" | "not_found" | "pending";
+  user_photo_url: string | null;
+  pending: boolean;
+}
+
+function coverUrlsForArtist(artist: Artist): string[] {
+  const covers: string[] = [];
+  const seen = new Set<string>();
+  for (const track of artist.tracks) {
+    if (!track.coverUrl || !["embedded", "user"].includes(track.coverSource ?? "")) continue;
+    const album = track.album.trim().toLocaleLowerCase();
+    const key = album && !/^unknown album$/i.test(album)
+      ? `album:${album}`
+      : `track:${track.coverUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    covers.push(track.coverUrl);
+    if (covers.length === 4) break;
+  }
+  return covers;
 }
 
 function formatDuration(seconds: number, t: (text: string) => string): string {
@@ -40,34 +70,16 @@ function safeExternalUrl(value: unknown): string | null {
   }
 }
 
-interface CommonsPhotoCredit {
-  author: string;
-  licenseName: string;
-  licenseUrl: string;
-  commonsPageUrl: string;
-  resized: boolean;
-}
-
-function commonsPhotoCredit(
-  value: Record<string, unknown> | null | undefined,
-): CommonsPhotoCredit | null {
-  if (!value || value.source !== "commons") return null;
-  const licenseUrl = safeExternalUrl(value.license_url);
-  const commonsPageUrl = safeExternalUrl(value.commons_page_url);
-  const author = String(value.author ?? "").trim();
-  const licenseName = String(value.license_name ?? "").trim();
-  if (!author || !licenseName || !licenseUrl || !commonsPageUrl) return null;
-  return {
-    author,
-    licenseName,
-    licenseUrl,
-    commonsPageUrl,
-    resized: value.resized_for_display === true,
-  };
-}
-
 function artistKey(name: string): string {
   return name.toLocaleLowerCase();
+}
+
+function artistImageKey(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 function artistInitials(name: string): string {
@@ -82,16 +94,69 @@ function artistPhotoUrl(name: string, version = 0): string {
   return `/api/artists/photo?${query}`;
 }
 
+function smallArtistImageUrl(value: unknown): string | null {
+  const url = safeExternalUrl(value);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/small`;
+    return parsed.href;
+  } catch {
+    return null;
+  }
+}
+
 function ArtistAvatar({
   name,
   className,
-  photoUrl,
+  userPhotoUrl,
+  artistImageUrl,
+  coverUrls,
 }: {
   name: string;
   className: string;
-  photoUrl?: string;
+  userPhotoUrl?: string | null;
+  artistImageUrl?: string | null;
+  coverUrls: string[];
 }) {
-  const [failedPhotoUrl, setFailedPhotoUrl] = useState<string | null>(null);
+  const candidates = useMemo(
+    () =>
+      [
+        ...(userPhotoUrl ? [{ kind: "image" as const, url: userPhotoUrl }] : []),
+        ...(artistImageUrl ? [{ kind: "image" as const, url: artistImageUrl }] : []),
+        ...(coverUrls.length
+          ? [{ kind: "covers" as const, url: coverUrls.join("|") }]
+          : []),
+      ],
+    [artistImageUrl, coverUrls, userPhotoUrl],
+  );
+  const signature = candidates.map((candidate) => `${candidate.kind}:${candidate.url}`).join("\n");
+  const [imageState, setImageState] = useState<{
+    signature: string;
+    failed: string[];
+    loaded: string[];
+  }>({ signature: "", failed: [], loaded: [] });
+  const failed = imageState.signature === signature ? imageState.failed : [];
+  const loaded = imageState.signature === signature ? imageState.loaded : [];
+  const markLoaded = (url: string) => {
+    setImageState((current) => ({
+      signature,
+      failed: current.signature === signature ? current.failed : [],
+      loaded: current.signature === signature && current.loaded.includes(url)
+        ? current.loaded
+        : [...(current.signature === signature ? current.loaded : []), url],
+    }));
+  };
+  const markFailed = (url: string) => {
+    setImageState((current) => ({
+      signature,
+      failed: current.signature === signature && current.failed.includes(url)
+        ? current.failed
+        : [...(current.signature === signature ? current.failed : []), url],
+      loaded: current.signature === signature ? current.loaded : [],
+    }));
+  };
+  const active = candidates.find((candidate) => !failed.includes(candidate.url));
   let hash = 2_166_136_261;
   for (const character of name) {
     hash = Math.imul(hash ^ character.codePointAt(0)!, 16_777_619);
@@ -101,16 +166,43 @@ function ArtistAvatar({
     "--artist-avatar-start": `hsl(${hue} 72% 28%)`,
     "--artist-avatar-end": `hsl(${(hue + 52) % 360} 76% 36%)`,
   } as CSSProperties;
-  if (photoUrl && failedPhotoUrl !== photoUrl) {
+  if (active?.kind === "image") {
     return (
       <img
-        className={className}
-        src={photoUrl}
+        className={`${className} artist-avatar-image${loaded.includes(active.url) ? " is-loaded" : ""}`}
+        src={active.url}
         alt={name}
-        onError={() => {
-          setFailedPhotoUrl(photoUrl);
-        }}
+        loading="lazy"
+        decoding="async"
+        onLoad={() => markLoaded(active.url)}
+        onError={() => markFailed(active.url)}
       />
+    );
+  }
+  if (active?.kind === "covers") {
+    const covers = active.url.split("|");
+    const mosaicClass = covers.length > 1
+      ? ` artist-avatar-mosaic artist-avatar-mosaic-${covers.length}`
+      : "";
+    return (
+      <span
+        className={`${className} artist-avatar-covers${mosaicClass}`}
+        role="img"
+        aria-label={name}
+      >
+        {covers.slice(0, 4).map((url) => (
+          <img
+            className={`artist-avatar-image${loaded.includes(url) ? " is-loaded" : ""}`}
+            src={url}
+            alt=""
+            key={url}
+            loading="lazy"
+            decoding="async"
+            onLoad={() => markLoaded(url)}
+            onError={() => markFailed(active.url)}
+          />
+        ))}
+      </span>
     );
   }
   return (
@@ -120,48 +212,19 @@ function ArtistAvatar({
   );
 }
 
-function ArtistPhotoCreditLine({
-  credit,
-  t,
-  className,
-}: {
-  credit: CommonsPhotoCredit | null;
-  t: (text: string) => string;
-  className: string;
-}) {
-  if (!credit) return null;
-  return (
-    <span className={className}>
-      {credit.author} ·{" "}
-      <a href={credit.licenseUrl} target="_blank" rel="noopener noreferrer">
-        {credit.licenseName}
-      </a>
-      {" · "}
-      <a href={credit.commonsPageUrl} target="_blank" rel="noopener noreferrer">
-        {t("via Wikimedia Commons")}
-      </a>
-      {credit.resized ? ` · ${t("Resized for display")}` : ""}
-      {" · "}
-      <a
-        href="https://github.com/samvitorsilva/Verfy/issues"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        {t("Report this photo")}
-      </a>
-    </span>
-  );
-}
-
 function ArtistCardPhoto({
   name,
   t,
-  photoUrl,
+  userPhotoUrl,
+  artistImageUrl,
+  coverUrls,
   onOpen,
 }: {
   name: string;
   t: (text: string) => string;
-  photoUrl: string;
+  userPhotoUrl?: string | null;
+  artistImageUrl?: string | null;
+  coverUrls: string[];
   onOpen: () => void;
 }) {
   return (
@@ -171,7 +234,13 @@ function ArtistCardPhoto({
       aria-label={`${t("Open artist page")}: ${name}`}
       onClick={onOpen}
     >
-      <ArtistAvatar name={name} className="artist-card-photo" photoUrl={photoUrl} />
+      <ArtistAvatar
+        name={name}
+        className="artist-card-photo"
+        userPhotoUrl={userPhotoUrl}
+        artistImageUrl={artistImageUrl}
+        coverUrls={coverUrls}
+      />
     </button>
   );
 }
@@ -196,6 +265,9 @@ export default function ArtistExplorer({
     Record<string, Record<string, unknown> | null>
   >({});
   const [loadedProfiles, setLoadedProfiles] = useState<Record<string, boolean>>({});
+  const [artistImageByKey, setArtistImageByKey] = useState<
+    Record<string, ArtistImageInfo>
+  >({});
   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -245,6 +317,45 @@ export default function ArtistExplorer({
     `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
   ) ?? [];
 
+  const shouldLoadArtistImages = view === "artists" || view.startsWith("artist:");
+  useEffect(() => {
+    if (!shouldLoadArtistImages) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | null = null;
+    const loadImages = async () => {
+      controller = new AbortController();
+      const timeout = setTimeout(() => controller?.abort(), 10_000);
+      try {
+        const response = await apiFetch("/api/artists/images", {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Artist image lookup failed (${response.status})`);
+        const payload = (await response.json()) as {
+          artists?: Record<string, ArtistImageInfo>;
+        };
+        if (cancelled) return;
+        const nextImages = payload.artists ?? {};
+        setArtistImageByKey((current) => ({ ...current, ...nextImages }));
+        if (Object.values(nextImages).some((item) => item.pending)) {
+          retryTimer = setTimeout(() => void loadImages(), 5_000);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Artist images unavailable", error);
+        retryTimer = setTimeout(() => void loadImages(), 15_000);
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+    void loadImages();
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [shouldLoadArtistImages]);
+
   useEffect(() => {
     if (!currentArtist) return;
     const key = `${artistKey(currentArtist.name)}:${language}`;
@@ -261,17 +372,13 @@ export default function ArtistExplorer({
           signal: activeController.signal,
         });
         if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
-        const {
-          profile: nextProfile,
-          photo: nextPhoto,
-        } = (await response.json()) as {
+        const { profile: nextProfile } = (await response.json()) as {
           profile: Record<string, unknown> | null;
-          photo?: Record<string, unknown> | null;
         };
         if (cancelled) return;
         setProfileByArtist((current) => ({
           ...current,
-          [key]: { ...(nextProfile ?? {}), artist_photo: nextPhoto ?? null },
+          [key]: nextProfile ?? null,
         }));
         setLoadedProfiles((current) => ({ ...current, [key]: true }));
       } catch (error) {
@@ -306,6 +413,7 @@ export default function ArtistExplorer({
         {visibleArtists.map((artist) => {
           const openArtist = () =>
             setView(`artist:${encodeURIComponent(artist.name)}`);
+          const imageInfo = artistImageByKey[artistImageKey(artist.name)];
           return (
             <article
               className={`artist-card${listMode === "list" ? " list-mode" : ""}`}
@@ -315,7 +423,13 @@ export default function ArtistExplorer({
               <ArtistCardPhoto
                 name={artist.name}
                 t={t}
-                photoUrl={artistPhotoUrl(artist.name)}
+                userPhotoUrl={
+                  imageInfo?.user_photo_url
+                    ? artistPhotoUrl(artist.name, photoVersion)
+                    : null
+                }
+                artistImageUrl={smallArtistImageUrl(imageInfo?.image_url)}
+                coverUrls={coverUrlsForArtist(artist)}
                 onOpen={openArtist}
               />
               <button
@@ -353,9 +467,12 @@ export default function ArtistExplorer({
   const artistName = currentArtist.name;
   const loading = !loadedProfiles[currentProfileKey];
   const activeProfile = loading ? null : profileByArtist[currentProfileKey];
-  const artistPhoto = activeProfile?.artist_photo as Record<string, unknown> | null | undefined;
-  const photoUrl = artistPhotoUrl(currentArtist.name, photoVersion);
-  const photoCredit = commonsPhotoCredit(artistPhoto);
+  const imageInfo = artistImageByKey[artistImageKey(currentArtist.name)];
+  const userPhotoUrl = imageInfo?.user_photo_url
+    ? artistPhotoUrl(currentArtist.name, photoVersion)
+    : null;
+  const audioDbPhotoUrl = safeExternalUrl(imageInfo?.image_url);
+  const artistCovers = coverUrlsForArtist(currentArtist);
   const facts = ([
     [t("Genre"), activeProfile?.genre],
     [t("Style"), activeProfile?.style],
@@ -382,11 +499,6 @@ export default function ArtistExplorer({
     setPhotoEditorOpen(false);
   }
 
-  function reloadArtistPhotoProfile() {
-    setPhotoVersion((version) => version + 1);
-    setLoadedProfiles((current) => ({ ...current, [currentProfileKey]: false }));
-  }
-
   async function saveArtistPhoto() {
     if (!photoFile) {
       setPhotoError(t("Choose an artist photo."));
@@ -410,7 +522,21 @@ export default function ArtistExplorer({
         throw new Error(payload?.detail ?? t("Could not update artist photo."));
       }
       closePhotoEditor();
-      reloadArtistPhotoProfile();
+      const photoUrl = artistPhotoUrl(artistName, photoVersion + 1);
+      setPhotoVersion((version) => version + 1);
+      setArtistImageByKey((current) => ({
+        ...current,
+        [artistImageKey(artistName)]: {
+          ...(current[artistImageKey(artistName)] ?? {
+            audiodb_id: null,
+            image_url: null,
+            banner_url: null,
+            status: "pending",
+            pending: true,
+          }),
+          user_photo_url: photoUrl,
+        },
+      }));
     } catch (error) {
       setPhotoError(error instanceof Error ? error.message : t("Could not update artist photo."));
     } finally {
@@ -434,7 +560,20 @@ export default function ArtistExplorer({
           | null;
         throw new Error(payload?.detail ?? t("Could not remove artist photo."));
       }
-      reloadArtistPhotoProfile();
+      setPhotoVersion((version) => version + 1);
+      setArtistImageByKey((current) => ({
+        ...current,
+        [artistImageKey(artistName)]: {
+          ...(current[artistImageKey(artistName)] ?? {
+            audiodb_id: null,
+            image_url: null,
+            banner_url: null,
+            status: "pending",
+            pending: true,
+          }),
+          user_photo_url: null,
+        },
+      }));
     } catch (error) {
       setPhotoError(error instanceof Error ? error.message : t("Could not remove artist photo."));
     } finally {
@@ -449,17 +588,10 @@ export default function ArtistExplorer({
           <ArtistAvatar
             name={currentArtist.name}
             className="artist-photo"
-            photoUrl={photoUrl}
+            userPhotoUrl={photoPreview ?? userPhotoUrl}
+            artistImageUrl={audioDbPhotoUrl}
+            coverUrls={artistCovers}
           />
-          {photoCredit ? (
-            <figcaption>
-              <ArtistPhotoCreditLine
-                credit={photoCredit}
-                t={t}
-                className="artist-photo-credit"
-              />
-            </figcaption>
-          ) : null}
         </figure>
         <div className="artist-hero-meta">
           <div className="artist-kicker">{t("Artist")}</div>
@@ -486,9 +618,9 @@ export default function ArtistExplorer({
                 setPhotoEditorOpen(true);
               }}
             >
-              {t("Change photo")}
+              {t("Change image")}
             </button>
-            {artistPhoto?.source === "user" ? (
+            {userPhotoUrl ? (
               <button
                 className="btn btn-danger"
                 type="button"
@@ -575,7 +707,9 @@ export default function ArtistExplorer({
             <ArtistAvatar
               name={currentArtist.name}
               className="artist-photo-preview"
-              photoUrl={photoPreview ?? photoUrl}
+              userPhotoUrl={photoPreview ?? userPhotoUrl}
+              artistImageUrl={audioDbPhotoUrl}
+              coverUrls={artistCovers}
             />
             <p className="track-editor-help">{t("JPEG, PNG, or WebP; up to 5 MB.")}</p>
             <input

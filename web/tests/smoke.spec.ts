@@ -184,19 +184,16 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     "href",
     "https://creativecommons.org/licenses/by-sa/4.0/",
   );
-  await expect(page.getByText(/Artist photos may be uploaded by you/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Wikimedia Commons" })).toHaveAttribute(
+  await expect(page.getByText(/Artist image URLs and IDs are supplied by TheAudioDB/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "TheAudioDB" })).toHaveAttribute(
     "href",
-    "https://commons.wikimedia.org/",
+    "https://www.theaudiodb.com/",
   );
   await expect(page.locator(".artist-source")).toContainText("Shortened or adapted");
 
   await page.getByRole("button", { name: "Artists" }).click();
   const artistCardAvatar = page.locator(".artist-card-photo").first();
   await expect(artistCardAvatar).toBeVisible();
-  const artistCardCredit = page.locator(".artist-card-photo-credit");
-  await expect(artistCardCredit).toHaveCount(0);
-
   await nowPlayingButton.click();
   await page.locator(".mobile-secondary").filter({ hasText: "Lyrics" }).click();
   const lyricsArtist = page.locator(".lyrics-meta .artist-link").first();
@@ -210,7 +207,7 @@ test("public credits page keeps the nonce CSP and lists attribution", async ({ p
   const csp = response?.headers()["content-security-policy"] ?? "";
   expect(csp).toContain("script-src 'self' 'nonce-");
   expect(csp).toContain("img-src 'self' data: blob:");
-  expect(csp).not.toMatch(/img-src[^;]*https:/);
+  expect(csp).toContain("https://*.theaudiodb.com");
   await expect(page.getByRole("heading", { name: "Credits and data sources" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Wikipedia" })).toBeVisible();
   await expect(page.getByRole("link", { name: "CC BY-SA 4.0" })).toHaveAttribute(
@@ -291,7 +288,7 @@ test("track cover can be changed and reverted in the library", async ({ page }) 
   await expect(page.getByRole("dialog", { name: /Cover for/ })).toHaveCount(0);
 });
 
-test("artist photo editor previews and saves an uploaded photo with Commons credit", async ({
+test("artist image editor previews and saves an uploaded photo", async ({
   page,
 }) => {
   test.skip(
@@ -313,15 +310,7 @@ test("artist photo editor previews and saves an uploaded photo with Commons cred
   await page.locator('.rail-btn[data-view="artists"]').click();
   await page.getByRole("button", { name: "Open artist page: Vervfy Test Artist" }).click();
   await expect(page.getByRole("heading", { name: "Vervfy Test Artist" })).toBeVisible();
-  const credit = page.locator(".artist-photo-credit");
-  await expect(credit).toContainText("Test Photographer");
-  await expect(credit).toContainText("CC BY-SA 4.0");
-  await expect(credit.getByRole("link", { name: "via Wikimedia Commons" })).toHaveAttribute(
-    "href",
-    "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
-  );
-
-  await page.getByRole("button", { name: "Change photo" }).click();
+  await page.getByRole("button", { name: "Change image" }).click();
   const editor = page.getByRole("dialog", { name: /Photo for Vervfy Test Artist/ });
   await expect(editor).toBeVisible();
   await editor.locator('input[type="file"]').setInputFiles({

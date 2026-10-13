@@ -142,7 +142,8 @@ class ArtistPhoto(Base):
         ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     normalized_artist_name: Mapped[str] = mapped_column(String(200), primary_key=True)
-    jpeg_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    jpeg_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    storage_path: Mapped[str | None] = mapped_column(String(600))
     source: Mapped[str] = mapped_column(String(10), nullable=False)
     author: Mapped[str | None] = mapped_column(Text)
     license_name: Mapped[str | None] = mapped_column(String(100))
@@ -153,6 +154,22 @@ class ArtistPhoto(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ArtistImage(Base):
+    __tablename__ = "artist_images"
+    __table_args__ = (
+        CheckConstraint("status IN ('found', 'not_found')", name="ck_artist_images_status"),
+    )
+
+    normalized_artist_name: Mapped[str] = mapped_column(String(200), primary_key=True)
+    audiodb_id: Mapped[str | None] = mapped_column(String(32))
+    image_url: Mapped[str | None] = mapped_column(Text)
+    banner_url: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

@@ -19,7 +19,6 @@ export default function CreditsPage() {
         <section className="credits-source">
           <h2>{t("Artist biographies")}</h2>
           <p>{t("Wikipedia text is shortened or adapted and linked to its article.")}</p>
-          <p>{t("Artist photos may be uploaded by you or selected from Wikimedia Commons when the file has a supported open license. Commons copies are stored by Vervfy, credited to their author, linked to their license and file page, and resized for display when needed.")}</p>
           <p className="credits-links">
             <a href="https://www.wikipedia.org/" target="_blank" rel="noopener noreferrer">
               Wikipedia
@@ -32,9 +31,19 @@ export default function CreditsPage() {
             >
               CC BY-SA 4.0
             </a>
+          </p>
+        </section>
+
+        <section className="credits-source">
+          <h2>{t("Artist images by TheAudioDB")}</h2>
+          <p>{t("Artist image URLs and IDs are supplied by TheAudioDB. Third-party images are linked directly; Vervfy stores their URLs, not copies of the image files.")}</p>
+          <p className="credits-links">
+            <a href="https://www.theaudiodb.com/" target="_blank" rel="noopener noreferrer">
+              TheAudioDB
+            </a>
             {" · "}
-            <a href="https://commons.wikimedia.org/" target="_blank" rel="noopener noreferrer">
-              Wikimedia Commons
+            <a href="https://www.theaudiodb.com/free_music_api" target="_blank" rel="noopener noreferrer">
+              {t("API documentation")}
             </a>
           </p>
         </section>
