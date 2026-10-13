@@ -619,6 +619,8 @@ export default function LibraryApp() {
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [coverPending, setCoverPending] = useState(false);
   const [coverError, setCoverError] = useState("");
+  const [applyCoverToAlbum, setApplyCoverToAlbum] = useState(false);
+  const [replaceAlbumUserCovers, setReplaceAlbumUserCovers] = useState(false);
   const [metadataEditorTrack, setMetadataEditorTrack] = useState<TrackRecord | null>(null);
   const [metadataDraft, setMetadataDraft] = useState({ title: "", artist: "", album: "" });
   const [metadataPending, setMetadataPending] = useState(false);
@@ -815,6 +817,8 @@ export default function LibraryApp() {
     setTrackMenu(null);
     setCoverFile(null);
     setCoverError("");
+    setApplyCoverToAlbum(false);
+    setReplaceAlbumUserCovers(false);
     setCoverEditorTrack(track);
   }
 
@@ -824,6 +828,8 @@ export default function LibraryApp() {
     setCoverPreview(null);
     setCoverFile(null);
     setCoverError("");
+    setApplyCoverToAlbum(false);
+    setReplaceAlbumUserCovers(false);
     setCoverEditorTrack(null);
   }
 
@@ -844,6 +850,8 @@ export default function LibraryApp() {
     try {
       const form = new FormData();
       form.append("file", coverFile);
+      form.append("apply_to_album", String(applyCoverToAlbum));
+      form.append("replace_user_covers", String(applyCoverToAlbum && replaceAlbumUserCovers));
       await expectOk(
         await apiFetch(
           `/api/tracks/${encodeURIComponent(coverEditorTrack.id)}/cover`,
@@ -2174,8 +2182,11 @@ export default function LibraryApp() {
           </button>
         ) : null}
         <div className="menu-sep" />
-        <button className="menu-item" role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
-          {t("Change cover")}
+        <button className={`menu-item${track.coverSource === "placeholder" || track.coverSource === "unknown" ? " cover-menu-item" : ""}`} role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
+          <span>{t(track.coverSource === "placeholder" || track.coverSource === "unknown" ? "Add cover" : "Change cover")}</span>
+          {track.coverSource === "placeholder" || track.coverSource === "unknown" ? (
+            <small>{t("Generated placeholder")}</small>
+          ) : null}
         </button>
         <button className="menu-item" role="menuitem" type="button" onClick={() => openMetadataEditor(track)}>
           {t("Edit track details")}
@@ -2971,6 +2982,32 @@ export default function LibraryApp() {
               alt={`${t("Current cover for")} ${coverEditorTrack.title}`}
             />
             <p className="track-editor-help">{t("JPEG, PNG, or WebP; up to 5 MB.")}</p>
+            <label className="track-editor-check">
+              <input
+                type="checkbox"
+                checked={applyCoverToAlbum}
+                disabled={!coverEditorTrack.album.trim() || /^unknown album$/i.test(coverEditorTrack.album.trim()) || coverPending}
+                onChange={(event) => {
+                  setApplyCoverToAlbum(event.currentTarget.checked);
+                  if (!event.currentTarget.checked) setReplaceAlbumUserCovers(false);
+                }}
+              />
+              <span>{t("Apply to all tracks of this album")}</span>
+            </label>
+            {!coverEditorTrack.album.trim() || /^unknown album$/i.test(coverEditorTrack.album.trim()) ? (
+              <p className="track-editor-help">{t("An album name is required to apply a cover to the album.")}</p>
+            ) : null}
+            {applyCoverToAlbum ? (
+              <label className="track-editor-check track-editor-check-warning">
+                <input
+                  type="checkbox"
+                  checked={replaceAlbumUserCovers}
+                  disabled={coverPending}
+                  onChange={(event) => setReplaceAlbumUserCovers(event.currentTarget.checked)}
+                />
+                <span>{t("Also replace covers you uploaded on this album")}</span>
+              </label>
+            ) : null}
             <input
               ref={coverFileInputRef}
               className="hidden-input"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import html
 import json
 import asyncio
 import functools
@@ -17,7 +18,7 @@ import time
 import unicodedata
 import uuid
 from typing import Annotated, Literal
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -35,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from db import Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from db import ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_bytes
 import upload_queue
 
@@ -141,7 +142,8 @@ async def add_security_headers(request: Request, call_next):
         path = request.url.path
         if path.startswith("/api/"):
             is_upload = path == "/api/library/upload" or (
-                request.method == "PUT" and path.endswith("/cover")
+                request.method == "PUT"
+                and (path.endswith("/cover") or path == "/api/artists/photo")
             )
             limit, window = (UPLOADS_PER_10MIN, 10 * 60) if is_upload else (120, 60)
             identity = request.session.get("user_id") or auth.client_ip(request)
@@ -219,7 +221,11 @@ MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
 MAX_TRACK_COVER_DIMENSION = 8192
 MAX_TRACK_COVER_PIXELS = 12_000_000
+MAX_ARTIST_PHOTO_BYTES = 5 * 1024 * 1024
+MAX_COMMONS_PHOTO_BYTES = 3 * 1024 * 1024
+MAX_ARTIST_PHOTO_DIMENSION = 800
 MAX_ARTIST_PROFILE_CACHE_ENTRIES = 1024
+ARTIST_PHOTO_NEGATIVE_CACHE_SECONDS = 30 * 24 * 60 * 60
 CSP_REPORT_ONLY = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline'; "
@@ -233,6 +239,7 @@ CSP_REPORT_ONLY = (
 
 _libraries: dict[str, Library] = {}
 _artist_profile_cache: dict[str, tuple[float, dict[str, str] | None]] = {}
+_artist_commons_photo_cache: dict[str, tuple[float, dict[str, object] | None]] = {}
 
 
 def _artist_search_key(name: str) -> str:
@@ -626,6 +633,21 @@ def _first_sentences(value: object, limit: int = 3) -> str:
     return " ".join(re.split(r"(?<=[.!?])\s+", text)[:limit])
 
 
+def _commons_summary_image_url(summary: dict) -> str | None:
+    for image in (summary.get("originalimage"), summary.get("thumbnail")):
+        source = image.get("source") if isinstance(image, dict) else None
+        if not isinstance(source, str):
+            continue
+        parsed = urlparse(source)
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname == "upload.wikimedia.org"
+            and parsed.path.startswith("/wikipedia/commons/")
+        ):
+            return source
+    return None
+
+
 def _wikipedia_summary_to_profile(
     summary: dict, name: str, language: Literal["en", "pt-BR"] = "en"
 ) -> dict[str, str] | None:
@@ -641,7 +663,7 @@ def _wikipedia_summary_to_profile(
     bio = _first_sentences(extract)
     if not bio:
         return None
-    return {
+    profile = {
         "bio": bio,
         "source": "Wikipédia" if language == "pt-BR" else "Wikipedia",
         "source_modified": "true",
@@ -651,6 +673,10 @@ def _wikipedia_summary_to_profile(
             .get("page", "")
         ),
     }
+    image_url = _commons_summary_image_url(summary)
+    if image_url:
+        profile["commons_image_url"] = image_url
+    return profile
 
 
 def _fetch_wikipedia_artist_profile(
@@ -745,6 +771,387 @@ def _lookup_artist_profile(
             now + (60 * 60 * 24 if profile else 10 * 60),
         )
     return profile or None
+
+
+def _artist_photos_commons_enabled() -> bool:
+    value = os.environ.get("ARTIST_PHOTOS_COMMONS", "1").strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def _artist_photos_commons_blocked(name: str) -> bool:
+    blocked = {
+        _artist_search_key(entry.strip())
+        for entry in os.environ.get("ARTIST_PHOTOS_COMMONS_BLOCKLIST", "").split(",")
+        if entry.strip()
+    }
+    return _artist_search_key(name) in blocked
+
+
+def _artist_photo_record(user_id: str, normalized_name: str) -> dict[str, object] | None:
+    with tenant_session(user_id) as session:
+        row = session.execute(
+            select(
+                ArtistPhoto.jpeg_data,
+                ArtistPhoto.source,
+                ArtistPhoto.author,
+                ArtistPhoto.license_name,
+                ArtistPhoto.license_url,
+                ArtistPhoto.commons_page_url,
+                ArtistPhoto.resized_for_display,
+            ).where(
+                ArtistPhoto.user_id == user_id,
+                ArtistPhoto.normalized_artist_name == normalized_name,
+            )
+        ).one_or_none()
+    if row is None:
+        return None
+    return {
+        "jpeg_data": bytes(row.jpeg_data),
+        "source": row.source,
+        "author": row.author,
+        "license_name": row.license_name,
+        "license_url": row.license_url,
+        "commons_page_url": row.commons_page_url,
+        "resized_for_display": row.resized_for_display,
+    }
+
+
+def _save_artist_photo(
+    user_id: str,
+    normalized_name: str,
+    jpeg_data: bytes,
+    *,
+    source: str,
+    author: str | None = None,
+    license_name: str | None = None,
+    license_url: str | None = None,
+    commons_page_url: str | None = None,
+    resized_for_display: bool = False,
+) -> None:
+    with tenant_session(user_id) as session:
+        row = session.get(
+            ArtistPhoto,
+            {
+                "user_id": user_id,
+                "normalized_artist_name": normalized_name,
+            },
+        )
+        if row is None:
+            row = ArtistPhoto(
+                user_id=user_id,
+                normalized_artist_name=normalized_name,
+                jpeg_data=jpeg_data,
+                source=source,
+            )
+            session.add(row)
+        row.jpeg_data = jpeg_data
+        row.source = source
+        row.author = author
+        row.license_name = license_name
+        row.license_url = license_url
+        row.commons_page_url = commons_page_url
+        row.resized_for_display = resized_for_display
+        session.commit()
+
+
+def _delete_artist_photo(user_id: str, normalized_name: str) -> None:
+    with tenant_session(user_id) as session:
+        row = session.get(
+            ArtistPhoto,
+            {
+                "user_id": user_id,
+                "normalized_artist_name": normalized_name,
+            },
+        )
+        if row is not None:
+            session.delete(row)
+            session.commit()
+
+
+def _normalize_artist_photo(data: bytes) -> tuple[bytes, bool]:
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    try:
+        with Image.open(BytesIO(data)) as image:
+            if image.format not in {"JPEG", "PNG", "WEBP"}:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Artist photo must be a JPEG, PNG, or WebP image",
+                )
+            width, height = image.size
+            if (
+                width <= 0
+                or height <= 0
+                or width > MAX_TRACK_COVER_DIMENSION
+                or height > MAX_TRACK_COVER_DIMENSION
+                or width * height > MAX_TRACK_COVER_PIXELS
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Artist photo dimensions exceed the configured limit",
+                )
+            image.verify()
+        with Image.open(BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            resized = image.width > MAX_ARTIST_PHOTO_DIMENSION or image.height > MAX_ARTIST_PHOTO_DIMENSION
+            image.thumbnail(
+                (MAX_ARTIST_PHOTO_DIMENSION, MAX_ARTIST_PHOTO_DIMENSION),
+                Image.Resampling.LANCZOS,
+            )
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=82, optimize=True)
+            return output.getvalue(), resized
+    except HTTPException:
+        raise
+    except (
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        OSError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail="Invalid artist photo") from exc
+
+
+def _commons_license(metadata: dict) -> tuple[str, str] | None:
+    def value(name: str) -> str:
+        item = metadata.get(name)
+        return str(item.get("value", "") if isinstance(item, dict) else "").strip()
+
+    short_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value("LicenseShortName")))).strip()
+    license_url = html.unescape(re.sub(r"<[^>]*>", "", value("LicenseUrl"))).strip()
+    parsed = urlparse(license_url)
+    name_key = short_name.casefold()
+    supported = {
+        "cc by 2.0": ("CC BY 2.0", "/licenses/by/2.0/"),
+        "cc by 3.0": ("CC BY 3.0", "/licenses/by/3.0/"),
+        "cc by 4.0": ("CC BY 4.0", "/licenses/by/4.0/"),
+        "cc by-sa 2.0": ("CC BY-SA 2.0", "/licenses/by-sa/2.0/"),
+        "cc by-sa 3.0": ("CC BY-SA 3.0", "/licenses/by-sa/3.0/"),
+        "cc by-sa 4.0": ("CC BY-SA 4.0", "/licenses/by-sa/4.0/"),
+        "cc0 1.0": ("CC0 1.0", "/publicdomain/zero/1.0/"),
+        "cc0 1.0 universal": ("CC0 1.0", "/publicdomain/zero/1.0/"),
+    }
+    accepted = supported.get(name_key)
+    if accepted:
+        display_name, expected_path = accepted
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname == "creativecommons.org"
+            and parsed.path.rstrip("/") == expected_path.rstrip("/")
+        ):
+            return display_name, license_url
+        return None
+    if name_key == "public domain":
+        allowed_public_domain_urls = {
+            ("commons.wikimedia.org", "/wiki/Template:PD-old"),
+            ("creativecommons.org", "/publicdomain/zero/1.0"),
+            ("en.wikipedia.org", "/wiki/Public_domain"),
+        }
+        if parsed.scheme == "https" and any(
+            parsed.hostname == host
+            and (
+                parsed.path == path
+                or (host == "commons.wikimedia.org" and parsed.path.startswith(path))
+            )
+            for host, path in allowed_public_domain_urls
+        ):
+            return "Public domain", license_url
+    return None
+
+
+def _commons_metadata_text(value: object) -> str:
+    text = html.unescape(re.sub(r"<[^>]*>", " ", str(value or "")))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _commons_author(metadata: dict) -> str | None:
+    artist = _commons_metadata_text(
+        metadata.get("Artist", {}).get("value")
+        if isinstance(metadata.get("Artist"), dict)
+        else ""
+    )
+    credit = _commons_metadata_text(
+        metadata.get("Credit", {}).get("value")
+        if isinstance(metadata.get("Credit"), dict)
+        else ""
+    )
+    ambiguous = {"", "unknown", "unknown author", "not provided", "anonymous"}
+    if artist.casefold() in ambiguous or credit.casefold() in ambiguous:
+        return None
+    return artist[:1000]
+
+
+def _fetch_commons_artist_photo(
+    name: str, image_url: str
+) -> dict[str, object] | None:
+    parsed = urlparse(image_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "upload.wikimedia.org"
+        or not parsed.path.startswith("/wikipedia/commons/")
+    ):
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if "thumb" in path_parts and len(path_parts) >= 2:
+        filename = unquote(path_parts[-2]).strip()
+    else:
+        filename = unquote(path_parts[-1]).strip() if path_parts else ""
+    if not filename or filename in {".", ".."}:
+        return None
+    user_agent = (
+        "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy; "
+        "contact: https://github.com/samvitorsilva)"
+    )
+    try:
+        with httpx.Client(
+            timeout=6.0,
+            headers={"User-Agent": user_agent},
+            follow_redirects=False,
+        ) as client:
+            response = client.get(
+                "https://commons.wikimedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "prop": "imageinfo",
+                    "iiprop": "url|extmetadata",
+                    "titles": f"File:{filename}",
+                    "format": "json",
+                    "formatversion": "2",
+                },
+            )
+            response.raise_for_status()
+            pages = response.json().get("query", {}).get("pages", [])
+            page = pages[0] if isinstance(pages, list) and pages else None
+            imageinfo = page.get("imageinfo", []) if isinstance(page, dict) else []
+            info = imageinfo[0] if imageinfo else None
+            if not isinstance(info, dict):
+                return None
+            metadata = info.get("extmetadata", {})
+            if not isinstance(metadata, dict):
+                return None
+            license_info = _commons_license(metadata)
+            author = _commons_author(metadata)
+            credit = _commons_metadata_text(
+                metadata.get("Credit", {}).get("value")
+                if isinstance(metadata.get("Credit"), dict)
+                else ""
+            )
+            if not license_info or not author or not credit:
+                return None
+            file_url = info.get("url")
+            file_parsed = urlparse(file_url) if isinstance(file_url, str) else None
+            if (
+                file_parsed is None
+                or file_parsed.scheme != "https"
+                or file_parsed.hostname != "upload.wikimedia.org"
+                or not file_parsed.path.startswith("/wikipedia/commons/")
+            ):
+                return None
+            description_url = info.get("descriptionurl")
+            description_parsed = (
+                urlparse(description_url) if isinstance(description_url, str) else None
+            )
+            if (
+                description_parsed is None
+                or description_parsed.scheme != "https"
+                or description_parsed.hostname != "commons.wikimedia.org"
+                or not description_parsed.path.startswith("/wiki/File:")
+            ):
+                return None
+            with client.stream(
+                "GET", file_url, follow_redirects=False
+            ) as image_response:
+                image_response.raise_for_status()
+                content_length = image_response.headers.get("content-length")
+                if content_length and int(content_length) > MAX_COMMONS_PHOTO_BYTES:
+                    return None
+                payload = bytearray()
+                for chunk in image_response.iter_bytes():
+                    payload.extend(chunk)
+                    if len(payload) > MAX_COMMONS_PHOTO_BYTES:
+                        return None
+            jpeg_data, resized = _normalize_artist_photo(bytes(payload))
+            return {
+                "jpeg_data": jpeg_data,
+                "source": "commons",
+                "author": author,
+                "license_name": license_info[0],
+                "license_url": license_info[1],
+                "commons_page_url": description_url,
+                "resized_for_display": resized,
+            }
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        log.warning("Wikimedia Commons artist photo lookup failed for %r: %s", name, exc)
+        return None
+    except HTTPException as exc:
+        log.info("Rejected Wikimedia Commons photo for %r: %s", name, exc.detail)
+        return None
+
+
+def _artist_photo_for_user(
+    user_id: str, name: str, *, lookup_throttled: bool = False
+) -> dict[str, object] | None:
+    normalized_name = _artist_search_key(name)
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Invalid artist name")
+    stored = _artist_photo_record(user_id, normalized_name)
+    if stored and stored["source"] == "user":
+        return stored
+    if (
+        not _artist_photos_commons_enabled()
+        or _artist_photos_commons_blocked(name)
+    ):
+        return None
+    if stored and stored["source"] == "commons":
+        return stored
+
+    now = time.monotonic()
+    cached = _artist_commons_photo_cache.get(normalized_name)
+    if cached and cached[0] > now:
+        photo = cached[1]
+    else:
+        if not lookup_throttled:
+            _throttle_artist_lookup(user_id)
+        for cache_key, (expires_at, _) in list(_artist_commons_photo_cache.items()):
+            if expires_at <= now:
+                del _artist_commons_photo_cache[cache_key]
+        profile = _lookup_artist_profile(name, "en")
+        image_url = profile.get("commons_image_url") if profile else None
+        if not image_url and profile and profile.get("source") in {"Wikipedia", "Wikipédia"}:
+            try:
+                with httpx.Client(
+                    timeout=6.0,
+                    headers={
+                        "User-Agent": (
+                            "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy; "
+                            "contact: https://github.com/samvitorsilva)"
+                        )
+                    },
+                    follow_redirects=True,
+                ) as client:
+                    fetched = _fetch_wikipedia_artist_profile(client, name, "en")
+                    image_url = fetched.get("commons_image_url") if fetched else None
+            except httpx.HTTPError as exc:
+                log.warning("Wikipedia artist image lookup failed for %r: %s", name, exc)
+        photo = (
+            _fetch_commons_artist_photo(name, image_url)
+            if isinstance(image_url, str)
+            else None
+        )
+        if len(_artist_commons_photo_cache) >= MAX_ARTIST_PROFILE_CACHE_ENTRIES:
+            oldest_key = min(
+                _artist_commons_photo_cache,
+                key=lambda cache_key: _artist_commons_photo_cache[cache_key][0],
+            )
+            del _artist_commons_photo_cache[oldest_key]
+        _artist_commons_photo_cache[normalized_name] = (
+            now + ARTIST_PHOTO_NEGATIVE_CACHE_SECONDS,
+            photo,
+        )
+    if photo is None:
+        return None
+    _save_artist_photo(user_id, normalized_name, **photo)
+    return photo
 
 
 def get_library(user_id: str) -> Library:
@@ -1467,7 +1874,131 @@ def artist_profile(
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""
     _throttle_artist_lookup(user["id"])
-    return {"profile": _lookup_artist_profile(name.strip(), language)}
+    profile = _lookup_artist_profile(name.strip(), language)
+    if profile:
+        profile.pop("commons_image_url", None)
+    photo = _artist_photo_for_user(
+        user["id"], name.strip(), lookup_throttled=True
+    )
+    photo_metadata = None
+    if photo:
+        photo_metadata = {
+            key: photo[key]
+            for key in (
+                "source",
+                "author",
+                "license_name",
+                "license_url",
+                "commons_page_url",
+                "resized_for_display",
+            )
+        }
+        photo_metadata["photo_url"] = "/api/artists/photo?name=" + quote(
+            name.strip(), safe=""
+        )
+    return {"profile": profile, "photo": photo_metadata}
+
+
+@app.get("/api/artists/photo")
+def artist_photo(
+    name: str = Query(min_length=1, max_length=200),
+    user=Depends(require_api_user),
+) -> Response:
+    photo = _artist_photo_for_user(user["id"], name.strip())
+    if not photo:
+        raise HTTPException(status_code=404, detail="No artist photo")
+    data = photo["jpeg_data"]
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Length": str(len(data)),
+            "X-Artist-Photo-Source": str(photo["source"]),
+            **(
+                {
+                    "X-Artist-Photo-Author": quote(
+                        str(photo["author"]), safe=""
+                    ),
+                    "X-Artist-Photo-License-Name": quote(
+                        str(photo["license_name"]), safe=""
+                    ),
+                    "X-Artist-Photo-License-URL": quote(
+                        str(photo["license_url"]), safe=""
+                    ),
+                    "X-Artist-Photo-Commons-Page": quote(
+                        str(photo["commons_page_url"]), safe=""
+                    ),
+                    "X-Artist-Photo-Resized": str(
+                        bool(photo["resized_for_display"])
+                    ).lower(),
+                }
+                if photo["source"] == "commons"
+                else {}
+            ),
+        },
+    )
+
+
+@app.put("/api/artists/photo")
+@limit_upload_processing
+async def upload_artist_photo(
+    request: Request,
+    name: str = Form(..., min_length=1, max_length=200),
+    file: UploadFile = File(...),
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    normalized_name = _artist_search_key(name.strip())
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Invalid artist name")
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_ARTIST_PHOTO_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Artist photo upload exceeds the 5 MB size limit",
+                )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid upload size") from None
+    data = bytearray()
+    try:
+        while part := await file.read(64 * 1024):
+            data.extend(part)
+            if len(data) > MAX_ARTIST_PHOTO_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Artist photo upload exceeds the 5 MB size limit",
+                )
+        jpeg_data, resized = await run_in_threadpool(
+            _normalize_artist_photo, bytes(data)
+        )
+    finally:
+        await file.close()
+    await run_in_threadpool(
+        _save_artist_photo,
+        user["id"],
+        normalized_name,
+        jpeg_data,
+        source="user",
+        resized_for_display=resized,
+    )
+    return {"photo_url": "/api/artists/photo?name=" + quote(name.strip(), safe="")}
+
+
+@app.delete("/api/artists/photo")
+def remove_artist_photo(
+    name: str = Query(min_length=1, max_length=200),
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    normalized_name = _artist_search_key(name.strip())
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Invalid artist name")
+    _delete_artist_photo(user["id"], normalized_name)
+    _artist_commons_photo_cache.pop(normalized_name, None)
+    return {"photo_url": None}
 
 
 @app.get("/api/config")
@@ -1666,9 +2197,16 @@ async def upload_track_cover(
     track_id: str,
     request: Request,
     file: UploadFile = File(...),
+    apply_to_album: bool = Form(False),
+    replace_user_covers: bool = Form(False),
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
+    if replace_user_covers and not apply_to_album:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm replacing user covers only when applying to the album",
+        )
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -1692,12 +2230,26 @@ async def upload_track_cover(
         cover = await run_in_threadpool(_normalize_track_cover, bytes(data))
     finally:
         await file.close()
-    track = await run_in_threadpool(
-        get_library(user["id"]).set_user_cover, track_id, cover
-    )
+    library = get_library(user["id"])
+    if apply_to_album:
+        updated_count = await run_in_threadpool(
+            library.set_album_user_cover,
+            track_id,
+            cover,
+            replace_user_covers=replace_user_covers,
+        )
+        if updated_count is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        if updated_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="This track does not have an album name",
+            )
+        return {"cover_source": "user", "updated_count": updated_count}
+    track = await run_in_threadpool(library.set_user_cover, track_id, cover)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return {"cover_source": track.cover_source}
+    return {"cover_source": track.cover_source, "updated_count": 1}
 
 
 @app.delete("/api/tracks/{track_id}/cover")

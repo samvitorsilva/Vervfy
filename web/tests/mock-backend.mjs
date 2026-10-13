@@ -28,6 +28,11 @@ for (let index = 0; index < sampleCount; index += 1) {
 let playlists = [];
 let tracks = [];
 let rateLimitedUploads = 1;
+let artistPhotoSource = "commons";
+const artistPhoto = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function send(response, status, body, headers = {}) {
   response.writeHead(status, {
@@ -91,6 +96,7 @@ const server = createServer(async (request, response) => {
     playlists = [];
     tracks = [];
     rateLimitedUploads = 1;
+    artistPhotoSource = "commons";
     send(response, 303, "", {
       Location: "/",
       "Set-Cookie": `${testCookie}; Path=/; HttpOnly; SameSite=Lax`,
@@ -145,7 +151,54 @@ const server = createServer(async (request, response) => {
         source_url: "https://en.wikipedia.org/wiki/Vervfy_Test_Artist",
         source_modified: "true",
       },
+      photo: {
+        source: artistPhotoSource,
+        author: "Test Photographer",
+        license_name: "CC BY-SA 4.0",
+        license_url: "https://creativecommons.org/licenses/by-sa/4.0/",
+        commons_page_url: "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
+        resized_for_display: true,
+      },
     });
+    return;
+  }
+
+  if (url.pathname === "/api/artists/photo" && request.method === "GET") {
+    send(response, 200, artistPhoto, {
+      "Content-Type": "image/png",
+      ...(artistPhotoSource === "commons"
+        ? {
+            "X-Artist-Photo-Source": "commons",
+            "X-Artist-Photo-Author": "Test%20Photographer",
+            "X-Artist-Photo-License-Name": "CC%20BY-SA%204.0",
+            "X-Artist-Photo-License-URL":
+              "https%3A%2F%2Fcreativecommons.org%2Flicenses%2Fby-sa%2F4.0%2F",
+            "X-Artist-Photo-Commons-Page":
+              "https%3A%2F%2Fcommons.wikimedia.org%2Fwiki%2FFile%3AVervfy_Test.jpg",
+            "X-Artist-Photo-Resized": "true",
+          }
+        : {}),
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/artists/photo" && ["PUT", "DELETE"].includes(request.method ?? "")) {
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "CSRF verification failed" });
+      return;
+    }
+    if (request.method === "PUT") {
+      let uploadedBytes = 0;
+      for await (const chunk of request) uploadedBytes += chunk.length;
+      if (!uploadedBytes) {
+        json(response, 400, { detail: "Empty image upload" });
+        return;
+      }
+      artistPhotoSource = "user";
+    } else {
+      artistPhotoSource = "commons";
+    }
+    json(response, 200, { photo_url: "/api/artists/photo?name=Vervfy%20Test%20Artist" });
     return;
   }
 

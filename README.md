@@ -35,7 +35,7 @@ A Web Audio API–based visualizer that reacts to whatever's currently playing.
 Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is account information only and is not used for sign-in or password recovery. Every user gets their own isolated library.
 
 **Artist info**
-Artist profiles use manually maintained entries or a matching Wikipedia summary. Wikipedia-derived text links to its article and the CC BY-SA 4.0 license, with shortened or adapted text identified. Artist avatars are generated locally from each name; no artist photos or follower counts are fetched.
+Artist profiles use manually maintained entries or a matching Wikipedia summary. Wikipedia-derived text links to its article and the CC BY-SA 4.0 license, with shortened or adapted text identified. Artist cards and profiles prefer a photo you upload, then an eligible Wikimedia Commons image with on-screen attribution, then a locally generated avatar. Commons images are copied to Vervfy storage only after license and metadata checks; Vervfy does not hotlink them. Set `ARTIST_PHOTOS_COMMONS=0` to disable Commons photos, or set `ARTIST_PHOTOS_COMMONS_BLOCKLIST` to a comma-separated list of artist names that must not receive one. `/credits` describes Commons attribution, and each Commons photo links its creator, license, and file page and includes a report link.
 
 **As a web app**
 It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
@@ -84,13 +84,17 @@ Render web service and proxies browser API requests to that backend.
 
 ## Persistent data and deployment
 
-PostgreSQL stores accounts, bcrypt password hashes, profile photos, track
-metadata, cover art, custom lyrics, favorites, and playlists. Legacy audio may
+PostgreSQL stores accounts, bcrypt password hashes, profile photos, artist
+photos, track metadata, cover art, custom lyrics, favorites, and playlists. Legacy audio may
 remain in `tracks.audio_data`; new uploads use the private Supabase Storage
 bucket configured by `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and
 `SUPABASE_BUCKET`. Production startup fails if Storage credentials are absent.
 Use a dedicated PostgreSQL `app_runtime` role without `BYPASSRLS` for the
-application's `DATABASE_URL`; run Alembic migrations separately before deploy.
+application's `DATABASE_URL`. Apply every Alembic migration manually with the
+database owner connection (for example, `MIGRATION_DATABASE_URL`), before
+deploying the application; Render runs the app as the limited `app_runtime`
+role and must not apply migrations. A migration is not part of application
+startup.
 Profile photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
 
 Before applying an Alembic migration to a live database, create and verify a

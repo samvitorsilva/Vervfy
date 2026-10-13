@@ -186,12 +186,25 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     "href",
     "https://creativecommons.org/licenses/by-sa/4.0/",
   );
+  await expect(page.getByText(/Artist photos may be uploaded by you/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Wikimedia Commons" })).toHaveAttribute(
+    "href",
+    "https://commons.wikimedia.org/",
+  );
   await expect(page.locator(".artist-source")).toContainText("Shortened or adapted");
 
   await page.getByRole("button", { name: "Artists" }).click();
   const artistCardAvatar = page.locator(".artist-card-photo").first();
   await expect(artistCardAvatar).toHaveAttribute("role", "img");
   await expect(page.locator(".artist-card img")).toHaveCount(0);
+  const artistCardCredit = page.locator(".artist-card-photo-credit");
+  await expect(artistCardCredit).toContainText("Test Photographer");
+  await expect(
+    artistCardCredit.getByRole("link", { name: "via Wikimedia Commons" }),
+  ).toHaveAttribute(
+    "href",
+    "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
+  );
 
   await nowPlayingButton.click();
   await page.locator(".mobile-secondary").filter({ hasText: "Lyrics" }).click();
@@ -267,13 +280,13 @@ test("track cover can be changed and reverted in the library", async ({ page }) 
   const track = page.locator(".card").filter({ hasText: "cover-flow" });
   await expect(track).toBeVisible();
   await track.getByRole("button", { name: "More options for cover-flow" }).click();
-  await page.getByRole("menuitem", { name: "Change cover" }).click();
+  await page.getByRole("menuitem", { name: "Add cover" }).click();
   const coverInput = page.locator('input[type="file"][accept="image/jpeg,image/png,image/webp"]');
   await coverInput.setInputFiles({
     name: "cover.png",
     mimeType: "image/png",
     buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l2sAAAAASUVORK5CYII=",
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
       "base64",
     ),
   });
@@ -285,6 +298,53 @@ test("track cover can be changed and reverted in the library", async ({ page }) 
   await page.getByRole("menuitem", { name: "Change cover" }).click();
   await page.getByRole("button", { name: "Remove cover" }).click();
   await expect(page.getByRole("dialog", { name: /Cover for/ })).toHaveCount(0);
+});
+
+test("artist photo editor previews and saves an uploaded photo with Commons credit", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This photo editor smoke test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
+    name: "photo-smoke.wav",
+    mimeType: "audio/wav",
+    buffer: makeWav(),
+  });
+  await expect(page.locator(".card").filter({ hasText: "photo-smoke" })).toBeVisible();
+  await page.locator('.rail-btn[data-view="artists"]').click();
+  await page.getByRole("button", { name: "Open artist page: Vervfy Test Artist" }).click();
+  await expect(page.getByRole("heading", { name: "Vervfy Test Artist" })).toBeVisible();
+  const credit = page.locator(".artist-photo-credit");
+  await expect(credit).toContainText("Test Photographer");
+  await expect(credit).toContainText("CC BY-SA 4.0");
+  await expect(credit.getByRole("link", { name: "via Wikimedia Commons" })).toHaveAttribute(
+    "href",
+    "https://commons.wikimedia.org/wiki/File:Vervfy_Test.jpg",
+  );
+
+  await page.getByRole("button", { name: "Change photo" }).click();
+  const editor = page.getByRole("dialog", { name: /Photo for Vervfy Test Artist/ });
+  await expect(editor).toBeVisible();
+  await editor.locator('input[type="file"]').setInputFiles({
+    name: "artist.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(editor.locator(".artist-photo-preview")).toHaveAttribute("src", /^blob:/);
+  await editor.getByRole("button", { name: "Save photo" }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Remove photo" })).toBeVisible();
 });
 
 test("expanded mobile player shows playback-synced lyric lines", async ({ page }) => {

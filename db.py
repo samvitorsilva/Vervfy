@@ -7,9 +7,11 @@ URL in tests without changing application code.
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -19,6 +21,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    func,
 )
 from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -128,6 +131,29 @@ class TrackRecord(Base):
     storage_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cover_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+
+
+class ArtistPhoto(Base):
+    __tablename__ = "artist_photos"
+    __table_args__ = (
+        CheckConstraint("source IN ('user', 'commons')", name="ck_artist_photos_source"),
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    normalized_artist_name: Mapped[str] = mapped_column(String(200), primary_key=True)
+    jpeg_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+    source: Mapped[str] = mapped_column(String(10), nullable=False)
+    author: Mapped[str | None] = mapped_column(Text)
+    license_name: Mapped[str | None] = mapped_column(String(100))
+    license_url: Mapped[str | None] = mapped_column(Text)
+    commons_page_url: Mapped[str | None] = mapped_column(Text)
+    resized_for_display: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Favorite(Base):

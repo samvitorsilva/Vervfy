@@ -64,6 +64,8 @@ ALLOWED_EXTERNAL_HOSTS = {
     "www.wassupgio.com",
     "www.wikipedia.org",
     "www.youtube.com",
+    "commons.wikimedia.org",
+    "upload.wikimedia.org",
     "wikipedia.org",
     "127.0.0.1",
     "your-public-app.example.com",

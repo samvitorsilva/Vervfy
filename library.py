@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64, hashlib, io, logging, os, re, tempfile
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import load_only
 import audio_store
 from db import TrackRecord, User, tenant_session
@@ -349,6 +349,32 @@ class Library:
             row.cover_source = "user"
             s.commit()
             return self._track(row)
+
+    def set_album_user_cover(
+        self, track_id: str, cover_data: bytes, *, replace_user_covers: bool = False
+    ) -> int | None:
+        with tenant_session(self.user_id) as s:
+            track = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
+            if track is None:
+                return None
+            if not track.album.strip() or re.fullmatch(
+                r"unknown album", track.album.strip(), re.IGNORECASE
+            ):
+                return 0
+            statement = update(TrackRecord).where(
+                TrackRecord.user_id == self.user_id,
+                TrackRecord.artist == track.artist,
+                TrackRecord.album == track.album,
+            )
+            if not replace_user_covers:
+                statement = statement.where(TrackRecord.cover_source != "user")
+            result = s.execute(statement.values(
+                cover_data=cover_data,
+                has_cover=True,
+                cover_source="user",
+            ))
+            s.commit()
+            return result.rowcount
 
     def remove_user_cover(self, track_id: str):
         try:
