@@ -14,10 +14,11 @@
 - **TheAudioDB**: artist identifiers and artwork URLs only, from the official
   official v1 endpoints. Artist records use `search.php?s=`; the global cache
   keeps URL metadata (not image files) by normalized artist name. Track lookups
-  use `searchtrack.php?s=&t=` and then `album.php?m=` for `strAlbumThumb`, or
-  `searchalbum.php?s=&a=` when tagged album data is available. Track cache rows
-  contain only album IDs, URLs, statuses, and timestamps, keyed by a digest of
-  normalized artist plus title. The shared background queue rate-limits all
+  try `searchtrack.php?s=&t=`, retry `searchtrack.php?s=` when the exact-title
+  query has no match, and use `album.php?m=` for `strAlbumThumb`; if needed,
+  `searchalbum.php?s=&a=` matches tagged album data. Track cache rows contain
+  only album IDs, URLs, statuses, and timestamps, keyed by a versioned digest
+  of normalized artist plus title so lookup changes invalidate old misses. The shared background queue rate-limits all
   provider calls to at most 25/minute and spaces them by 2.4 seconds.
   The public docs use key `123` but also show `2` in an example. The free tier
   is documented at 30 requests/minute; Premium is documented at 100/minute.

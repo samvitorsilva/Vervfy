@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import unittest
 from unittest.mock import patch
 
@@ -176,10 +177,10 @@ class ArtistImageLookupTests(unittest.TestCase):
         self.assertEqual(calls[1], ("album.php", {"m": "1234"}))
 
     def test_track_lookup_falls_back_to_a_matched_artist_and_tagged_album(self) -> None:
-        calls: list[str] = []
+        calls: list[tuple[str, dict[str, str]]] = []
 
         def request_json(endpoint: str, params: dict[str, str]) -> dict:
-            calls.append(endpoint)
+            calls.append((endpoint, params))
             if endpoint == "searchtrack.php":
                 return {"track": None}
             self.assertEqual(params, {"s": "Coldplay", "a": "Parachutes"})
@@ -203,9 +204,58 @@ class ArtistImageLookupTests(unittest.TestCase):
         result = artist_images.fetch_track_cover(
             "Coldplay", "Yellow", "Parachutes", request_json
         )
-        self.assertEqual(calls, ["searchtrack.php", "searchalbum.php"])
+        self.assertEqual(
+            calls,
+            [
+                ("searchtrack.php", {"s": "Coldplay", "t": "Yellow"}),
+                ("searchtrack.php", {"s": "Coldplay"}),
+                ("searchalbum.php", {"s": "Coldplay", "a": "Parachutes"}),
+            ],
+        )
         self.assertEqual(result["audiodb_album_id"], "2109615")
         self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/right.jpg")
+
+    def test_empty_title_search_retries_free_artist_track_search(self) -> None:
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append((endpoint, params))
+            if endpoint == "searchtrack.php" and "t" in params:
+                return {"track": None}
+            if endpoint == "searchtrack.php":
+                return {
+                    "track": [
+                        {
+                            "strArtist": "Coldplay",
+                            "strTrack": "Yellow",
+                            "idAlbum": "2109615",
+                        }
+                    ]
+                }
+            return {
+                "album": [
+                    {
+                        "idAlbum": "2109615",
+                        "strArtist": "Coldplay",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/cover.jpg",
+                    }
+                ]
+            }
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "", request_json
+        )
+
+        self.assertEqual(result["status"], "found")
+        self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/cover.jpg")
+        self.assertEqual(
+            calls,
+            [
+                ("searchtrack.php", {"s": "Coldplay", "t": "Yellow"}),
+                ("searchtrack.php", {"s": "Coldplay"}),
+                ("album.php", {"m": "2109615"}),
+            ],
+        )
 
     def test_track_search_failure_falls_back_without_accepting_wrong_artist(self) -> None:
         def request_json(endpoint: str, params: dict[str, str]) -> dict:
@@ -264,6 +314,10 @@ class ArtistImageLookupTests(unittest.TestCase):
         first = artist_images.track_cover_cache_key("Beyoncé feat. Guest", "Halo!")
         second = artist_images.track_cover_cache_key("Beyonce", "Halo")
         self.assertEqual(first, second)
+        legacy_key = hashlib.sha256(
+            "beyonce\0halo".encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(first[0], legacy_key)
 
     def test_shared_queue_throttles_each_external_request(self) -> None:
         decisions: list[tuple[str, int, int]] = []

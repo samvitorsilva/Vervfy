@@ -26,6 +26,7 @@ AUDIODB_FRESH_SECONDS = 180 * 24 * 60 * 60
 AUDIODB_NOT_FOUND_SECONDS = 30 * 24 * 60 * 60
 AUDIODB_MIN_REQUEST_INTERVAL_SECONDS = 2.4
 AUDIODB_MAX_QUEUE_SIZE = 2_000
+TRACK_COVER_LOOKUP_VERSION = "2"
 
 
 def clean_artist_name(name: str) -> str:
@@ -55,7 +56,9 @@ def track_cover_cache_key(artist: str, title: str) -> tuple[str, str, str]:
     if not normalized_artist or not normalized_title:
         return "", normalized_artist, normalized_title
     key = hashlib.sha256(
-        f"{normalized_artist}\0{normalized_title}".encode("utf-8")
+        f"{TRACK_COVER_LOOKUP_VERSION}\0{normalized_artist}\0{normalized_title}".encode(
+            "utf-8"
+        )
     ).hexdigest()
     return key, normalized_artist, normalized_title
 
@@ -183,6 +186,28 @@ def fetch_track_cover(
 
     album_id: str | None = None
     track_search_error: httpx.HTTPError | None = None
+
+    def matching_album_id(payload: dict) -> str | None:
+        tracks = payload.get("track") if isinstance(payload, dict) else None
+        if not isinstance(tracks, list):
+            return None
+        for track in tracks:
+            if not isinstance(track, dict):
+                continue
+            if (
+                normalize_artist_name(
+                    clean_artist_name(str(track.get("strArtist") or ""))
+                )
+                != artist_key
+                or normalize_artist_name(str(track.get("strTrack") or ""))
+                != title_key
+            ):
+                continue
+            candidate_id = track.get("idAlbum")
+            if candidate_id is not None and str(candidate_id).strip():
+                return str(candidate_id).strip()
+        return None
+
     try:
         payload = _fetch_json(
             "searchtrack.php",
@@ -202,36 +227,22 @@ def fetch_track_cover(
                 "TheAudioDB title search unavailable for %r; trying free artist search",
                 title,
             )
-            try:
-                payload = _fetch_json(
-                    "searchtrack.php", {"s": cleaned_artist}, request_json
-                )
-            except httpx.HTTPError as fallback_error:
-                if (
-                    not isinstance(fallback_error, httpx.HTTPStatusError)
-                    or fallback_error.response.status_code
-                    not in {400, 403, 404}
-                ):
-                    raise
-                payload = {}
-    tracks = payload.get("track") if isinstance(payload, dict) else None
-    if isinstance(tracks, list):
-        for track in tracks:
-            if not isinstance(track, dict):
-                continue
-            if (
-                normalize_artist_name(
-                    clean_artist_name(str(track.get("strArtist") or ""))
-                )
-                != artist_key
-                or normalize_artist_name(str(track.get("strTrack") or ""))
-                != title_key
-            ):
-                continue
-            candidate_id = track.get("idAlbum")
-            if candidate_id is not None and str(candidate_id).strip():
-                album_id = str(candidate_id).strip()
-                break
+            payload = {}
+    album_id = matching_album_id(payload)
+
+    if album_id is None and track_search_error is None:
+        try:
+            payload = _fetch_json(
+                "searchtrack.php", {"s": cleaned_artist}, request_json
+            )
+            album_id = matching_album_id(payload)
+        except httpx.HTTPError as exc:
+            if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code not in {
+                400,
+                403,
+                404,
+            }:
+                track_search_error = exc
 
     if album_id is not None:
         try:
