@@ -112,7 +112,11 @@ def _parse_filename(filename: str):
         return (_strip_noise(stem) or stem), "Unknown Artist"
 
     first, second = parts[0], parts[1]
-    if _is_channel(second) or (_strip_noise(first) != first and _strip_noise(second) == second):
+    if (
+        _is_channel(second)
+        or (_strip_noise(first) != first and _strip_noise(second) == second)
+        or re.match(r"^[A-Z]{2}\s+[A-Z]", second)
+    ):
         artist = _channel_to_artist(second) if _is_channel(second) else second
         title = first
     else:

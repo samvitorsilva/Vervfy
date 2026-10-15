@@ -12,6 +12,12 @@ class ParseFilenameTests(unittest.TestCase):
             ("Yellow", "Coldplay"),
         )
 
+    def test_parses_title_before_artist_with_initials(self) -> None:
+        self.assertEqual(
+            _parse_filename("Miles & Miles - AJ Vitanza.mp3"),
+            ("Miles & Miles", "AJ Vitanza"),
+        )
+
     def test_underscores_inside_hyphen_delimited_title_become_spaces(self) -> None:
         self.assertEqual(
             _parse_filename("Coldplay - Yellow_Submarine.mp3"),
