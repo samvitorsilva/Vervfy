@@ -66,7 +66,14 @@ def _strip_noise(text: str) -> str:
 def _clean_title(title: str) -> str:
     title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
     title = re.sub(r"\s*[\[(][^)\]]*&[^)\]]*[)\]]", "", title).strip()
-    return _strip_noise(title) or title
+    cleaned = _strip_noise(title)
+    cleaned = re.sub(
+        r"\s*[\[(]from\b[^)\]]*\b(?:movie|film|soundtrack)[)\]]\s*$",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    return cleaned or title
 
 
 def _is_channel(part: str) -> bool:

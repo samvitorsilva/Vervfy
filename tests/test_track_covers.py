@@ -270,6 +270,28 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertFalse(response.json()["pending"])
         enqueue.assert_not_called()
 
+    def test_cover_lookup_cleans_movie_suffix_from_existing_track_title(self) -> None:
+        self.library.get("owned-track").title = (
+            "Just Keep Watching (From F1® The Movie)"
+        )
+        with (
+            patch.object(
+                server,
+                "SessionLocal",
+                return_value=nullcontext(SimpleNamespace(
+                    scalars=lambda _query: SimpleNamespace(all=lambda: [])
+                )),
+            ),
+            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
+        ):
+            response = self.client.get("/api/tracks/covers")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["pending"])
+        enqueue.assert_called_once_with(
+            "Test artist", "Just Keep Watching", "Test album"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

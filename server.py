@@ -45,7 +45,7 @@ from artist_images import (
     track_cover_cache_key,
 )
 from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackCoverCache, TrackRecord, UploadJob, User, tenant_session
-from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, track_id_for_bytes
+from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, _clean_title, track_id_for_bytes
 import upload_queue
 
 ROOT = Path(__file__).resolve().parent
@@ -1892,8 +1892,9 @@ def track_covers(user=Depends(require_api_user)) -> dict:
     for track in tracks:
         if track.has_cover or track.cover_source in {"embedded", "user"}:
             continue
+        lookup_title = _clean_title(track.title)
         key, normalized_artist, normalized_title = track_cover_cache_key(
-            track.artist, track.title
+            track.artist, lookup_title
         )
         if (
             key
@@ -1928,7 +1929,7 @@ def track_covers(user=Depends(require_api_user)) -> dict:
         if stale:
             track = matching_tracks[0]
             audiodb_queue.enqueue_track(
-                track.artist, track.title, track.album
+                track.artist, _clean_title(track.title), track.album
             )
         pending = pending or stale
         for track in matching_tracks:

@@ -24,6 +24,15 @@ class ParseFilenameTests(unittest.TestCase):
             ("Come Home (Live)", "Tauren Wells"),
         )
 
+    def test_strips_movie_promotion_from_filename_title(self) -> None:
+        self.assertEqual(
+            _parse_filename(
+                "Tate McRae - Just Keep Watching (From F1® The Movie) "
+                "(Official Video) - Tate McRae.mp3"
+            ),
+            ("Just Keep Watching", "Tate McRae"),
+        )
+
     def test_strips_youtube_id_in_parentheses(self) -> None:
         self.assertEqual(
             _parse_filename("Artist - Song (a_b-C123456).mp3"),
