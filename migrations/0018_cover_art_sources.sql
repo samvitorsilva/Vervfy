@@ -29,12 +29,14 @@ ALTER TABLE public.tracks
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_runtime') THEN
-        GRANT SELECT (id, user_id, title, artist, album, filename, storage_path,
-                      size_bytes, cover_source, cover_url, cover_path, cover_data,
-                      has_cover)
+        GRANT SELECT (id, user_id, filename, title, artist, album, duration,
+                      has_cover, cover_source, cover_url, custom_lyrics,
+                      storage_path, size_bytes, cover_path, cover_data)
             ON public.tracks TO app_runtime;
         GRANT UPDATE (cover_source, cover_url, cover_path, cover_data, has_cover)
             ON public.tracks TO app_runtime;
+        GRANT SELECT (cover_data) ON public.upload_jobs TO app_runtime;
+        GRANT UPDATE (cover_data) ON public.upload_jobs TO app_runtime;
     END IF;
 END
 $$;

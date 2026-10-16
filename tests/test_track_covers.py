@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
-from datetime import datetime, timezone
 from io import BytesIO
 import os
 import unittest
@@ -36,6 +34,7 @@ class FakeLibrary:
                 custom_lyrics=None,
                 has_cover=False,
                 cover_source="placeholder",
+                cover_url=None,
             )
         } if user_id == "user-a" else {}
 
@@ -44,6 +43,9 @@ class FakeLibrary:
 
     def list_tracks(self):
         return list(self.tracks.values())
+
+    def add_upload_file(self, filename, path, **kwargs):
+        return self.get("owned-track")
 
     def cover_storage_path(self, track_id: str):
         track = self.get(track_id)
@@ -180,35 +182,33 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertEqual(removed.status_code, 200)
         self.assertEqual(removed.json()["cover_source"], "placeholder")
 
-    def test_cover_lookup_queues_missing_and_returns_immediately(self) -> None:
-        with (
-            patch.object(
-                server,
-                "SessionLocal",
-                return_value=nullcontext(SimpleNamespace(
-                    scalars=lambda _query: SimpleNamespace(all=lambda: [])
-                )),
-            ),
-            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
-        ):
+    def test_cover_lookup_schedules_the_shared_chain(self) -> None:
+        with patch.object(server, "schedule_cover_resolution") as schedule:
             response = self.client.get("/api/tracks/covers")
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertTrue(response.json()["pending"])
-        self.assertIsNone(response.json()["covers"]["owned-track"]["cover_url"])
-        enqueue.assert_called_once_with("Test artist", "Owned track", "Test album")
+        self.assertEqual(
+            response.json()["covers"]["owned-track"]["cover_url"],
+            "/api/tracks/owned-track/cover",
+        )
+        schedule.assert_called_once()
+        self.assertEqual(schedule.call_args.args[1:], ("user-a", "owned-track"))
 
     def test_embedded_cover_is_not_queued_or_overwritten(self) -> None:
         track = self.library.get("owned-track")
         track.has_cover = True
         track.cover_source = "embedded"
-        with patch.object(server.audiodb_queue, "enqueue_track") as enqueue:
+        with patch.object(server, "schedule_cover_resolution") as schedule:
             response = self.client.get("/api/tracks/covers")
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertFalse(response.json()["pending"])
-        self.assertEqual(response.json()["covers"], {})
-        enqueue.assert_not_called()
+        self.assertEqual(
+            response.json()["covers"]["owned-track"]["cover_source"],
+            "embedded",
+        )
+        schedule.assert_not_called()
 
     def test_storage_cover_redirects_without_proxying_bytes(self) -> None:
         self.library.get("owned-track").cover_path = (
@@ -231,7 +231,11 @@ class TrackCoverApiTests(unittest.TestCase):
         )
         create_signed_url.assert_called_once_with("covers/user-a/owned-track.jpg")
 
-    def test_cover_lookup_returns_cached_url_for_duplicate_track_keys(self) -> None:
+    def test_cover_lookup_returns_saved_remote_url(self) -> None:
+        self.library.get("owned-track").cover_source = "musicbrainz"
+        self.library.get("owned-track").cover_url = (
+            "https://coverartarchive.org/release-group/example/front-500"
+        )
         second = SimpleNamespace(
             **{
                 **vars(self.library.get("owned-track")),
@@ -239,58 +243,53 @@ class TrackCoverApiTests(unittest.TestCase):
             }
         )
         self.library.tracks[second.id] = second
-        cached = SimpleNamespace(
-            cache_key=server.track_cover_cache_key("Test artist", "Owned track")[0],
-            status="found",
-            cover_url="https://r2.theaudiodb.com/cover.jpg",
-            fetched_at=datetime.now(timezone.utc),
-        )
-        with (
-            patch.object(
-                server,
-                "SessionLocal",
-                return_value=nullcontext(SimpleNamespace(
-                    scalars=lambda _query: SimpleNamespace(all=lambda: [cached])
-                )),
-            ),
-            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
-        ):
+        with patch.object(server, "schedule_cover_resolution") as schedule:
             response = self.client.get("/api/tracks/covers")
 
         self.assertEqual(response.status_code, 200, response.text)
         covers = response.json()["covers"]
         self.assertEqual(
             covers["owned-track"]["cover_url"],
-            "https://r2.theaudiodb.com/cover.jpg",
+            "https://coverartarchive.org/release-group/example/front-500",
         )
         self.assertEqual(
             covers["owned-track-copy"]["cover_url"],
-            "https://r2.theaudiodb.com/cover.jpg",
+            "https://coverartarchive.org/release-group/example/front-500",
         )
         self.assertFalse(response.json()["pending"])
-        enqueue.assert_not_called()
+        schedule.assert_not_called()
 
-    def test_cover_lookup_cleans_movie_suffix_from_existing_track_title(self) -> None:
-        self.library.get("owned-track").title = (
-            "Just Keep Watching (From F1® The Movie)"
-        )
+    def test_upload_accepts_optional_user_cover_and_schedules_chain(self) -> None:
         with (
+            patch.object(server, "async_uploads", False),
             patch.object(
                 server,
-                "SessionLocal",
-                return_value=nullcontext(SimpleNamespace(
-                    scalars=lambda _query: SimpleNamespace(all=lambda: [])
-                )),
+                "_upload_preflight",
+                return_value=("owned-track", 0, 0, True),
             ),
-            patch.object(server.audiodb_queue, "enqueue_track") as enqueue,
+            patch.object(server, "schedule_cover_resolution") as schedule,
         ):
-            response = self.client.get("/api/tracks/covers")
+            response = self.client.post(
+                "/api/library/upload",
+                files={
+                    "file": ("owned-track.wav", b"audio-data", "audio/wav"),
+                    "cover": ("owned-cover.png", image_bytes("PNG"), "image/png"),
+                },
+            )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(response.json()["pending"])
-        enqueue.assert_called_once_with(
-            "Test artist", "Just Keep Watching", "Test album"
-        )
+        self.assertEqual(response.json()["id"], "owned-track")
+        schedule.assert_called_once()
+        self.assertEqual(schedule.call_args.args[1:], ("user-a", "owned-track"))
+        self.assertEqual(schedule.call_args.kwargs["uploaded_data"][:2], b"\xff\xd8")
+
+    def test_retry_endpoint_schedules_chain_for_owned_track_only(self) -> None:
+        with patch.object(server, "schedule_cover_resolution") as schedule:
+            response = self.client.post("/api/tracks/owned-track/cover/retry")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "queued")
+        self.assertTrue(schedule.call_args.kwargs["force"])
 
 
 if __name__ == "__main__":

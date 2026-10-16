@@ -36,18 +36,15 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from cover_art import resolve_cover, uploaded_cover
+from cover_art import schedule_cover_resolution, uploaded_cover
 from artist_images import (
     TheAudioDBQueue,
     artists_from_credit,
-    clean_artist_name,
     is_stale as artist_image_is_stale,
-    is_track_cover_stale,
     normalize_artist_name,
-    track_cover_cache_key,
 )
-from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackCoverCache, TrackRecord, UploadJob, User, tenant_session
-from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, _clean_title, track_id_for_file
+from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_file
 import upload_queue
 
 ROOT = Path(__file__).resolve().parent
@@ -1882,8 +1879,11 @@ def list_tracks(user=Depends(require_api_user)) -> dict:
 
 
 @app.get("/api/tracks/covers")
-def track_covers(user=Depends(require_api_user)) -> dict:
-    """Return cached TheAudioDB covers and queue stale/missing placeholders."""
+def track_covers(
+    background_tasks: BackgroundTasks,
+    user=Depends(require_api_user),
+) -> dict:
+    """Return saved covers and queue missing/generated covers through the full chain."""
     try:
         allowed = request_throttle.allow(
             f"track-cover-lookup:{user['id']}", 120, 60
@@ -1899,57 +1899,23 @@ def track_covers(user=Depends(require_api_user)) -> dict:
             headers={"Retry-After": "60"},
         )
 
-    tracks = get_library(user["id"]).list_tracks()
-    normalized: dict[str, list[LibraryTrack]] = {}
-    for track in tracks:
-        if track.has_cover or track.cover_source in {"embedded", "user"}:
-            continue
-        lookup_title = _clean_title(track.title)
-        key, normalized_artist, normalized_title = track_cover_cache_key(
-            track.artist, lookup_title
-        )
-        if (
-            key
-            and normalized_artist not in {"unknown", "unknownartist"}
-            and normalized_title not in {"unknown", "unknowntrack"}
-        ):
-            normalized.setdefault(key, []).append(track)
-
-    if not normalized:
-        return {"covers": {}, "pending": False}
-
-    with SessionLocal() as session:
-        cache_rows = session.scalars(
-            select(TrackCoverCache).where(
-                TrackCoverCache.cache_key.in_(set(normalized))
-            )
-        ).all()
-    cached_by_key = {row.cache_key: row for row in cache_rows}
-
     results: dict[str, dict[str, object]] = {}
     pending = False
-    for key, matching_tracks in normalized.items():
-        cached = cached_by_key.get(key)
-        stale = is_track_cover_stale(
-            {
-                "status": cached.status,
-                "fetched_at": cached.fetched_at,
-            }
-            if cached is not None
-            else None
+    tracks = get_library(user["id"]).list_tracks()
+    for track in tracks:
+        missing = (
+            track.cover_source in {None, "generated", "placeholder", "unknown"}
+            and not track.cover_url
         )
-        if stale:
-            track = matching_tracks[0]
-            audiodb_queue.enqueue_track(
-                track.artist, _clean_title(track.title), track.album
-            )
-        pending = pending or stale
-        for track in matching_tracks:
-            results[track.id] = {
-                "cover_url": cached.cover_url if cached else None,
-                "status": cached.status if cached else "pending",
-                "pending": stale,
-            }
+        if missing:
+            schedule_cover_resolution(background_tasks, user["id"], track.id)
+        pending = pending or missing
+        results[track.id] = {
+            "cover_url": track.cover_url or f"/api/tracks/{track.id}/cover",
+            "cover_source": track.cover_source,
+            "status": "pending" if missing else "found",
+            "pending": missing,
+        }
     return {"covers": results, "pending": pending}
 
 
@@ -1982,11 +1948,12 @@ async def upload_track(
                     status_code=413,
                     detail="Cover upload exceeds the 5 MB size limit",
                 )
-        if cover_buffer:
-            try:
-                cover_data = uploaded_cover(bytes(cover_buffer))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not cover_buffer:
+            raise HTTPException(status_code=400, detail="Empty cover image upload")
+        try:
+            cover_data = uploaded_cover(bytes(cover_buffer))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     total_bytes = 0
     audio_path = None
@@ -2055,8 +2022,11 @@ async def upload_track(
             raise HTTPException(
                 status_code=400, detail="Could not read uploaded audio file"
             )
-        background_tasks.add_task(
-            resolve_cover, user["id"], track.id, uploaded_data=cover_data
+        schedule_cover_resolution(
+            background_tasks,
+            user["id"],
+            track.id,
+            uploaded_data=cover_data,
         )
         return _track_payload(track)
     finally:
@@ -2301,8 +2271,8 @@ async def retry_track_cover(
             "cover_source": track.cover_source,
             "detail": "Owned covers are not replaced by automatic lookup",
         }
-    background_tasks.add_task(
-        resolve_cover, user["id"], track_id, force=True
+    schedule_cover_resolution(
+        background_tasks, user["id"], track_id, force=True
     )
     return {"status": "queued", "cover_source": track.cover_source}
 

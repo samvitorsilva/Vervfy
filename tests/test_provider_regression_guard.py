@@ -34,6 +34,7 @@ SOURCE_SUFFIXES = {
 }
 ALLOWED_EXTERNAL_HOSTS = {
     "ajvitanza.com",
+    "archive.org",
     "coverartarchive.org",
     "creativecommons.org",
     "en.wikipedia.org",

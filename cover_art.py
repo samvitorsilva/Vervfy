@@ -7,6 +7,7 @@ from io import BytesIO
 import logging
 import os
 import re
+import threading
 import time
 from typing import Awaitable, Callable
 
@@ -23,6 +24,8 @@ COVER_ART_ARCHIVE_URL = "https://coverartarchive.org/release-group"
 MUSICBRAINZ_MIN_INTERVAL = 1.0
 _musicbrainz_lock = asyncio.Lock()
 _last_musicbrainz_request = 0.0
+_lookup_pending_lock = threading.Lock()
+_lookup_pending: set[tuple[str, str]] = set()
 
 _FEAT_RE = re.compile(
     r"\s*[\[(]\s*(?:feat(?:uring)?|ft)\.?\s*[^\])]*[\])]",
@@ -39,8 +42,8 @@ def clean_title(title: str) -> str:
     """Strip common release/video noise and underscores; preserve case."""
     value = title.replace("_", " ")
     value = _FEAT_RE.sub("", value)
-    value = _SINGLE_RE.sub("", value)
     value = _OFFICIAL_VIDEO_RE.sub("", value)
+    value = _SINGLE_RE.sub("", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
@@ -220,6 +223,30 @@ def generated_cover(title: str) -> bytes:
     output = BytesIO()
     make_placeholder_cover(title).save(output, format="JPEG", quality=90)
     return output.getvalue()
+
+
+def schedule_cover_resolution(background_tasks, user_id: str, track_id: str, **kwargs) -> bool:
+    key = (user_id, track_id)
+    with _lookup_pending_lock:
+        if key in _lookup_pending:
+            return False
+        _lookup_pending.add(key)
+    background_tasks.add_task(
+        _resolve_scheduled_cover, user_id, track_id, key, kwargs
+    )
+    return True
+
+
+async def _resolve_scheduled_cover(
+    user_id: str, track_id: str, key: tuple[str, str], kwargs: dict
+) -> None:
+    try:
+        await resolve_cover(user_id, track_id, **kwargs)
+    except Exception:
+        log.exception("cover lookup track_id=%s step=chain result=error", track_id)
+    finally:
+        with _lookup_pending_lock:
+            _lookup_pending.discard(key)
 
 
 async def resolve_cover(
