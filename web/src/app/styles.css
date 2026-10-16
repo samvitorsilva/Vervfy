@@ -1,22 +1,19 @@
-/* ============================================================
-   AURALIS — Golden Gate
-   Soft concentric layout, purple→cyan aura.
-   Display/UI: Outfit. Data: JetBrains Mono.
-   ============================================================ */
+/* Vervfy's music-first interface: album art carries the color; controls stay quiet. */
 :root{
-  --bg:#0c0e14;
-  --bg-2:#12151e;
+  color-scheme:dark;
+  --bg:#0b0d12;
+  --bg-2:#151821;
   --surface-control:rgba(255,255,255,0.10);
   --surface-control-hover:rgba(255,255,255,0.14);
   --border:rgba(255,255,255,0.1);
   --border-hi:rgba(255,255,255,0.18);
-  --text:#f2f3f7;
-  --text-mid:#c0c5d1;
-  --text-dim:#a0a8ba;
-  --violet:#8b7fff;
-  --cyan:#54e8d4;
-  --amber:#ffb86b;
-  --danger:#ff6b7a;
+  --text:#f5f6fa;
+  --text-mid:#c6cad4;
+  --text-dim:#adb3c1;
+  --violet:#a99dff;
+  --cyan:#68dfcf;
+  --amber:#ffc17a;
+  --danger:#ff7b88;
   --grad-aura: linear-gradient(135deg, var(--violet), var(--cyan));
   --radius-s:10px;
   --radius-m:14px;
@@ -27,9 +24,13 @@
   --ease: cubic-bezier(.22,.9,.32,1);
   --dur-fast: .16s;
   --dur-med: .32s;
-  --font-display: 'Outfit', sans-serif;
-  --font-body: 'Outfit', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --surface:#151821;
+  --line:rgba(255,255,255,.12);
+  --muted:var(--text-mid);
+  --accent:var(--violet);
   /* Fixed bottom player height — keep list/content clearance in sync */
   --nowbar-h: 92px;
   --player-height: var(--nowbar-h);
@@ -37,7 +38,11 @@
   --nowbar-edge-gap:18px;
 }
 @media (prefers-reduced-motion: reduce){
-  *{ animation-duration:.001ms !important; transition-duration:.001ms !important; }
+  *, *::before, *::after{
+    animation:none !important;
+    scroll-behavior:auto !important;
+    transition:none !important;
+  }
 }
 *{ box-sizing:border-box; margin:0; padding:0; }
 html,body{ height:100%; }
@@ -53,8 +58,8 @@ body{
 /* soft atmospheric wash */
 .field{ position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
 .field-blob{
-  position:absolute; border-radius:50%; filter:blur(80px); opacity:.55;
-  animation:blobFloat 18s ease-in-out infinite alternate;
+  position:absolute; border-radius:50%; filter:blur(80px); opacity:.32;
+  animation:none;
 }
 .field-blob-a{
   width:52vw; height:52vw; left:-12%; top:-18%;
@@ -63,7 +68,6 @@ body{
 .field-blob-b{
   width:46vw; height:46vw; right:-10%; bottom:-16%;
   background:radial-gradient(circle, rgba(84,232,212,0.22), transparent 70%);
-  animation-delay:-7s;
 }
 @keyframes blobFloat{
   from{ transform:translate(0,0) scale(1); }
@@ -1768,22 +1772,20 @@ button:focus-visible{
   .topbar{ padding-block:8px; }
 }
 
-/* Liquid glass: only the helper's four highest-priority visible surfaces use
-   backdrop sampling. Other controls retain their existing opaque styling. */
+/* Liquid Glass is reserved for floating controls, navigation, and focused sheets. */
 .glass{
   position:relative;
   isolation:isolate;
   z-index:0;
-  border:1px solid rgba(255,255,255,.18);
-  border-radius:28px;
-  background:rgba(255,255,255,.10);
-  -webkit-backdrop-filter:blur(18px) saturate(180%);
-  backdrop-filter:blur(18px) saturate(180%);
+  border:1px solid rgba(255,255,255,.2);
+  border-radius:22px;
+  background:rgba(27,29,38,var(--glass-tint-alpha,.76));
+  -webkit-backdrop-filter:blur(var(--glass-frost-blur,24px)) saturate(var(--glass-saturation,1.28));
+  backdrop-filter:blur(var(--glass-frost-blur,24px)) saturate(var(--glass-saturation,1.28));
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.42),
-    inset 0 -1px 0 rgba(255,255,255,.08),
-    0 14px 40px rgba(0,0,0,.24);
-  text-shadow:0 1px 5px rgba(0,0,0,.55);
+    inset 0 1px 0 rgba(255,255,255,.2),
+    0 12px 32px rgba(0,0,0,.28);
+  text-shadow:none;
 }
 .glass::before{
   content:"";
@@ -1792,27 +1794,21 @@ button:focus-visible{
   z-index:0;
   border-radius:inherit;
   pointer-events:none;
-  background:linear-gradient(
-    135deg,
-    rgba(255,255,255,.24) 0%,
-    rgba(255,255,255,.08) 18%,
-    transparent 42%,
-    rgba(255,255,255,.025) 72%,
-    rgba(255,255,255,.08) 100%
-  );
+  background:linear-gradient(145deg, rgba(255,255,255,.12), rgba(255,255,255,.035) 32%, transparent 66%);
 }
 .glass > *{
   position:relative;
   z-index:1;
 }
 .glass.refract{
-  -webkit-backdrop-filter:blur(18px) saturate(180%);
-  backdrop-filter:blur(18px) saturate(180%);
+  background:rgba(27,29,38,var(--glass-tint-alpha-refract,.64));
+  -webkit-backdrop-filter:blur(var(--glass-blur,8px)) saturate(var(--glass-saturation-refract,1.2));
+  backdrop-filter:blur(var(--glass-blur,8px)) saturate(var(--glass-saturation-refract,1.2));
 }
-@supports ((-webkit-backdrop-filter:blur(3px) url("#lg") saturate(170%)) or (backdrop-filter:blur(3px) url("#lg") saturate(170%))){
+@supports ((-webkit-backdrop-filter:blur(8px) url("#lg") saturate(120%)) or (backdrop-filter:blur(8px) url("#lg") saturate(120%))){
   .glass.refract{
-  -webkit-backdrop-filter:blur(3px) var(--glass-filter-url, url(#lg)) saturate(170%);
-  backdrop-filter:blur(3px) var(--glass-filter-url, url(#lg)) saturate(170%);
+  -webkit-backdrop-filter:blur(var(--glass-blur,8px)) var(--glass-filter-url,url(#lg)) saturate(var(--glass-saturation-refract,1.2));
+  backdrop-filter:blur(var(--glass-blur,8px)) var(--glass-filter-url,url(#lg)) saturate(var(--glass-saturation-refract,1.2));
   }
 }
 
@@ -1851,12 +1847,11 @@ button:focus-visible{
   margin-block:10px;
   margin-left:10px;
   border-radius:24px;
-  background-color:rgba(15,18,28,.3);
+  background-color:rgba(22,24,32,.78);
   z-index:70;
 }
 .rail.glass .rail-btn{
   color:rgba(255,255,255,.88);
-  text-shadow:0 1px 4px rgba(0,0,0,.7);
 }
 .rail.glass .rail-btn:hover,
 .rail.glass .rail-btn.active{
@@ -1866,13 +1861,13 @@ button:focus-visible{
   position:fixed;
   z-index:1000;
   border-radius:24px;
-  border:1px solid rgba(255,255,255,.22);
-  background:rgba(18,20,31,.20);
+  border:1px solid rgba(255,255,255,.2);
+  background:rgba(23,25,34,.72);
   box-shadow:
-    0 -12px 34px rgba(0,0,0,.18),
-    inset 0 1px 0 rgba(255,255,255,.48),
-    inset 0 -1px 0 rgba(255,255,255,.1);
+    0 12px 32px rgba(0,0,0,.24),
+    inset 0 1px 0 rgba(255,255,255,.2);
 }
+.side-panel.glass{ background:rgba(22,24,32,.84); border-color:rgba(255,255,255,.18); }
 .lyrics-player.glass{
   position:absolute;
   z-index:4;
@@ -1881,26 +1876,22 @@ button:focus-visible{
 .nowbar.glass .now-artist .artist-sep{ color:rgba(255,255,255,.68); }
 .view-toggle button{ color:rgba(255,255,255,.88); }
 .view-toggle button.active{ color:#fff; }
-.mobile-player-info.glass{
-  padding:16px;
-  border:1px solid rgba(255,255,255,.2);
-  border-radius:24px;
-  background:rgba(255,255,255,.10);
-}
 .queue-picker-card.glass,
 .photo-editor-card.glass,
 .shortcuts-card.glass,
 .sleep-timer-card.glass{
-  background:rgba(255,255,255,.10);
+  background:rgba(27,29,38,.82);
   border-color:rgba(255,255,255,.2);
 }
 
-@media (prefers-reduced-transparency: reduce){
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more){
   .glass,
   .glass.refract{
     -webkit-backdrop-filter:none;
     backdrop-filter:none;
-    background:rgba(24,26,36,.97);
+    background:#191c25 !important;
+    border-color:rgba(255,255,255,.48);
+    box-shadow:0 0 0 1px rgba(255,255,255,.12), 0 10px 28px rgba(0,0,0,.32);
   }
   .glass::before{ display:none; }
 }
@@ -1910,7 +1901,6 @@ button:focus-visible{
 @media (max-width:640px){
   .rail.glass{ position:fixed; margin:0; border-radius:22px; }
   .nowbar.glass{ border-radius:20px; }
-  .mobile-player-info.glass{ padding:14px; border-radius:20px; }
 }
 
 @media (min-width:641px){
@@ -2087,4 +2077,77 @@ button:focus-visible{
 .credits-links a{
   color:var(--accent,#9c92ff);
   text-underline-offset:3px;
+}
+
+.btn-primary,
+.auth-submit{
+  background:var(--violet);
+  border:1px solid rgba(255,255,255,.32);
+  color:#11111a;
+  box-shadow:0 6px 18px rgba(169,157,255,.18), inset 0 1px 0 rgba(255,255,255,.36);
+}
+.btn-primary:hover,
+.auth-submit:hover{
+  background:#b8adff;
+  filter:none;
+}
+.credits-card{
+  border-color:var(--border);
+  border-radius:var(--radius-xl);
+  background:rgba(21,24,33,.96);
+  box-shadow:var(--shadow-soft);
+}
+.credits-back,
+.credits-links a{ color:var(--violet); }
+.credits-card h1,
+.credits-card h2{ color:var(--text); }
+.credits-intro,
+.credits-source p{ color:var(--text-mid); }
+.credits-source{ border-color:var(--border); }
+.mobile-lyrics-preview{
+  background:#1b1e27;
+  border:1px solid var(--border);
+  box-shadow:none;
+}
+.mobile-lyrics-heading{ color:var(--text-mid); }
+.mobile-lyrics-preview .lyric-next{ color:var(--text-dim); }
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more){
+  .auth-card,
+  .credits-card,
+  .queue-picker-card,
+  .sleep-timer-card,
+  .photo-editor-card,
+  .shortcuts-card{
+    border-color:rgba(255,255,255,.42);
+  }
+  .text-dim,
+  .card-sub,
+  .row-time,
+  .pl-count,
+  .artist-card-count{ color:#c6cad4; }
+}
+
+@media (forced-colors: active){
+  button:focus-visible,
+  input:focus-visible,
+  a:focus-visible,
+  [tabindex]:focus-visible{
+    outline:2px solid Highlight !important;
+    outline-offset:3px !important;
+    box-shadow:none;
+  }
+}
+
+@media (max-width:640px){
+  .rail-btn{ min-width:44px; }
+  .mobile-control{ width:44px; height:44px; }
+  .mobile-player-icon,
+  .mobile-player-fav{ width:44px; height:44px; }
+}
+
+@media (max-width:480px){
+  .credits-page{ place-items:start center; padding:16px; }
+  .credits-card{ max-height:calc(100dvh - 32px); padding:24px 20px; }
+  .credits-back{ min-height:44px; margin-bottom:22px; }
 }

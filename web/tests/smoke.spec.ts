@@ -533,7 +533,7 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   );
 });
 
-test("liquid glass stays translucent and limits active surfaces", async ({ page }) => {
+test("liquid glass stays restrained and limits active surfaces", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
     "This interaction test uses the local mock backend.",
@@ -549,7 +549,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBe("rgba(15, 18, 28, 0.3)");
+    .toBe("rgba(22, 24, 32, 0.78)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
@@ -576,8 +576,8 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
-  expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
+  expect(glassState?.background).toBe("rgba(22, 24, 32, 0.78)");
+  expect(glassState?.backdropFilter).toMatch(/blur\((8|24)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
   if (glassState?.chrome && glassState.supportsRefraction) {
@@ -586,6 +586,15 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   } else {
     expect(glassState?.refract).toBe(false);
   }
+
+  await page.emulateMedia({ contrast: "more" });
+  await expect
+    .poll(() => page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe("rgb(25, 28, 37)");
+  await expect
+    .poll(() => page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backdropFilter))
+    .toBe("none");
+  await page.emulateMedia({ contrast: "no-preference" });
 
   await page.getByRole("button", { name: "Playlists" }).click();
   await page.getByRole("button", { name: "New playlist" }).first().click();

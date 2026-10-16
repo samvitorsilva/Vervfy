@@ -259,7 +259,7 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertFalse(response.json()["pending"])
         schedule.assert_not_called()
 
-    def test_upload_accepts_optional_user_cover_and_schedules_chain(self) -> None:
+    def test_upload_ignores_bulk_cover_override_and_schedules_lookup(self) -> None:
         with (
             patch.object(server, "async_uploads", False),
             patch.object(
@@ -281,7 +281,7 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertEqual(response.json()["id"], "owned-track")
         schedule.assert_called_once()
         self.assertEqual(schedule.call_args.args[1:], ("user-a", "owned-track"))
-        self.assertEqual(schedule.call_args.kwargs["uploaded_data"][:2], b"\xff\xd8")
+        self.assertEqual(schedule.call_args.kwargs, {})
 
     def test_retry_endpoint_schedules_chain_for_owned_track_only(self) -> None:
         with patch.object(server, "schedule_cover_resolution") as schedule:

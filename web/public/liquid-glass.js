@@ -1,16 +1,16 @@
 (() => {
   "use strict";
 
-  // ── Tuning (matches liquid-glass-player.html reference) ─────────────────
-  const BEZEL_WIDTH = 22;       // rim thickness in the displacement map
-  const CORNER_RADIUS = 32;     // fallback when element radius can't be read
-  const DISPLACEMENT_SCALE = 70;
-  const BLUR = 3;               // Chromium refraction blur
-  const FROST_BLUR = 18;        // Safari / Firefox frost
-  const SATURATION_FROST = 1.8;
-  const SATURATION_REFRACT = 1.7;
-  const TINT_ALPHA = 0.1;       // frost fill
-  const TINT_ALPHA_REFRACT = 0.04;
+  // Subtle edge refraction supplements the regular, legible glass material.
+  const BEZEL_WIDTH = 14;
+  const CORNER_RADIUS = 22;
+  const DISPLACEMENT_SCALE = 20;
+  const BLUR = 8;
+  const FROST_BLUR = 24;
+  const SATURATION_FROST = 1.28;
+  const SATURATION_REFRACT = 1.2;
+  const TINT_ALPHA = 0.72;
+  const TINT_ALPHA_REFRACT = 0.64;
   const MAX_ACTIVE_SURFACES = 4;
 
   document.documentElement.style.setProperty("--glass-blur", `${BLUR}px`);
@@ -33,11 +33,11 @@
   let nextFilterId = 0;
   let syncFrame = 0;
   const surfacePriorities = [
-    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side", 0],
-    [".mobile-player-info", 1],
-    [".nowbar", 2],
-    [".rail", 3],
-    [".side-panel", 4],
+    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card", 0],
+    [".nowbar", 1],
+    [".rail", 2],
+    [".side-panel", 3],
+    [".lyrics-player", 4],
   ];
 
   function updateArtwork() {
@@ -141,7 +141,7 @@
     const halfW = w / 2;
     const halfH = h / 2;
     const edgeWidth = Math.max(1, Math.min(rim, halfW, halfH));
-    const strength = 112;
+    const strength = 48;
 
     for (let y = 0; y < h; y += 1) {
       for (let x = 0; x < w; x += 1) {

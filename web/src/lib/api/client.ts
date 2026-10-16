@@ -163,13 +163,9 @@ export async function fetchWithRetry(
 export async function uploadWithRetry(
   path: string,
   file: File,
-  cover?: File | null,
 ): Promise<Response> {
   const body = new FormData();
   body.append("file", file, file.name);
-  if (cover) {
-    body.append("cover", cover, cover.name);
-  }
 
   let rateLimitRetries = 0;
   while (true) {

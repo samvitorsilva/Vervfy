@@ -36,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
-from cover_art import schedule_cover_resolution, uploaded_cover
+from cover_art import schedule_cover_resolution
 from artist_images import (
     TheAudioDBQueue,
     artists_from_credit,
@@ -1286,7 +1286,6 @@ def _queue_staged_upload(
     user_id: str,
     filename: str,
     audio_path: str,
-    cover_data: bytes | None = None,
 ) -> None:
     suffix = os.path.splitext(os.path.basename(filename))[1].lower()
     staging_path = f"{user_id}/.staging/{job_id}{suffix}"
@@ -1305,7 +1304,6 @@ def _queue_staged_upload(
                 user_id=user_id,
                 filename=filename,
                 storage_path=staging_path,
-                cover_data=cover_data,
                 created_at=time.time(),
             ))
             session.commit()
@@ -1925,36 +1923,18 @@ async def upload_track(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    cover: UploadFile | None = File(None),
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_UPLOAD_BYTES + MAX_TRACK_COVER_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
+            if int(content_length) > MAX_UPLOAD_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
                 raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid upload size") from None
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
-    cover_data = None
-    if cover is not None:
-        cover_buffer = bytearray()
-        while part := await cover.read(64 * 1024):
-            cover_buffer.extend(part)
-            if len(cover_buffer) > MAX_TRACK_COVER_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail="Cover upload exceeds the 5 MB size limit",
-                )
-        if not cover_buffer:
-            raise HTTPException(status_code=400, detail="Empty cover image upload")
-        try:
-            cover_data = uploaded_cover(bytes(cover_buffer))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     total_bytes = 0
     audio_path = None
     try:
@@ -1981,7 +1961,6 @@ async def upload_track(
                 user["id"],
                 file.filename,
                 audio_path,
-                cover_data,
             )
             return {"id": job_id, "status": "processing"}
         track_id, used_bytes, track_count, existing = await run_in_threadpool(
@@ -2026,7 +2005,6 @@ async def upload_track(
             background_tasks,
             user["id"],
             track.id,
-            uploaded_data=cover_data,
         )
         return _track_payload(track)
     finally:

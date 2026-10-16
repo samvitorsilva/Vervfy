@@ -650,11 +650,9 @@ export default function LibraryApp() {
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
-  const [uploadCoverFile, setUploadCoverFile] = useState<File | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const uploadCoverInputRef = useRef<HTMLInputElement>(null);
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
   const coverPreviewUrlRef = useRef<string | null>(null);
@@ -1050,11 +1048,7 @@ export default function LibraryApp() {
           if (index >= files.length) return;
           const file = files[index];
           try {
-            const response = await uploadWithRetry(
-              "/api/library/upload",
-              file,
-              uploadCoverFile,
-            );
+            const response = await uploadWithRetry("/api/library/upload", file);
             const uploadResult = (await response.json()) as
               | ServerTrack
               | { id: string; status: "processing" };
@@ -1150,7 +1144,7 @@ export default function LibraryApp() {
         notify("Those tracks were already in your library.");
       }
     },
-    [notify, reloadTracks, uploadCoverFile],
+    [notify, reloadTracks],
   );
 
   async function retryCoverLookup(track: TrackRecord) {
@@ -2752,19 +2746,9 @@ export default function LibraryApp() {
                 <Icon name="plus" /> {t("New playlist")}
               </button>
             ) : view === "account" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
-              <>
-                <button
-                  className="btn"
-                  type="button"
-                  title={t("This cover will be used for each selected track.")}
-                  onClick={() => uploadCoverInputRef.current?.click()}
-                >
-                  {uploadCoverFile ? t("Cover selected") : t("Optional cover")}
-                </button>
-                <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
-                  <Icon name="import" /> {t("Add music")}
-                </button>
-              </>
+              <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
+                <Icon name="import" /> {t("Add music")}
+              </button>
             )}
           </div>
 
@@ -3249,31 +3233,6 @@ export default function LibraryApp() {
         multiple
         onChange={(event) => {
           if (event.currentTarget.files) void uploadFiles(event.currentTarget.files);
-          event.currentTarget.value = "";
-        }}
-      />
-      <input
-        ref={uploadCoverInputRef}
-        className="hidden-input"
-        type="file"
-        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0] ?? null;
-          if (file) {
-            if (file.size > 5 * 1024 * 1024) {
-              notify(t("Cover image must be 5 MB or smaller."));
-              event.currentTarget.value = "";
-              return;
-            }
-            const acceptedImageType = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
-            const acceptedExtension = /\.(jpe?g|png|webp)$/i.test(file.name);
-            if (!acceptedImageType && !acceptedExtension) {
-              notify(t("Choose a JPEG, PNG, or WebP image."));
-              event.currentTarget.value = "";
-              return;
-            }
-          }
-          setUploadCoverFile(file);
           event.currentTarget.value = "";
         }}
       />

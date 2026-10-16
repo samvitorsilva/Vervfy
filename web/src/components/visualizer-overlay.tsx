@@ -47,6 +47,7 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
     phasesRef.current = new Array(graph.analyser.frequencyBinCount).fill(0);
 
     if (graph.context.state === "suspended") void graph.context.resume();
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const draw = () => {
       const ctx = canvas.getContext("2d");
       const data = frequenciesRef.current;
@@ -107,13 +108,19 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
       ctx.lineWidth = Math.max(1, width * 0.002);
       ctx.stroke();
       ctx.restore();
-      frameRef.current = requestAnimationFrame(draw);
+      frameRef.current = reducedMotion.matches ? null : requestAnimationFrame(draw);
     };
 
+    const handleMotionPreferenceChange = () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = requestAnimationFrame(draw);
+    };
+    reducedMotion.addEventListener("change", handleMotionPreferenceChange);
     frameRef.current = requestAnimationFrame(draw);
     return () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
+      reducedMotion.removeEventListener("change", handleMotionPreferenceChange);
     };
   }, []);
 

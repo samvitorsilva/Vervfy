@@ -19,21 +19,13 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#0c0e14",
+  themeColor: "#0b0d12",
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   await connection();
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
-      </head>
       <body>
         <div className="field" aria-hidden="true">
           <div className="field-blob field-blob-a" />
