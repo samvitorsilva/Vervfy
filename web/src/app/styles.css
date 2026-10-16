@@ -853,6 +853,7 @@ span.artist-photo{
 /* flex:1 so the title shrinks with ellipsis instead of shoving .now-fav out of the track slot */
 .now-meta{ flex:1 1 auto; min-width:0; }
 .now-title{ display:block; font-size:13.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; letter-spacing:-0.01em; }
+.now-cover-attribution{ display:block; font-size:10px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 .now-artist{ display:block; font-size:12px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
 .now-artist .artist-link{ display:inline; color:inherit; }
 .now-artist .artist-link:hover{ color:var(--cyan); }

@@ -167,6 +167,22 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
 
 
 @_wrap_errors
+def upload_file(path: str, file_path: str, content_type: str = "audio/mpeg") -> None:
+    """Stream a local file to Storage without retaining the audio in memory."""
+    client = _client()
+    with open(file_path, "rb") as source:
+        response = client.post(
+            _object_url(path),
+            content=source,
+            headers={"Content-Type": content_type, "x-upsert": "true"},
+        )
+    if response.status_code >= 300:
+        raise StorageError(
+            f"upload failed ({response.status_code}): {response.text[:200]}"
+        )
+
+
+@_wrap_errors
 def create_signed_url(path: str, expires_in: int = 3600) -> str:
     """Create a direct-to-Storage URL for one object in the private bucket."""
     _, _, bucket = _settings()
@@ -260,6 +276,33 @@ def read_all(path: str, size: int) -> bytes:
     if size < 0:
         raise StorageError("invalid staged object size")
     return read_range(path, 0, max(size - 1, 0)) if size else b""
+
+
+@_wrap_errors
+def download_to_file(path: str, destination: str, size: int) -> None:
+    """Stream a staged object to disk in bounded chunks."""
+    if size < 0:
+        raise StorageError("invalid staged object size")
+    if size == 0:
+        open(destination, "wb").close()
+        return
+    _, response = open_range(path, 0, size - 1)
+    try:
+        written = 0
+        with open(destination, "wb") as target:
+            for chunk in response.iter_bytes(64 * 1024):
+                if not chunk:
+                    continue
+                target.write(chunk[: size - written])
+                written += min(len(chunk), size - written)
+                if written >= size:
+                    break
+        if written != size:
+            raise StorageError(
+                f"read returned {written} bytes; expected {size}"
+            )
+    finally:
+        response.close()
 
 
 @_wrap_errors

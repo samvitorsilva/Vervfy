@@ -108,7 +108,8 @@ class TrackRecord(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "id", name="uq_tracks_user_id_id"),
         CheckConstraint(
-            "cover_source IN ('embedded', 'user', 'placeholder', 'unknown')",
+            "cover_source IS NULL OR cover_source IN "
+            "('embedded', 'upload', 'user', 'musicbrainz', 'audiodb', 'generated', 'placeholder', 'unknown')",
             name="ck_tracks_cover_source",
         ),
     )
@@ -121,8 +122,9 @@ class TrackRecord(Base):
     duration: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     has_cover: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     cover_source: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="unknown", server_default="unknown"
+        String(20), nullable=True, default="unknown", server_default="unknown"
     )
+    cover_url: Mapped[str | None] = mapped_column(Text)
     custom_lyrics: Mapped[str | None] = mapped_column(Text)
     # Legacy rows keep their audio here; new uploads live in Supabase Storage and
     # only ``storage_path`` is stored.  ``deferred`` stops ordinary row loads
@@ -230,6 +232,7 @@ class UploadJob(Base):
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(600), nullable=False, unique=True)
     track_id: Mapped[str | None] = mapped_column(String(64))
+    cover_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", index=True)
     error: Mapped[str | None] = mapped_column(String(500))

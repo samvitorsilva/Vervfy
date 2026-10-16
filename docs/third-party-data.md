@@ -11,6 +11,13 @@
   `LYRICS_PROVIDER_LRCLIB=0`. Lyrics may remain subject to rights held by their
   respective owners; this integration does not grant a license to reproduce
   them commercially.
+- **MusicBrainz + Cover Art Archive**: track cover URLs only. Search recordings
+  with the MusicBrainz JSON web service, pick a release-group, then link
+  `https://coverartarchive.org/release-group/<mbid>/front-500`. Store the URL
+  and `cover_source='musicbrainz'`; do not download or rehost the image.
+  Require `MB_CONTACT_EMAIL` for the User-Agent `Vervfy/1.0 (<email>)`, keep
+  at most one MusicBrainz request per second, use an 8s timeout, and retry once
+  on HTTP 503. Show attribution when a playing track uses this source.
 - **TheAudioDB**: artist identifiers and artwork URLs only, from the official
   official v1 endpoints. Artist records use `search.php?s=`; the global cache
   keeps URL metadata (not image files) by normalized artist name. Track lookups
@@ -45,18 +52,18 @@ integration.
 
 ## Track cover storage
 
-Embedded artwork is already extracted from MP3 ID3/APIC, FLAC, M4A/MP4, and
-Ogg/Opus during upload. New embedded and user-selected cover images are
-normalized to at most 600x600 JPEG and stored in the private Supabase Storage
-bucket under `covers/<user_id>/...`; the database keeps only the user-scoped
-path. When tags are absent, a simple `Artist_Title.ext` filename is parsed as
-the artist/title pair, and existing `Artist - Track_Title.ext` names remain
-supported. Older covers are already present in `tracks.cover_data`, so the
-backfill uses those first and reads at most one legacy audio blob at a time
-only when an embedded image is missing from `cover_data`.
+Cover resolution after upload runs in the background and never fails the
+upload. Order: optional uploaded cover → embedded tags (MP3 ID3/APIC, FLAC,
+M4A/MP4, Ogg) → MusicBrainz/Cover Art Archive URL → TheAudioDB URL →
+generated placeholder. Uploaded and embedded images are normalized to at most
+600x600 JPEG and stored in the private Supabase Storage bucket under
+`covers/<user_id>/...`. MusicBrainz and TheAudioDB results store only
+`cover_url` plus `cover_source`.
 
-Run `python -m scripts.backfill_cover_storage` once after applying migration
-0017. Provide `BACKFILL_DATABASE_URL` using a PostgreSQL table owner/admin role
-that can read tracks across RLS, plus the existing `SUPABASE_URL`,
-`SUPABASE_SERVICE_KEY`, and `SUPABASE_BUCKET` settings. The script processes
-metadata in small batches and never selects multiple audio blobs together.
+Run `migrations/0018_cover_art_sources.sql` as the Postgres admin, set
+`MB_CONTACT_EMAIL` on the API service, then backfill missing covers with
+`python scripts/backfill_covers.py` using `BACKFILL_DATABASE_URL` (admin) and
+the normal `DATABASE_URL` used by the app.
+
+Older Storage migration: run `python -m scripts.backfill_cover_storage` once
+after applying migration 0017 when moving legacy `cover_data` into Storage.

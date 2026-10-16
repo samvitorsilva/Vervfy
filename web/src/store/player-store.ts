@@ -23,7 +23,15 @@ export interface TrackRecord {
   hasCover?: boolean;
   coverUrl: string;
   streamUrl: string;
-  coverSource?: "embedded" | "user" | "audiodb" | "placeholder" | "unknown";
+  coverSource?:
+    | "embedded"
+    | "upload"
+    | "user"
+    | "musicbrainz"
+    | "audiodb"
+    | "generated"
+    | "placeholder"
+    | "unknown";
   offlineUrl?: string | null;
   offline?: boolean;
   remoteCoverUrl?: string;

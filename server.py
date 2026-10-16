@@ -14,13 +14,14 @@ import os
 import re
 import secrets
 import time
+import tempfile
 import unicodedata
 import uuid
 from typing import Annotated, Literal
 from urllib.parse import quote, urlparse
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 import httpx
@@ -35,6 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from database import Base, engine
 import audio_store
 import auth
+from cover_art import resolve_cover, uploaded_cover
 from artist_images import (
     TheAudioDBQueue,
     artists_from_credit,
@@ -45,7 +47,7 @@ from artist_images import (
     track_cover_cache_key,
 )
 from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackCoverCache, TrackRecord, UploadJob, User, tenant_session
-from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, _clean_title, track_id_for_bytes
+from library import AudioUnavailableError, Library, Track as LibraryTrack, UploadQuotaExceeded, _clean_title, track_id_for_file
 import upload_queue
 
 ROOT = Path(__file__).resolve().parent
@@ -238,7 +240,8 @@ CSP_REPORT_ONLY = (
         "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com data:; "
-        "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com https://*.supabase.co; "
+        "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com "
+        "https://coverartarchive.org https://*.archive.org https://archive.org https://*.supabase.co; "
         "media-src 'self' blob:; "
         "connect-src 'self' https://lrclib.net; "
         "frame-ancestors 'none'"
@@ -946,7 +949,7 @@ def _track_payload(track) -> dict:
         "custom_lyrics": track.custom_lyrics,
         "has_cover": track.has_cover,
         "cover_source": track.cover_source,
-        "cover_url": f"/api/tracks/{track.id}/cover",
+        "cover_url": track.cover_url or f"/api/tracks/{track.id}/cover",
         "stream_url": f"/api/tracks/{track.id}/stream",
     }
 
@@ -1281,11 +1284,19 @@ class LibraryStateRequest(BaseModel):
     playlists: list[PlaylistState] = Field(default_factory=list, max_length=1_000)
 
 
-def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearray) -> None:
+def _queue_staged_upload(
+    job_id: str,
+    user_id: str,
+    filename: str,
+    audio_path: str,
+    cover_data: bytes | None = None,
+) -> None:
     suffix = os.path.splitext(os.path.basename(filename))[1].lower()
     staging_path = f"{user_id}/.staging/{job_id}{suffix}"
     try:
-        audio_store.upload(staging_path, data, audio_store.guess_content_type(filename))
+        audio_store.upload_file(
+            staging_path, audio_path, audio_store.guess_content_type(filename)
+        )
         with tenant_session(user_id) as session:
             owner_id = session.scalar(
                 select(User.id).where(User.id == user_id).with_for_update()
@@ -1297,6 +1308,7 @@ def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearr
                 user_id=user_id,
                 filename=filename,
                 storage_path=staging_path,
+                cover_data=cover_data,
                 created_at=time.time(),
             ))
             session.commit()
@@ -1316,8 +1328,8 @@ def _queue_staged_upload(job_id: str, user_id: str, filename: str, data: bytearr
         raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
 
 
-def _upload_preflight(library: Library, data: bytearray) -> tuple[str, int, int, bool]:
-    track_id = track_id_for_bytes(data)
+def _upload_preflight(library: Library, path: str) -> tuple[str, int, int, bool]:
+    track_id = track_id_for_file(path)
     if library.get(track_id) is not None:
         return track_id, 0, 0, True
     return track_id, library.total_bytes(), library.count_tracks(), False
@@ -1945,66 +1957,114 @@ def track_covers(user=Depends(require_api_user)) -> dict:
 @limit_upload_processing
 async def upload_track(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    cover: UploadFile | None = File(None),
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_UPLOAD_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
+            if int(content_length) > MAX_UPLOAD_BYTES + MAX_TRACK_COVER_BYTES + MULTIPART_UPLOAD_OVERHEAD_BYTES:
                 raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid upload size") from None
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
-    buffer = bytearray()
+    cover_data = None
+    if cover is not None:
+        cover_buffer = bytearray()
+        while part := await cover.read(64 * 1024):
+            cover_buffer.extend(part)
+            if len(cover_buffer) > MAX_TRACK_COVER_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Cover upload exceeds the 5 MB size limit",
+                )
+        if cover_buffer:
+            try:
+                cover_data = uploaded_cover(bytes(cover_buffer))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     total_bytes = 0
-    while part := await file.read(1024 * 1024):
-        total_bytes += len(part)
-        if total_bytes > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
-        buffer.extend(part)
-    if not buffer:
-        raise HTTPException(status_code=400, detail="Empty upload")
-    library = get_library(user["id"])
-    if async_uploads:
-        job_id = uuid.uuid4().hex
-        await run_in_threadpool(_queue_staged_upload, job_id, user["id"], file.filename, buffer)
-        return {"id": job_id, "status": "processing"}
-    track_id, used_bytes, track_count, existing = await run_in_threadpool(
-        _upload_preflight, library, buffer
-    )
-    if not existing:
-        if used_bytes + len(buffer) > USER_QUOTA_BYTES or track_count >= MAX_TRACKS_PER_USER:
+    audio_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=os.path.splitext(file.filename)[1], delete=False
+        ) as audio_file:
+            audio_path = audio_file.name
+            while part := await file.read(1024 * 1024):
+                total_bytes += len(part)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Upload exceeds the configured size limit",
+                    )
+                audio_file.write(part)
+        if not total_bytes:
+            raise HTTPException(status_code=400, detail="Empty upload")
+        library = get_library(user["id"])
+        if async_uploads:
+            job_id = uuid.uuid4().hex
+            await run_in_threadpool(
+                _queue_staged_upload,
+                job_id,
+                user["id"],
+                file.filename,
+                audio_path,
+                cover_data,
+            )
+            return {"id": job_id, "status": "processing"}
+        track_id, used_bytes, track_count, existing = await run_in_threadpool(
+            _upload_preflight, library, audio_path
+        )
+        if not existing and (
+            used_bytes + total_bytes > USER_QUOTA_BYTES
+            or track_count >= MAX_TRACKS_PER_USER
+        ):
             used_mb = used_bytes / (1024 * 1024)
             quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
             raise HTTPException(
                 status_code=413,
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             )
-    try:
-        track = await run_in_threadpool(
-            library.add_upload,
-            file.filename,
-            buffer,
-            quota_bytes=USER_QUOTA_BYTES,
-            max_tracks=MAX_TRACKS_PER_USER,
+        try:
+            track = await run_in_threadpool(
+                library.add_upload_file,
+                file.filename,
+                audio_path,
+                quota_bytes=USER_QUOTA_BYTES,
+                max_tracks=MAX_TRACKS_PER_USER,
+            )
+        except UploadQuotaExceeded:
+            used_bytes = await run_in_threadpool(library.total_bytes)
+            used_mb = used_bytes / (1024 * 1024)
+            quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
+            ) from None
+        except audio_store.StorageError as exc:
+            log.exception("audio storage failed during upload")
+            raise HTTPException(
+                status_code=502, detail=f"Audio storage error: {str(exc)[:200]}"
+            ) from None
+        if track is None:
+            raise HTTPException(
+                status_code=400, detail="Could not read uploaded audio file"
+            )
+        background_tasks.add_task(
+            resolve_cover, user["id"], track.id, uploaded_data=cover_data
         )
-    except UploadQuotaExceeded:
-        used_bytes = await run_in_threadpool(library.total_bytes)
-        used_mb = used_bytes / (1024 * 1024)
-        quota_mb = USER_QUOTA_BYTES / (1024 * 1024)
-        raise HTTPException(
-            status_code=413,
-            detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
-        ) from None
-    except audio_store.StorageError as exc:
-        log.exception("audio storage failed during upload")
-        raise HTTPException(status_code=502, detail=f"Audio storage error: {str(exc)[:200]}") from None
-    if track is None:
-        raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
-    return _track_payload(track)
+        return _track_payload(track)
+    finally:
+        if audio_path:
+            try:
+                os.unlink(audio_path)
+            except OSError:
+                log.warning("Could not remove temporary audio file %s", audio_path)
 
 
 @app.get("/api/library/upload/{job_id}")
@@ -2222,6 +2282,29 @@ async def remove_track_cover(
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
     return {"cover_source": track.cover_source}
+
+
+@app.post("/api/tracks/{track_id}/cover/retry")
+async def retry_track_cover(
+    track_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    library = get_library(user["id"])
+    track = await run_in_threadpool(library.get, track_id)
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if track.cover_source in {"upload", "user"}:
+        return {
+            "status": "skipped",
+            "cover_source": track.cover_source,
+            "detail": "Owned covers are not replaced by automatic lookup",
+        }
+    background_tasks.add_task(
+        resolve_cover, user["id"], track_id, force=True
+    )
+    return {"status": "queued", "cover_source": track.cover_source}
 
 
 @app.patch("/api/tracks/{track_id}")

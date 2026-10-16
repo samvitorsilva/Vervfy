@@ -2,9 +2,11 @@
 """Process staged uploads: python scripts/upload_worker.py."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -12,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import audio_store
 import upload_queue
+from cover_art import resolve_cover
 from db import UploadJob, tenant_session
-from library import Library, UploadQuotaExceeded
+from library import Library
 from sqlalchemy import select
+from sqlalchemy.orm import undefer
 
 log = logging.getLogger("vervfy.upload_worker")
 MAX_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
@@ -25,25 +29,36 @@ MAX_ATTEMPTS = 3
 
 def process(job_id: str, user_id: str) -> None:
     path: str | None = None
+    audio_path: str | None = None
+    cover_data: bytes | None = None
     try:
         with tenant_session(user_id) as session:
-            job = session.scalar(select(UploadJob).where(
-                UploadJob.id == job_id,
-                UploadJob.user_id == user_id,
-            ))
+            job = session.scalar(
+                select(UploadJob)
+                .options(undefer(UploadJob.cover_data))
+                .where(
+                    UploadJob.id == job_id,
+                    UploadJob.user_id == user_id,
+                )
+            )
             if not job or job.status not in {"pending", "processing"}:
                 return
             job.status = "processing"
             job.attempts += 1
             session.commit()
             filename, path = job.filename, job.storage_path
+            if job.cover_data is not None:
+                cover_data = bytes(job.cover_data)
         size = audio_store.object_size(path)
         if size is None or size > MAX_BYTES:
             raise ValueError("staged upload is missing or exceeds the size limit")
-        data = audio_store.read_all(path, size)
-        track = Library(user_id).add_upload(
+        suffix = os.path.splitext(os.path.basename(filename))[1]
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as audio_file:
+            audio_path = audio_file.name
+        audio_store.download_to_file(path, audio_path, size)
+        track = Library(user_id).add_upload_file(
             filename,
-            data,
+            audio_path,
             quota_bytes=QUOTA_BYTES,
             max_tracks=MAX_TRACKS,
             storage_path_override=path,
@@ -53,6 +68,16 @@ def process(job_id: str, user_id: str) -> None:
         stored_info = Library(user_id).audio_info(track.id)
         if stored_info and stored_info.storage_path != path:
             audio_store.delete_quietly(path)
+        try:
+            asyncio.run(
+                resolve_cover(user_id, track.id, uploaded_data=cover_data)
+            )
+        except Exception:
+            log.exception(
+                "cover lookup failed after upload job %s for track %s",
+                job_id,
+                track.id,
+            )
         with tenant_session(user_id) as session:
             job = session.scalar(select(UploadJob).where(
                 UploadJob.id == job_id,
@@ -61,6 +86,7 @@ def process(job_id: str, user_id: str) -> None:
             if job:
                 job.status = "completed"
                 job.track_id = track.id
+                job.cover_data = None
                 session.commit()
     except Exception as exc:
         log.exception("upload job %s failed", job_id)
@@ -84,6 +110,12 @@ def process(job_id: str, user_id: str) -> None:
         else:
             upload_queue.dead_letter(job_id, user_id, str(exc))
             audio_store.delete_quietly(path)
+    finally:
+        if audio_path:
+            try:
+                os.unlink(audio_path)
+            except OSError:
+                log.warning("Could not remove temporary audio file %s", audio_path)
 
 
 def main() -> None:

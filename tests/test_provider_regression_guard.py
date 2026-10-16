@@ -34,6 +34,7 @@ SOURCE_SUFFIXES = {
 }
 ALLOWED_EXTERNAL_HOSTS = {
     "ajvitanza.com",
+    "coverartarchive.org",
     "creativecommons.org",
     "en.wikipedia.org",
     "eslint.org",
@@ -46,6 +47,7 @@ ALLOWED_EXTERNAL_HOSTS = {
     "linktr.ee",
     "localhost",
     "lrclib.net",
+    "musicbrainz.org",
     "nextjs.org",
     "obros.eu",
     "opencollective.org",
@@ -81,7 +83,6 @@ FORBIDDEN_CATALOG_HOSTS = (
     "mzstatic.com",
     "api.spotify.com",
     "spotify.com",
-    "musicbrainz.org",
     "discogs.com",
     "last.fm",
     "allmusic.com",

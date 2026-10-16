@@ -32,7 +32,7 @@ interface ServerTrack {
   album: string;
   duration: number;
   has_cover: boolean;
-  cover_source?: "embedded" | "user" | "placeholder" | "unknown";
+  cover_source?: TrackRecord["coverSource"];
   cover_url: string;
   stream_url: string;
   custom_lyrics?: string | null;
@@ -650,9 +650,11 @@ export default function LibraryApp() {
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadCoverFile, setUploadCoverFile] = useState<File | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const uploadCoverInputRef = useRef<HTMLInputElement>(null);
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
   const coverPreviewUrlRef = useRef<string | null>(null);
@@ -818,7 +820,7 @@ export default function LibraryApp() {
       const keepCachedImage =
         previous?.coverSource === "audiodb" &&
         !track.has_cover &&
-        track.cover_source === "placeholder";
+        (track.cover_source === "placeholder" || track.cover_source === "generated");
       const fallback = track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`);
       return {
         id: track.id,
@@ -859,7 +861,10 @@ export default function LibraryApp() {
             track.offline ||
             track.hasCover ||
             track.coverSource === "embedded" ||
-            track.coverSource === "user"
+            track.coverSource === "upload" ||
+            track.coverSource === "user" ||
+            track.coverSource === "musicbrainz" ||
+            track.coverSource === "audiodb"
           ) {
             return track;
           }
@@ -1038,7 +1043,11 @@ export default function LibraryApp() {
           if (index >= files.length) return;
           const file = files[index];
           try {
-            const response = await uploadWithRetry("/api/library/upload", file);
+            const response = await uploadWithRetry(
+              "/api/library/upload",
+              file,
+              uploadCoverFile,
+            );
             const uploadResult = (await response.json()) as
               | ServerTrack
               | { id: string; status: "processing" };
@@ -1134,8 +1143,27 @@ export default function LibraryApp() {
         notify("Those tracks were already in your library.");
       }
     },
-    [notify, reloadTracks],
+    [notify, reloadTracks, uploadCoverFile],
   );
+
+  async function retryCoverLookup(track: TrackRecord) {
+    setTrackMenu(null);
+    try {
+      await expectOk(
+        await apiFetch(
+          `/api/tracks/${encodeURIComponent(track.id)}/cover/retry`,
+          { method: "POST" },
+          { csrf: true, retryCsrfOnForbidden: true },
+        ),
+      );
+      notify(t("Cover lookup queued."));
+      window.setTimeout(() => {
+        void reloadTracks();
+      }, 2500);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : t("Could not retry cover lookup."));
+    }
+  }
 
   const applyMeta = useCallback(
     (meta: LibraryMeta) => {
@@ -2270,12 +2298,17 @@ export default function LibraryApp() {
           </button>
         ) : null}
         <div className="menu-sep" />
-        <button className={`menu-item${track.coverSource === "placeholder" || track.coverSource === "unknown" ? " cover-menu-item" : ""}`} role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
-          <span>{t(track.coverSource === "placeholder" || track.coverSource === "unknown" ? "Add cover" : "Change cover")}</span>
-          {track.coverSource === "placeholder" || track.coverSource === "unknown" ? (
+        <button className={`menu-item${track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? " cover-menu-item" : ""}`} role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
+          <span>{t(track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? "Add cover" : "Change cover")}</span>
+          {track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? (
             <small>{t("Generated placeholder")}</small>
           ) : null}
         </button>
+        {track.coverSource !== "upload" && track.coverSource !== "user" ? (
+          <button className="menu-item" role="menuitem" type="button" onClick={() => void retryCoverLookup(track)}>
+            {t("Retry cover")}
+          </button>
+        ) : null}
         <button className="menu-item" role="menuitem" type="button" onClick={() => openMetadataEditor(track)}>
           {t("Edit track details")}
         </button>
@@ -2457,6 +2490,9 @@ export default function LibraryApp() {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 6 }}>
             <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>{t("Add music")}</button>
             <button className="btn" type="button" onClick={() => folderInputRef.current?.click()}>{t("Add folder")}</button>
+            <button className="btn" type="button" onClick={() => uploadCoverInputRef.current?.click()}>
+              {uploadCoverFile ? t("Cover selected") : t("Optional cover")}
+            </button>
           </div>
         </div>
       );
@@ -2866,6 +2902,9 @@ export default function LibraryApp() {
             >
               <span className="now-title">{currentTrack?.title ?? "—"}</span>
             </button>
+            {currentTrack?.coverSource === "musicbrainz" ? (
+              <span className="now-cover-attribution">{t("Cover art from MusicBrainz / Cover Art Archive")}</span>
+            ) : null}
             <span className="now-artist">
               {currentTrack
                 ? artistNames(currentTrack).map((name, index) => (
@@ -3131,6 +3170,16 @@ export default function LibraryApp() {
                   {coverPending ? t("Removing cover…") : t("Remove cover")}
                 </button>
               ) : null}
+              {coverEditorTrack.coverSource !== "upload" && coverEditorTrack.coverSource !== "user" ? (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => void retryCoverLookup(coverEditorTrack)}
+                  disabled={coverPending}
+                >
+                  {t("Retry cover")}
+                </button>
+              ) : null}
               <button className="btn btn-primary" type="button" onClick={() => void saveCover()} disabled={coverPending || !coverFile}>
                 {coverPending ? t("Saving cover…") : t("Save cover")}
               </button>
@@ -3186,6 +3235,22 @@ export default function LibraryApp() {
         multiple
         onChange={(event) => {
           if (event.currentTarget.files) void uploadFiles(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
+      <input
+        ref={uploadCoverInputRef}
+        className="hidden-input"
+        type="file"
+        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0] ?? null;
+          if (file && file.size > 5 * 1024 * 1024) {
+            notify(t("Cover image must be 5 MB or smaller."));
+            event.currentTarget.value = "";
+            return;
+          }
+          setUploadCoverFile(file);
           event.currentTarget.value = "";
         }}
       />
