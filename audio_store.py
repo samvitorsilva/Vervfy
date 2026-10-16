@@ -170,12 +170,25 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
 def upload_file(path: str, file_path: str, content_type: str = "audio/mpeg") -> None:
     """Stream a local file to Storage without retaining the audio in memory."""
     client = _client()
-    with open(file_path, "rb") as source:
-        response = client.post(
-            _object_url(path),
-            content=source,
-            headers={"Content-Type": content_type, "x-upsert": "true"},
-        )
+    class FileChunks:
+        def __len__(self) -> int:
+            return os.path.getsize(file_path)
+
+        def __iter__(self):
+            with open(file_path, "rb") as source:
+                while chunk := source.read(64 * 1024):
+                    yield chunk
+
+
+    response = client.post(
+        _object_url(path),
+        content=FileChunks(),
+        headers={
+            "Content-Type": content_type,
+            "Content-Length": str(os.path.getsize(file_path)),
+            "x-upsert": "true",
+        },
+    )
     if response.status_code >= 300:
         raise StorageError(
             f"upload failed ({response.status_code}): {response.text[:200]}"

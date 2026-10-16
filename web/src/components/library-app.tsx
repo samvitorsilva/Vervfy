@@ -849,7 +849,14 @@ export default function LibraryApp() {
         await fetchWithRetry("/api/tracks/covers", { cache: "no-store" }, 2),
       );
       const payload = (await response.json()) as {
-        covers: Record<string, { cover_url: string | null; status: string }>;
+        covers: Record<
+          string,
+          {
+            cover_url: string | null;
+            cover_source?: TrackRecord["coverSource"];
+            status: string;
+          }
+        >;
         pending: boolean;
       };
       const cached = payload.covers ?? {};
@@ -872,7 +879,7 @@ export default function LibraryApp() {
             ...track,
             coverUrl: result.cover_url,
             remoteCoverUrl: result.cover_url,
-            coverSource: "audiodb",
+            coverSource: result.cover_source ?? "generated",
           };
         }),
       );
@@ -2490,9 +2497,6 @@ export default function LibraryApp() {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", marginTop: 6 }}>
             <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>{t("Add music")}</button>
             <button className="btn" type="button" onClick={() => folderInputRef.current?.click()}>{t("Add folder")}</button>
-            <button className="btn" type="button" onClick={() => uploadCoverInputRef.current?.click()}>
-              {uploadCoverFile ? t("Cover selected") : t("Optional cover")}
-            </button>
           </div>
         </div>
       );
@@ -2748,9 +2752,19 @@ export default function LibraryApp() {
                 <Icon name="plus" /> {t("New playlist")}
               </button>
             ) : view === "account" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
-              <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
-                <Icon name="import" /> {t("Add music")}
-              </button>
+              <>
+                <button
+                  className="btn"
+                  type="button"
+                  title={t("This cover will be used for each selected track.")}
+                  onClick={() => uploadCoverInputRef.current?.click()}
+                >
+                  {uploadCoverFile ? t("Cover selected") : t("Optional cover")}
+                </button>
+                <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
+                  <Icon name="import" /> {t("Add music")}
+                </button>
+              </>
             )}
           </div>
 
@@ -3245,10 +3259,19 @@ export default function LibraryApp() {
         accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
         onChange={(event) => {
           const file = event.currentTarget.files?.[0] ?? null;
-          if (file && file.size > 5 * 1024 * 1024) {
-            notify(t("Cover image must be 5 MB or smaller."));
-            event.currentTarget.value = "";
-            return;
+          if (file) {
+            if (file.size > 5 * 1024 * 1024) {
+              notify(t("Cover image must be 5 MB or smaller."));
+              event.currentTarget.value = "";
+              return;
+            }
+            const acceptedImageType = ["image/jpeg", "image/png", "image/webp"].includes(file.type);
+            const acceptedExtension = /\.(jpe?g|png|webp)$/i.test(file.name);
+            if (!acceptedImageType && !acceptedExtension) {
+              notify(t("Choose a JPEG, PNG, or WebP image."));
+              event.currentTarget.value = "";
+              return;
+            }
           }
           setUploadCoverFile(file);
           event.currentTarget.value = "";

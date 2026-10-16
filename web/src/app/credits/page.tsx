@@ -35,7 +35,7 @@ export default function CreditsPage() {
         </section>
 
         <section className="credits-source">
-          <h2>{t("Cover art from MusicBrainz / Cover Art Archive")}</h2>
+          <h2>{t("MusicBrainz and Cover Art Archive")}</h2>
           <p>{t("When a track has no uploaded or embedded cover, Vervfy may link a front-cover URL from Cover Art Archive via MusicBrainz. Those covers are shown by URL only; Vervfy does not store copies of the image files.")}</p>
           <p className="credits-links">
             <a href="https://musicbrainz.org/" target="_blank" rel="noopener noreferrer">
