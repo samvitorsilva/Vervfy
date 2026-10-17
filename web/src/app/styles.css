@@ -19,9 +19,9 @@
   --glass-blur:28px;
   --glass-blur-thin:18px;
   --glass-blur-thick:36px;
-  --glass-saturation:1.7;
-  --glass-tint-alpha:.28;
-  --glass-tint-alpha-refract:.2;
+  --glass-saturation:1.55;
+  --glass-tint-alpha:.16;
+  --glass-tint-alpha-refract:.12;
   --glass-radius:26px;
   --glass-border:rgba(255,255,255,.25);
   --glass-shadow:0 12px 38px rgba(0,0,0,.34);

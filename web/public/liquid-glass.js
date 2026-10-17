@@ -5,20 +5,7 @@
   const BEZEL_WIDTH = 14;
   const CORNER_RADIUS = 22;
   const DISPLACEMENT_SCALE = 20;
-  const BLUR = 14;
-  const FROST_BLUR = 22;
-  const SATURATION_FROST = 1.42;
-  const SATURATION_REFRACT = 1.4;
-  const TINT_ALPHA = 0.42;
-  const TINT_ALPHA_REFRACT = 0.3;
   const MAX_ACTIVE_SURFACES = 4;
-
-  document.documentElement.style.setProperty("--glass-blur", `${BLUR}px`);
-  document.documentElement.style.setProperty("--glass-frost-blur", `${FROST_BLUR}px`);
-  document.documentElement.style.setProperty("--glass-saturation", String(SATURATION_FROST));
-  document.documentElement.style.setProperty("--glass-saturation-refract", String(SATURATION_REFRACT));
-  document.documentElement.style.setProperty("--glass-tint-alpha", String(TINT_ALPHA));
-  document.documentElement.style.setProperty("--glass-tint-alpha-refract", String(TINT_ALPHA_REFRACT));
 
   const backdrop = document.getElementById("artworkBackdrop");
   const backdropImage = document.getElementById("artworkBackdropImage");
