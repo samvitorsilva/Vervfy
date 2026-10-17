@@ -17,7 +17,7 @@
   let nextFilterId = 0;
   let syncFrame = 0;
   const surfacePriorities = [
-    [".queue-picker-card.glass, .photo-editor-card.glass, .shortcuts-card.glass, .sleep-timer-card.glass", 0],
+    [".queue-picker-card.glass, .photo-editor-card.glass", 0],
     [".nowbar.glass", 1],
     [".rail.glass", 2],
     [".topbar.glass", 3],
@@ -41,8 +41,10 @@
     filter.append(image, displacement);
     svg.append(filter);
     return (
-      typeof image.setAttribute === "function" &&
-      typeof displacement.setAttribute === "function" &&
+      typeof SVGFEImageElement !== "undefined" &&
+      typeof SVGFEDisplacementMapElement !== "undefined" &&
+      image instanceof SVGFEImageElement &&
+      displacement instanceof SVGFEDisplacementMapElement &&
       filter.children.length === 2
     );
   }

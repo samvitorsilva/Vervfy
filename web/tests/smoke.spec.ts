@@ -565,8 +565,8 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
     if (!rail) return null;
     const computed = getComputedStyle(rail);
     const opacity = Number(computed.backgroundColor.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
-    const filterUrl = rail.style.getPropertyValue("--glass-filter-url");
-    const filterId = filterUrl.match(/#([^)]+)/)?.[1];
+    const filter = rail.style.getPropertyValue("backdrop-filter");
+    const filterId = filter.match(/url\(#([^)]+)\)/)?.[1];
     const mapSource = filterId
       ? document.querySelector<SVGImageElement>(`#${CSS.escape(filterId)} feImage`)?.getAttribute("href")
       : null;
@@ -576,12 +576,12 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
       boxShadow: computed.boxShadow,
       opacity,
       glassCount: document.querySelectorAll(".glass").length,
+      refractCount: document.querySelectorAll(".glass.refract").length,
       refract: rail.classList.contains("refract"),
-      chrome: "chrome" in window,
-      supportsRefraction: CSS.supports(
-        "backdrop-filter",
-        "blur(3px) url(#lg) saturate(170%)",
-      ),
+      supportsRefraction: (
+        CSS.supports("backdrop-filter", "blur(1px) url(#lg)") ||
+        CSS.supports("-webkit-backdrop-filter", "blur(1px) url(#lg)")
+      ) && typeof SVGFEImageElement !== "undefined" && typeof SVGFEDisplacementMapElement !== "undefined",
       mapSource,
     };
   });
@@ -591,13 +591,45 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   expect(glassState?.opacity).toBeLessThanOrEqual(0.5);
   expect(glassState?.backdropFilter).toMatch(/blur\((14|18|22|28|36)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
-  expect(glassState?.glassCount).toBeLessThanOrEqual(4);
-  if (glassState?.chrome && glassState.supportsRefraction) {
+  expect(glassState?.glassCount).toBeGreaterThanOrEqual(4);
+  expect(glassState?.refractCount).toBeLessThanOrEqual(4);
+  if (glassState?.supportsRefraction) {
     expect(glassState.refract).toBe(true);
     expect(glassState.mapSource).toMatch(/^data:image\/svg\+xml/);
   } else {
     expect(glassState?.refract).toBe(false);
   }
+
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty("--glass-blur", "12px");
+    document.documentElement.style.setProperty("--glass-tint-alpha", ".32");
+  });
+  for (const selector of [".rail", ".topbar", ".nowbar", ".side-panel"]) {
+    await expect
+      .poll(() =>
+        page.locator(selector).evaluate((element) => getComputedStyle(element).backdropFilter),
+      )
+      .toContain("blur(12px)");
+  }
+  for (const [selector, alpha] of [
+    [".rail", 0.32],
+    [".topbar", 0.32],
+    [".nowbar", 0.32],
+    [".side-panel", 0.56],
+  ] as const) {
+    await expect
+      .poll(() =>
+        page.locator(selector).evaluate((element) => {
+          const color = getComputedStyle(element).backgroundColor;
+          return Number(color.match(/,\s*([\d.]+)\)$/)?.[1] ?? 0);
+        }),
+      )
+      .toBeCloseTo(alpha, 2);
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty("--glass-blur");
+    document.documentElement.style.removeProperty("--glass-tint-alpha");
+  });
 
   await page.emulateMedia({ contrast: "more" });
   await expect
@@ -613,7 +645,7 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   await expect(page.getByRole("dialog", { name: "New playlist" })).toBeVisible();
   await expect(page.locator(".queue-picker-card.glass")).toBeVisible();
   await expect
-    .poll(() => page.locator(".glass").count())
+    .poll(() => page.locator(".glass.refract").count())
     .toBeLessThanOrEqual(4);
 });
 
