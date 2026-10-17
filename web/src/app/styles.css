@@ -1885,26 +1885,64 @@ button:focus-visible{
 
 .artwork-backdrop{
   position:fixed;
-  inset:-12%;
+  inset:-16%;
   z-index:0;
   overflow:hidden;
   pointer-events:none;
   background:
-    radial-gradient(80% 70% at 18% 18%, rgba(169,157,255,.34), transparent 72%),
-    radial-gradient(70% 75% at 84% 82%, rgba(84,232,212,.2), transparent 72%),
-    linear-gradient(145deg, #171525, #090b11 72%);
+    radial-gradient(52% 56% at 16% 20%, color-mix(in srgb,var(--accent) 62%,transparent), transparent 100%),
+    radial-gradient(48% 52% at 82% 76%, color-mix(in srgb,var(--cyan) 48%,transparent), transparent 100%),
+    radial-gradient(42% 46% at 72% 12%, color-mix(in srgb,var(--amber) 30%,transparent), transparent 100%),
+    linear-gradient(145deg,#29203a,#10232d 54%,#161326);
+}
+.artwork-backdrop::before,
+.artwork-backdrop::after{
+  content:"";
+  position:absolute;
+  z-index:1;
+  width:56vw;
+  height:56vw;
+  min-width:420px;
+  min-height:420px;
+  border-radius:50%;
+  pointer-events:none;
+  filter:blur(72px);
+  opacity:.72;
+  will-change:transform;
+}
+.artwork-backdrop::before{
+  left:8%;
+  top:8%;
+  background:radial-gradient(circle,color-mix(in srgb,var(--accent) 74%,transparent) 0%,transparent 68%);
+  animation:artworkDriftA 38s ease-in-out infinite alternate;
+}
+.artwork-backdrop::after{
+  right:3%;
+  bottom:0;
+  background:radial-gradient(circle,color-mix(in srgb,var(--cyan) 62%,transparent) 0%,transparent 70%);
+  animation:artworkDriftB 46s ease-in-out infinite alternate;
+}
+@keyframes artworkDriftA{
+  from{ transform:translate3d(-3%,0,0) scale(.9); }
+  to{ transform:translate3d(10%,12%,0) scale(1.12); }
+}
+@keyframes artworkDriftB{
+  from{ transform:translate3d(4%,5%,0) scale(1.08); }
+  to{ transform:translate3d(-12%,-8%,0) scale(.88); }
 }
 .artwork-backdrop img{
+  position:relative;
+  z-index:0;
   display:block;
   width:100%;
   height:100%;
   object-fit:cover;
   opacity:0;
-  filter:blur(80px) brightness(.48) saturate(1.55);
+  filter:blur(68px) brightness(.78) saturate(1.65);
   transform:scale(1.2);
   transition:opacity .7s var(--ease);
 }
-.artwork-backdrop.has-art img{ opacity:.72; }
+.artwork-backdrop.has-art img{ opacity:.82; }
 .glass-filters{
   position:fixed;
   width:0;
@@ -2051,6 +2089,8 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
 }
 @media (prefers-reduced-motion:reduce){
   .field-blob{ animation:none; will-change:auto; }
+  .artwork-backdrop::before,
+  .artwork-backdrop::after{ animation:none; will-change:auto; }
   .glass::before{ transition:none; }
 }
 @media (prefers-reduced-motion: reduce){
