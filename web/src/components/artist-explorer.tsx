@@ -590,6 +590,15 @@ export default function ArtistExplorer({
   return (
     <div className="artist-page">
       <header className="artist-hero">
+        <div className="artist-hero-backdrop" aria-hidden="true">
+          <ArtistAvatar
+            name={currentArtist.name}
+            className="artist-photo artist-hero-backdrop-avatar"
+            userPhotoUrl={photoPreview ?? userPhotoUrl}
+            artistImageUrl={audioDbPhotoUrl}
+            coverUrls={artistCovers}
+          />
+        </div>
         <figure className="artist-photo-wrap">
           <ArtistAvatar
             name={currentArtist.name}
