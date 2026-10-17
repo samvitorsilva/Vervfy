@@ -554,6 +554,14 @@ test("mobile player menu opens MusicBrainz cover art information", async ({ page
   await expect(trackCard).toBeVisible();
   await trackCard.click();
   await page.setViewportSize({ width: 360, height: 812 });
+
+  const compactCoverInfo = page.locator("#nowbar .player-control-cover-info");
+  await expect(compactCoverInfo).toBeVisible();
+  await compactCoverInfo.click();
+  const compactCoverInfoDialog = page.getByRole("dialog", { name: "Cover art information" });
+  await expect(compactCoverInfoDialog).toBeVisible();
+  await compactCoverInfoDialog.getByRole("button", { name: "Close cover art information" }).click();
+
   await page.locator(".now-track-open").click();
 
   const player = page.getByRole("dialog", { name: "Now playing" });

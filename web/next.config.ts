@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 
+module.exports = {
+  allowedDevOrigins: ['192.168.101.15'],
+}
+
 const configuredBackendUrl = process.env.BACKEND_URL?.trim();
 
 if (!configuredBackendUrl) {

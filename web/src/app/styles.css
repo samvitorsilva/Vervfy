@@ -1704,7 +1704,7 @@ span.artist-photo{
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
-  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-mute){ display:none; }
+  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-queue):not(.player-control-mute){ display:none; }
   .now-extra .player-control-mute{ display:flex; width:28px; height:28px; }
   .player-control-mute svg{ width:17px; height:17px; }
   .toasts{ bottom:calc(var(--mobile-rail-clear) + 8px); }
