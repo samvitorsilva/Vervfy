@@ -531,11 +531,49 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   await page.getByLabel("Password").fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await page.setViewportSize({ width: 360, height: 812 });
 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
+  await expect(navigation.locator(".rail-label").first()).toBeVisible();
+  await expect
+    .poll(() => navigation.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
+    .toBe(224);
+  const desktopRailBounds = await navigation.boundingBox();
+  expect(desktopRailBounds).toMatchObject({ x: 0, y: 0, width: 224, height: 900 });
+  await expect
+    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).flexDirection))
+    .toBe("row");
+  await expect
+    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).borderRadius))
+    .toBe("999px");
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
+  await expect
+    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).flexDirection))
+    .toBe("column");
+
+  await page.setViewportSize({ width: 360, height: 812 });
   await expect(navigation.locator("[data-view]:visible")).toHaveCount(5);
+  await expect(navigation.locator('[data-view="account"]')).toBeHidden();
+  await expect(page.getByRole("button", { name: "Open account" })).toBeVisible();
+  await expect(navigation.locator(".rail-label").first()).toBeVisible();
+  const dockBounds = await navigation.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, right: bounds.right, bottom: bounds.bottom, height: bounds.height };
+  });
+  expect(dockBounds).toEqual({ left: 0, right: 360, bottom: 812, height: 68 });
+  for (const button of await navigation.locator("[data-view]:visible").all()) {
+    const bounds = await button.boundingBox();
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  await page.getByRole("button", { name: "Open account" }).click();
+  await expect(page.locator(".view-title")).toHaveText("Account");
+  await page.reload();
+  await expect(page.locator(".view-title")).toHaveText("Library");
   const searchBounds = await page.locator(".search-wrap").evaluate((element) => {
     const input = element.querySelector("input")!.getBoundingClientRect();
     const shortcut = element.querySelector(".kbd")!.getBoundingClientRect();
@@ -614,7 +652,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBe("rgba(15, 18, 28, 0.3)");
+    .toBe("rgb(9, 11, 17)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
@@ -641,9 +679,9 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
+  expect(glassState?.background).toBe("rgb(9, 11, 17)");
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
-  expect(glassState?.boxShadow).toContain("inset");
+  expect(glassState?.boxShadow).toBe("none");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
   if (glassState?.chromium && glassState.supportsRefraction) {
     expect(glassState.refract).toBe(true);
