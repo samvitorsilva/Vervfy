@@ -2407,3 +2407,124 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
       rgba(20,22,30,.62);
   }
 }
+
+/* Lyrics: let the cover supply atmosphere without sacrificing the words. */
+.lyrics-overlay{
+  background:#080a10;
+  animation:lyricsEnter .34s var(--ease) both;
+}
+@keyframes lyricsEnter{
+  from{ opacity:0; }
+  to{ opacity:1; }
+}
+.lyrics-bg{
+  filter:blur(80px) saturate(1.55) brightness(.32);
+  transform:scale(1.18);
+}
+.lyrics-bg::after{
+  background:
+    linear-gradient(180deg,rgba(8,10,16,.48),rgba(8,10,16,.68) 52%,rgba(8,10,16,.88)),
+    radial-gradient(75% 75% at 76% 45%,var(--accent-soft),transparent 80%);
+}
+.lyrics-close,.lyrics-edit-top,.lyrics-edit-control,.viz-close{
+  border-color:rgba(255,255,255,.18);
+  background:rgba(255,255,255,.09);
+  -webkit-backdrop-filter:blur(20px) saturate(1.5);
+  backdrop-filter:blur(20px) saturate(1.5);
+}
+.lyrics-player{
+  border-color:rgba(255,255,255,.24);
+  background:
+    radial-gradient(120% 100% at 10% 0%,var(--accent-soft),transparent 62%),
+    linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.035) 50%),
+    rgba(18,20,30,.56);
+  -webkit-backdrop-filter:blur(30px) saturate(1.65);
+  backdrop-filter:blur(30px) saturate(1.65);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.28),0 24px 66px rgba(0,0,0,.4);
+}
+.lyrics-player-controls .tbtn{
+  width:44px;
+  height:44px;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:50%;
+}
+.lyrics-player-controls .tbtn.on{ color:var(--accent); background:var(--accent-soft); }
+.lyrics-player-controls .tbtn-play{
+  border:1px solid rgba(255,255,255,.52);
+  background:linear-gradient(145deg,#fff,rgba(224,226,239,.9));
+  box-shadow:0 8px 26px var(--accent-soft),inset 0 1px 0 #fff;
+}
+.lyrics-player-controls .tbtn-play:hover,
+.lyrics-player-controls .tbtn-play:active{ background:#fff; transform:scale(.97); }
+.lyrics-side{
+  border-color:rgba(255,255,255,.24);
+  background:
+    radial-gradient(130% 85% at 0% 0%,var(--accent-soft),transparent 70%),
+    linear-gradient(145deg,rgba(255,255,255,.15),rgba(255,255,255,.025) 60%),
+    rgba(18,20,30,.5);
+  -webkit-backdrop-filter:blur(28px) saturate(1.6);
+  backdrop-filter:blur(28px) saturate(1.6);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 24px 70px rgba(0,0,0,.36);
+}
+.lyrics-side::before{
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.48),var(--accent),transparent);
+}
+.lyrics-art{
+  border-radius:20px;
+  box-shadow:0 24px 55px rgba(0,0,0,.42),0 0 40px var(--accent-soft),0 0 0 1px rgba(255,255,255,.18);
+}
+.lyrics-line{
+  color:rgba(255,255,255,.58);
+  filter:blur(.35px);
+  text-shadow:0 2px 14px rgba(0,0,0,.26);
+}
+.lyrics-line.active{
+  color:#fff;
+  filter:none;
+  transform:scale(1.025);
+  text-shadow:0 2px 28px var(--accent-soft),0 2px 14px rgba(0,0,0,.42);
+}
+.lyrics-line.past{
+  color:rgba(255,255,255,.34);
+  filter:blur(.8px);
+}
+.lyrics-plain p{ color:rgba(255,255,255,.9); text-shadow:0 2px 18px rgba(0,0,0,.36); }
+.lyrics-source{
+  color:var(--accent);
+  border-color:color-mix(in srgb,var(--accent) 44%,transparent);
+  background:var(--accent-soft);
+}
+.lyrics-input,.lyrics-sync-line{
+  border-color:rgba(255,255,255,.18);
+  border-radius:18px;
+  background:rgba(255,255,255,.075);
+  -webkit-backdrop-filter:blur(18px) saturate(1.45);
+  backdrop-filter:blur(18px) saturate(1.45);
+}
+.lyrics-input:focus,.lyrics-sync-line.stamped{
+  border-color:color-mix(in srgb,var(--accent) 64%,white);
+  box-shadow:0 0 0 3px var(--accent-soft),inset 0 1px 0 rgba(255,255,255,.14);
+}
+.lyrics-sync-line.stamped .lyrics-sync-line-time,.lyrics-sync-clock strong{ color:var(--accent); }
+@supports not (backdrop-filter:blur(1px)){
+  .lyrics-player,.lyrics-side{ background:rgba(18,20,30,.92); }
+}
+@media (max-width:640px){
+  .lyrics-bg{ filter:blur(64px) saturate(1.45) brightness(.32); }
+  .lyrics-player{ background:rgba(18,20,30,.72); }
+  .lyrics-side{ background:rgba(18,20,30,.72); }
+  .lyrics-line.active{ transform:none; }
+}
+@media (prefers-reduced-transparency:reduce), (prefers-contrast:more){
+  .lyrics-player,.lyrics-side,.lyrics-input,.lyrics-sync-line{
+    -webkit-backdrop-filter:none;
+    backdrop-filter:none;
+    background:rgba(18,20,30,.94);
+    border-color:rgba(255,255,255,.48);
+  }
+}
+@media (prefers-reduced-motion:reduce){
+  .lyrics-overlay{ animation:none; }
+  .lyrics-line{ filter:none; }
+  .lyrics-track{ will-change:auto; }
+}
