@@ -12,20 +12,41 @@
   const artwork = document.getElementById("nowArt");
   const defs = document.querySelector(".glass-filters defs");
   const reducedTransparency = matchMedia("(prefers-reduced-transparency: reduce)");
-  // SVG filters inside backdrop-filter only work in Chromium.
-  const canRefract = Boolean(window.chrome);
-
   const filterStates = new WeakMap();
   const trackedSurfaces = new Set();
   let nextFilterId = 0;
   let syncFrame = 0;
   const surfacePriorities = [
-    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card", 0],
-    [".nowbar", 1],
-    [".rail", 2],
-    [".side-panel", 3],
-    [".lyrics-player", 4],
+    [".queue-picker-card.glass, .photo-editor-card.glass, .shortcuts-card.glass, .sleep-timer-card.glass", 0],
+    [".nowbar.glass", 1],
+    [".rail.glass", 2],
+    [".topbar.glass", 3],
+    [".side-panel.glass", 4],
+    [".lyrics-player.glass, .lyrics-side.glass", 5],
   ];
+  const surfaceSelector = surfacePriorities.map(([selector]) => selector).join(",");
+  const supportsBackdropBlur =
+    CSS.supports("backdrop-filter", "blur(1px)") ||
+    CSS.supports("-webkit-backdrop-filter", "blur(1px)");
+  const supportsSvgBackdropFilter =
+    CSS.supports("backdrop-filter", "blur(1px) url(#lg)") ||
+    CSS.supports("-webkit-backdrop-filter", "blur(1px) url(#lg)");
+
+  function hasSvgDisplacementSupport() {
+    if (!supportsBackdropBlur || !supportsSvgBackdropFilter) return false;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const filter = svgElement("filter");
+    const image = svgElement("feImage");
+    const displacement = svgElement("feDisplacementMap");
+    filter.append(image, displacement);
+    svg.append(filter);
+    return (
+      typeof image.setAttribute === "function" &&
+      typeof displacement.setAttribute === "function" &&
+      filter.children.length === 2
+    );
+  }
+  const canRefract = hasSvgDisplacementSupport();
 
   function setAccentFromArtwork(image) {
     const root = document.documentElement;
@@ -210,7 +231,8 @@
   function updateSurface(element) {
     if (!canRefract || reducedTransparency.matches) {
       element.classList.remove("refract");
-      element.style.removeProperty("--glass-filter-url");
+      element.style.removeProperty("backdrop-filter");
+      element.style.removeProperty("-webkit-backdrop-filter");
       return;
     }
 
@@ -240,7 +262,9 @@
       state.radius = radius;
     }
 
-    element.style.setProperty("--glass-filter-url", `url(#${state.filter.id})`);
+    const filter = `blur(var(--glass-blur)) url(#${state.filter.id}) saturate(var(--glass-saturation))`;
+    element.style.setProperty("backdrop-filter", filter);
+    element.style.setProperty("-webkit-backdrop-filter", filter);
     element.classList.add("refract");
   }
 
@@ -262,8 +286,9 @@
   }
 
   function deactivateSurface(element) {
-    element.classList.remove("glass", "refract", "glass-pressed");
-    element.style.removeProperty("--glass-filter-url");
+    element.classList.remove("refract");
+    element.style.removeProperty("backdrop-filter");
+    element.style.removeProperty("-webkit-backdrop-filter");
     const state = filterStates.get(element);
     if (state?.observing) {
       state.observer.disconnect();
@@ -280,15 +305,13 @@
   }
 
   function syncSurfaces() {
-    for (const [selector, priority] of surfacePriorities) {
-      for (const element of document.querySelectorAll(selector)) {
-        if (!element.hasAttribute("data-glass-priority")) {
-          element.setAttribute("data-glass-priority", String(priority));
-        }
-      }
-    }
-
-    const surfaces = [...document.querySelectorAll("[data-glass-priority]")];
+    const surfaces = [
+      ...new Set(
+        surfacePriorities.flatMap(([selector]) => [
+          ...document.querySelectorAll(selector),
+        ]),
+      ),
+    ];
     const surfaceSet = new Set(surfaces);
 
     for (const element of trackedSurfaces) {
@@ -302,9 +325,7 @@
 
     const active = surfaces
       .filter(isVisible)
-      .sort(
-        (a, b) => Number(a.dataset.glassPriority) - Number(b.dataset.glassPriority),
-      )
+      .sort((a, b) => priorityOf(a) - priorityOf(b))
       .slice(0, MAX_ACTIVE_SURFACES);
     const activeSet = new Set(active);
 
@@ -315,11 +336,10 @@
         continue;
       }
 
-      element.classList.add("glass");
-
       if (reducedTransparency.matches || !canRefract) {
         element.classList.remove("refract");
-        element.style.removeProperty("--glass-filter-url");
+        element.style.removeProperty("backdrop-filter");
+        element.style.removeProperty("-webkit-backdrop-filter");
         const state = filterStates.get(element);
         if (state?.observing) {
           state.observer.disconnect();
@@ -341,6 +361,10 @@
     }
   }
 
+  function priorityOf(element) {
+    return surfacePriorities.find(([selector]) => element.matches(selector))?.[1] ?? 9;
+  }
+
   const observer = new MutationObserver((records) => {
     let needsSync = false;
     for (const record of records) {
@@ -356,17 +380,11 @@
         needsSync = true;
         continue;
       }
-      if (
-        record.attributeName === "class" &&
-        record.target.matches?.("[data-glass-priority]")
-      ) {
+      if (record.attributeName === "class" && record.target.matches?.(surfaceSelector)) {
         const normalize = (value) =>
           (value || "")
             .split(/\s+/)
-            .filter(
-              (name) =>
-                name && !["glass", "refract"].includes(name),
-            )
+            .filter((name) => name && name !== "refract")
             .sort()
             .join(" ");
         if (normalize(record.oldValue) === normalize(record.target.className)) {

@@ -2702,7 +2702,7 @@ export default function LibraryApp() {
         setIsDraggingFiles(false);
         void uploadFiles(event.dataTransfer.files);
       }}>
-        <nav className="rail" aria-label={t("Main navigation")}>
+        <nav className="rail glass glass-regular" aria-label={t("Main navigation")}>
           <div className="logo-mark">
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
@@ -2720,7 +2720,7 @@ export default function LibraryApp() {
         </nav>
 
         <div className="main">
-          <div className="topbar">
+          <div className="topbar glass glass-thin">
             <button className="home-profile-avatar" type="button" title={t("Account")} aria-label={t("Open account")} onClick={() => setView("account")}>
               {profile?.photo_url
                 ? <img src={profile.photo_url} alt="" onError={() => setProfile((current) => current ? { ...current, photo_url: null } : null)} />
@@ -2877,7 +2877,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
+      <div id="nowbar" className={`nowbar glass glass-thin${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
@@ -2981,7 +2981,7 @@ export default function LibraryApp() {
         </section>
       </div> : null}
 
-      <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
+      <aside ref={queuePanelRef} className={`side-panel glass glass-regular${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
         <div className="side-head"><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
         <div className="side-body">
           {queue.length === 0 ? <div className="side-empty"><p>{t("Your queue is empty.")}</p><button className="btn" type="button" onClick={() => setQueuePickerOpen(true)}>{t("Add from library")}</button></div> : queue.map((trackId, index) => {
