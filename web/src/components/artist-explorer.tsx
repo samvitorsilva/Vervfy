@@ -708,7 +708,7 @@ export default function ArtistExplorer({
             if (event.target === event.currentTarget && !photoPending) closePhotoEditor();
           }}
         >
-          <section className="queue-picker-card track-editor-card artist-photo-editor">
+          <section className="queue-picker-card glass glass-thick track-editor-card artist-photo-editor">
             <div className="queue-picker-head">
               <h3 id="artistPhotoEditorTitle">{t("Photo for")} {currentArtist.name}</h3>
               <button

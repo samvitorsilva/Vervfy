@@ -2975,7 +2975,7 @@ export default function LibraryApp() {
       ) : null}
       {visualizerOpen ? <VisualizerOverlay onClose={() => setVisualizerOpen(false)} /> : null}
       {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
-        <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
+        <section className="queue-picker-card glass glass-thick shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
           <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
           <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
@@ -3036,7 +3036,7 @@ export default function LibraryApp() {
       </aside>
 
       <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
-        <div className="queue-picker-card">
+        <div className="queue-picker-card glass glass-thick">
           <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
           <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t("Search library")} aria-label={t("Search library")} /></label>
           <div className="queue-picker-list">{filteredQueueTracks.length ? filteredQueueTracks.map((track) => <button className="qp-row" type="button" key={track.id} onClick={(event) => {
@@ -3048,7 +3048,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
-        <form className="queue-picker-card playlist-name-card" onSubmit={createOrRenamePlaylist}>
+        <form className="queue-picker-card glass glass-thick playlist-name-card" onSubmit={createOrRenamePlaylist}>
           <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? t("Rename playlist") : t("New playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
           <label className="playlist-name-label" htmlFor="playlistNameInput">{t("Playlist name")}</label>
           <input ref={playlistNameInputRef} className="playlist-name-input" id="playlistNameInput" maxLength={200} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} />
@@ -3057,7 +3057,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
-        <div className="queue-picker-card">
+        <div className="queue-picker-card glass glass-thick">
           <div className="queue-picker-head"><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">{playlists.length ? playlists.map((playlist) => {
             const trackId = playlistPicker;
@@ -3073,7 +3073,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
-        <div className="queue-picker-card">
+        <div className="queue-picker-card glass glass-thick">
           <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">
             {tracksAvailableToAdd.length ? tracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
@@ -3094,7 +3094,7 @@ export default function LibraryApp() {
             if (event.target === event.currentTarget && !coverPending) closeCoverEditor();
           }}
         >
-          <section className="queue-picker-card track-editor-card">
+          <section className="queue-picker-card glass glass-thick track-editor-card">
             <div className="queue-picker-head">
               <h3 id="coverEditorTitle">{t("Cover for")} {coverEditorTrack.title}</h3>
               <button className="icon-btn" type="button" aria-label={t("Close")} onClick={closeCoverEditor} disabled={coverPending}>
@@ -3196,7 +3196,7 @@ export default function LibraryApp() {
             if (event.target === event.currentTarget && !metadataPending) setMetadataEditorTrack(null);
           }}
         >
-          <form className="queue-picker-card track-editor-card" onSubmit={saveTrackDetails}>
+          <form className="queue-picker-card glass glass-thick track-editor-card" onSubmit={saveTrackDetails}>
             <div className="queue-picker-head">
               <h3 id="trackDetailsTitle">{t("Track details")}</h3>
               <button className="icon-btn" type="button" aria-label={t("Close")} onClick={() => setMetadataEditorTrack(null)} disabled={metadataPending}>
