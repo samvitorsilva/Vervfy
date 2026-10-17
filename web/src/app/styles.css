@@ -828,8 +828,15 @@ span.artist-photo{
   display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:8px;
   font-size:13px; font-weight:500; color:var(--text-mid); cursor:pointer; position:relative;
 }
+.track-context-menu .menu-item{ padding-left:35px; }
 .menu-item:hover{ background:var(--surface-control-hover); color:var(--text); }
 .menu-item svg{ width:14px; height:14px; }
+.track-context-menu .menu-item > svg{
+  position:absolute; left:11px; top:50%; transform:translateY(-50%);
+}
+.track-context-menu .menu-item-destructive{ color:var(--danger); }
+.track-context-menu .menu-item-destructive:hover{ color:#fff; background:rgba(255,107,122,.16); }
+.track-context-menu .menu-item-favorite[aria-checked="true"] svg{ color:var(--amber); }
 .cover-menu-item{
   align-items:flex-start; flex-direction:column; gap:3px;
   width:100%; min-height:44px; white-space:normal; overflow-wrap:anywhere;
@@ -1970,6 +1977,13 @@ button:focus-visible{
   text-shadow:none;
 }
 .topbar.glass::before{ display:none; }
+.track-context-menu.glass{
+  position:fixed;
+  z-index:200;
+  background:rgba(12,14,20,.9);
+  border-color:rgba(255,255,255,.1);
+  box-shadow:0 20px 56px rgba(0,0,0,.48);
+}
 .nowbar.glass{
   position:fixed;
   z-index:1000;
@@ -2014,6 +2028,11 @@ button:focus-visible{
   }
   .glass::before{ display:none; }
   .topbar.glass{
+    background:rgba(24,26,36,.97);
+    -webkit-backdrop-filter:none;
+    backdrop-filter:none;
+  }
+  .track-context-menu.glass{
     background:rgba(24,26,36,.97);
     -webkit-backdrop-filter:none;
     backdrop-filter:none;

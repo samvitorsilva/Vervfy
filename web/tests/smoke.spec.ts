@@ -65,6 +65,41 @@ test("Brazilian Portuguese is detected and the language choice persists", async 
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 });
 
+test("track menus use icons selectively and stay within the glass budget", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This interaction test uses the local mock backend.",
+  );
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
+    name: "menu-actions.wav",
+    mimeType: "audio/wav",
+    buffer: makeWav(),
+  });
+
+  const track = page.locator(".card").filter({ hasText: "menu-actions" });
+  await expect(track).toBeVisible();
+  await track.getByRole("button", { name: "More options for menu-actions" }).click();
+
+  const menu = page.getByRole("menu", { name: "Options for menu-actions" });
+  await expect(menu).toHaveClass(/glass/);
+  await expect(menu.locator(".menu-item > svg")).toHaveCount(3);
+  await expect(menu.getByRole("menuitem", { name: "Play next" }).locator("svg")).toHaveCount(1);
+  await expect(menu.getByRole("menuitem", { name: "Add to queue" }).locator("svg")).toHaveCount(0);
+  await expect(menu.getByRole("menuitemcheckbox", { name: "Save to liked songs" }).locator("svg")).toHaveCount(1);
+  await expect(menu.getByRole("menuitem", { name: "Remove from library" }).locator("svg")).toHaveCount(1);
+  await expect
+    .poll(() => page.locator(".glass").count())
+    .toBeLessThanOrEqual(4);
+});
+
 test("login displays JSON authentication errors", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("invalid-user");
@@ -219,6 +254,19 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   const artistTrackMenu = page.getByRole("menu", { name: "Options for responsive-player" });
   await expect(artistTrackMenu.getByRole("menuitem", { name: "Play next" })).toBeVisible();
   await expect(artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" })).toBeVisible();
+  await expect(artistTrackMenu.locator(".menu-item > svg")).toHaveCount(3);
+  await expect(
+    artistTrackMenu.getByRole("menuitem", { name: "Play next" }).locator("svg"),
+  ).toHaveCount(1);
+  await expect(
+    artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).locator("svg"),
+  ).toHaveCount(0);
+  await expect(
+    artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" }).locator("svg"),
+  ).toHaveCount(1);
+  await expect(
+    artistTrackMenu.getByRole("menuitem", { name: "Remove from library" }).locator("svg"),
+  ).toHaveCount(1);
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
   const artistAvatar = page.getByRole("img", { name: "Vervfy Test Artist" });

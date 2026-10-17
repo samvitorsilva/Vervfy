@@ -2306,16 +2306,20 @@ export default function LibraryApp() {
         style={{ top: trackMenu.top, left: trackMenu.left }}
         onClick={(event) => event.stopPropagation()}
       >
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track, true); setTrackMenu(null); }}>{t("Play next")}</button>
+        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track, true); setTrackMenu(null); }}>
+          <Icon name="play" />
+          {t("Play next")}
+        </button>
         <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track); setTrackMenu(null); }}>{t("Add to queue")}</button>
         <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); setPlaylistPicker(track.id); setTrackMenu(null); }}>{t("Add to playlist")}</button>
         <button
-          className="menu-item"
+          className={`menu-item${track.offlineUrl ? " menu-item-remove" : ""}`}
           role="menuitem"
           type="button"
           disabled={offlinePendingId !== null}
           onClick={() => void toggleOfflineDownload(track)}
         >
+          {track.offlineUrl ? <Icon name="close" /> : null}
           {offlinePendingId === track.id
             ? t("Saving offline…")
             : track.offlineUrl
@@ -2323,12 +2327,13 @@ export default function LibraryApp() {
               : t("Download for offline")}
         </button>
         <button
-          className="menu-item"
+          className="menu-item menu-item-favorite"
           role="menuitemcheckbox"
           type="button"
           aria-checked={track.favorite}
           onClick={() => { toggleFavoriteFor(track); setTrackMenu(null); }}
         >
+          <Icon name="heart" />
           {track.favorite ? t("Remove from liked songs") : t("Save to liked songs")}
         </button>
         {artistNames(track).map((name) => (
@@ -2344,7 +2349,8 @@ export default function LibraryApp() {
         ))}
         <button className="menu-item" role="menuitem" type="button" onClick={() => void shareTrack(track)}>{t("Share song")}</button>
         {inPlaylist && playlist ? (
-          <button className="menu-item" role="menuitem" type="button" onClick={() => removeTrackFromPlaylist(playlist.id, track)}>
+          <button className="menu-item menu-item-remove" role="menuitem" type="button" onClick={() => removeTrackFromPlaylist(playlist.id, track)}>
+            <Icon name="close" />
             {t("Remove from this playlist")}
           </button>
         ) : null}
@@ -2379,7 +2385,8 @@ export default function LibraryApp() {
           {t("Edit track details")}
         </button>
         <div className="menu-sep" />
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); void removeTrack(track); }}>
+        <button className="menu-item menu-item-destructive" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); void removeTrack(track); }}>
+          <Icon name="close" />
           {t("Remove from library")}
         </button>
       </div>,
