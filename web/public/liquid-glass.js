@@ -25,6 +25,7 @@
   const artwork = document.getElementById("nowArt");
   const defs = document.querySelector(".glass-filters defs");
   const reducedTransparency = matchMedia("(prefers-reduced-transparency: reduce)");
+  const increasedContrast = matchMedia("(prefers-contrast: more)");
   // SVG filters inside backdrop-filter only work in Chromium.
   const canRefract = Boolean(window.chrome);
 
@@ -36,8 +37,9 @@
     [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side", 0],
     [".mobile-player-info", 1],
     [".nowbar", 2],
-    [".rail", 3],
-    [".side-panel", 4],
+    [".topbar", 3],
+    [".rail", 4],
+    [".side-panel", 5],
   ];
 
   function updateArtwork() {
@@ -181,7 +183,7 @@
   }
 
   function updateSurface(element) {
-    if (!canRefract || reducedTransparency.matches) {
+    if (!canRefract || reducedTransparency.matches || increasedContrast.matches) {
       element.classList.remove("refract");
       element.style.removeProperty("--glass-filter-url");
       return;
@@ -290,7 +292,7 @@
 
       element.classList.add("glass");
 
-      if (reducedTransparency.matches || !canRefract) {
+      if (reducedTransparency.matches || increasedContrast.matches || !canRefract) {
         element.classList.remove("refract");
         element.style.removeProperty("--glass-filter-url");
         const state = filterStates.get(element);
@@ -360,6 +362,7 @@
   });
 
   reducedTransparency.addEventListener?.("change", syncSurfaces);
+  increasedContrast.addEventListener?.("change", syncSurfaces);
   window.addEventListener("resize", queueSync, { passive: true });
 
   updateArtwork();

@@ -694,6 +694,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await expect(page.locator(".rail.glass")).toBeVisible();
+  await expect(page.locator(".topbar.glass")).toBeVisible();
   await expect
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
@@ -714,6 +715,31 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
       backdropFilter: computed.backdropFilter,
       boxShadow: computed.boxShadow,
       glassCount: document.querySelectorAll(".glass").length,
+      toolbarBackground: getComputedStyle(document.querySelector(".topbar")!).backgroundColor,
+      toolbarTextShadow: getComputedStyle(document.querySelector(".topbar")!).textShadow,
+      toolbarSearchHeight: document.querySelector(".search-wrap")!.getBoundingClientRect().height,
+      toolbarToggleHeight: document.querySelector(".view-toggle")!.getBoundingClientRect().height,
+      toolbarContrast: (() => {
+        const topbar = document.querySelector(".topbar")!;
+        const background = getComputedStyle(topbar).backgroundColor.match(/[\d.]+/g)!.map(Number);
+        const foreground = getComputedStyle(topbar).color.match(/[\d.]+/g)!.map(Number);
+        const luminance = (red: number, green: number, blue: number) => {
+          const linear = (channel: number) => {
+            const value = channel / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          };
+          return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+        };
+        const [red, green, blue, alpha] = background;
+        const surface = [
+          red * alpha + 255 * (1 - alpha),
+          green * alpha + 255 * (1 - alpha),
+          blue * alpha + 255 * (1 - alpha),
+        ];
+        const text = luminance(foreground[0], foreground[1], foreground[2]);
+        const base = luminance(surface[0], surface[1], surface[2]);
+        return (Math.max(text, base) + 0.05) / (Math.min(text, base) + 0.05);
+      })(),
       refract: rail.classList.contains("refract"),
       chromium: "chrome" in window,
       supportsRefraction: CSS.supports(
@@ -729,6 +755,36 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
   expect(glassState?.boxShadow).toBe("none");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
+  expect(glassState?.toolbarBackground).toBe("rgba(12, 14, 20, 0.86)");
+  expect(glassState?.toolbarTextShadow).toBe("none");
+  expect(glassState?.toolbarSearchHeight).toBe(40);
+  expect(glassState?.toolbarToggleHeight).toBe(40);
+  expect(glassState?.toolbarContrast).toBeGreaterThanOrEqual(4.5);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.locator(".topbar").evaluate((element) => {
+        const rects = (selector: string) => {
+          const rect = element.querySelector(selector)!.getBoundingClientRect();
+          return [rect.width, rect.height];
+        };
+        return {
+          avatar: rects(".home-profile-avatar"),
+          searchHeight: rects(".search-wrap")[1],
+          toggleHeight: rects(".view-toggle")[1],
+          toggleButton: rects(".view-toggle button"),
+          actionHeight: rects(".btn-primary")[1],
+        };
+      }),
+    )
+    .toEqual({
+      avatar: [44, 44],
+      searchHeight: 44,
+      toggleHeight: 50,
+      toggleButton: [44, 44],
+      actionHeight: 44,
+    });
+  await page.setViewportSize({ width: 1440, height: 900 });
   if (glassState?.chromium && glassState.supportsRefraction) {
     expect(glassState.refract).toBe(true);
     expect(glassState.mapSource).toMatch(/^data:image\/svg\+xml/);
@@ -743,6 +799,31 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await expect
     .poll(() => page.locator(".glass").count())
     .toBeLessThanOrEqual(4);
+  const media = await page.context().newCDPSession(page);
+  await media.send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-transparency", value: "reduce" }],
+  });
+  await expect
+    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backdropFilter))
+    .toBe("none");
+  await expect
+    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe("rgba(24, 26, 36, 0.97)");
+  await expect(page.locator(".topbar")).not.toHaveClass(/refract/);
+  await media.send("Emulation.setEmulatedMedia", {
+    features: [
+      { name: "prefers-reduced-transparency", value: "no-preference" },
+      { name: "prefers-contrast", value: "more" },
+    ],
+  });
+  await expect
+    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backdropFilter))
+    .toBe("none");
+  await expect
+    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe("rgb(12, 14, 20)");
+  await expect(page.locator(".topbar")).not.toHaveClass(/refract/);
+  await media.detach();
 });
 
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({
