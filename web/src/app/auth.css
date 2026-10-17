@@ -7,7 +7,7 @@
   width:100%; max-width:380px;
   background:var(--bg-2);
   border:1px solid var(--border);
-  border-radius:var(--radius-xl);
+  border-radius:var(--radius-m);
   box-shadow:var(--shadow-soft);
   padding:36px 32px 30px;
 }
@@ -16,7 +16,7 @@
   color:var(--text); font-family:var(--font-display); font-weight:700; font-size:1.15rem;
 }
 .auth-brand img{
-  width:28px; height:28px; border-radius:7px; display:block;
+  width:28px; height:28px; border-radius:8px; display:block;
   box-shadow:0 0 14px rgba(47, 230, 222, 0.28);
 }
 .auth-language-select{ margin:0 0 20px auto; }
@@ -58,7 +58,7 @@
 
 @media (max-width:480px){
   .auth-page{ align-items:flex-start; padding:16px; padding-top:clamp(16px, 10vh, 64px); }
-  .auth-card{ padding:28px 20px 24px; border-radius:var(--radius-l); }
+  .auth-card{ padding:28px 20px 24px; border-radius:var(--radius-m); }
   .auth-brand{ margin-bottom:22px; }
   .auth-sub{ margin-bottom:20px; }
 }
