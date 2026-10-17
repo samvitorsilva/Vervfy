@@ -113,15 +113,61 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     });
     expect(isOnTop).toBe(true);
   };
+  const supportsViewTransitions = await page.evaluate(() => {
+    if (typeof document.startViewTransition !== "function") return false;
+    const root = document.documentElement;
+    new MutationObserver(() => {
+      if (root.classList.contains("player-view-transition")) {
+        root.setAttribute("data-player-transition-seen", "true");
+      }
+    }).observe(root, { attributes: true, attributeFilter: ["class"] });
+    return true;
+  });
+
+  for (const viewport of [
+    { width: 1440, height: 900, left: 224, bottom: 900 },
+    { width: 1024, height: 768, left: 68, bottom: 768 },
+    { width: 390, height: 844, left: 0, bottom: 776 },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await expect
+      .poll(() =>
+        page.locator("#nowbar").evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: Math.round(rect.left),
+            right: Math.round(rect.right),
+            bottom: Math.round(rect.bottom),
+            radius: getComputedStyle(element).borderTopLeftRadius,
+          };
+        }),
+      )
+      .toEqual({
+        left: viewport.left,
+        right: viewport.width,
+        bottom: viewport.bottom,
+        radius: "12px",
+      });
+  }
 
   for (const viewport of [
     { width: 360, height: 812 },
     { width: 768, height: 1024 },
   ]) {
+    await page.emulateMedia({
+      reducedMotion: viewport.width === 360 ? "reduce" : "no-preference",
+    });
     await page.setViewportSize(viewport);
     await nowPlayingButton.click();
     const player = page.getByRole("dialog", { name: "Now playing" });
     await expect(player).toBeVisible();
+    if (viewport.width === 768 && supportsViewTransitions) {
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-player-transition-seen",
+        "true",
+      );
+      await expect(player).toHaveCSS("opacity", "1");
+    }
     await expect(player.locator(".mobile-player-art img")).toBeVisible();
     await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
     for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {

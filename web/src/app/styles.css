@@ -34,7 +34,6 @@
   --nowbar-h: 92px;
   --player-height: var(--nowbar-h);
   --nowbar-rail-width:224px;
-  --nowbar-edge-gap:18px;
 }
 @media (prefers-reduced-motion: reduce){
   *{ animation-duration:.001ms !important; transition-duration:.001ms !important; }
@@ -851,8 +850,8 @@ span.artist-photo{
 /* now playing — persistent bottom player */
 .nowbar{
   position:fixed;
-  left:calc(var(--nowbar-rail-width) + var(--nowbar-edge-gap));
-  right:var(--nowbar-edge-gap);
+  left:var(--nowbar-rail-width);
+  right:0;
   bottom:0;
   box-sizing:border-box;
   height:var(--player-height);
@@ -860,10 +859,10 @@ span.artist-photo{
   overflow:hidden;
   z-index:1000;
   display:flex; align-items:center; padding:0 22px; gap:24px;
-  border-radius:12px;
+  border-radius:12px 12px 0 0;
   background:#10121b;
   border-top:1px solid rgba(255,255,255,0.13);
-  box-shadow:0 -12px 34px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,0.06);
+  box-shadow:none;
   transition:transform var(--dur-med) var(--ease), opacity var(--dur-med) var(--ease);
 }
 .nowbar.hidden{ transform:translateY(120%); opacity:0; pointer-events:none; }
@@ -1463,7 +1462,6 @@ span.artist-photo{
 @media (max-width:900px){
   :root{
     --nowbar-rail-width:68px;
-    --nowbar-edge-gap:12px;
   }
   .logo-word{ display:none; }
   input:not([type="range"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]){ font-size:16px; }
@@ -1477,7 +1475,14 @@ span.artist-photo{
   .content{ padding-inline:18px; }
   .mobile-player{ position:fixed; inset:0; z-index:100; overflow:hidden; border-radius:24px; color:var(--text); background:var(--bg); }
   .mobile-player.open{ display:block; }
-  .mobile-player-bg{ position:absolute; inset:-12%; background-position:center; background-size:cover; filter:blur(54px) saturate(1.2) brightness(.24); transform:scale(1.12); opacity:.8; }
+  html:not(.player-view-transition) body:not(.player-view-transition-supported) .mobile-player.open{
+    animation:player-open-fallback var(--dur-med) var(--ease) both;
+  }
+  @keyframes player-open-fallback{
+    from{ opacity:0; transform:translateY(10px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .mobile-player-bg{ position:absolute; inset:-12%; pointer-events:none; background-position:center; background-size:cover; filter:blur(54px) saturate(1.2) brightness(.24); transform:scale(1.12); opacity:.8; }
   .mobile-player-bg::after{ content:""; position:absolute; inset:0; background:linear-gradient(180deg, rgba(12,14,20,.2), rgba(12,14,20,.96) 64%, var(--bg) 100%); }
   .mobile-player-head{ position:relative; z-index:2; height:76px; padding:max(16px, env(safe-area-inset-top, 0px)) 22px 12px; display:flex; align-items:center; justify-content:space-between; }
   .mobile-player-icon{ width:36px; height:36px; display:flex; align-items:center; justify-content:center; color:var(--text-mid); border-radius:50%; }
@@ -1542,11 +1547,11 @@ span.artist-photo{
     --rail-h:68px;
     --nowbar-h:76px;
     --player-height:var(--nowbar-h);
-    --nowbar-gap:10px;
+    --nowbar-gap:0px;
     --safe-bottom:env(safe-area-inset-bottom, 0px);
     --rail-inset:0px;
     --mobile-rail-clear:calc(var(--rail-h) + var(--rail-inset) + var(--safe-bottom) + 16px);
-    /* Dock, player gap, safe area, and breathing room. */
+    /* Player, dock, safe area, and breathing room. */
     --mobile-player-clear:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--player-height) + var(--safe-bottom) + 16px);
   }
   body{ overflow:hidden; }
@@ -1656,14 +1661,14 @@ span.artist-photo{
   .row .row-actions button{ width:34px; height:34px; }
   .row .row-actions [data-action="queue"]{ display:none; }
   .nowbar{
-    left:var(--rail-inset); right:var(--rail-inset);
-    bottom:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--safe-bottom));
-    padding:8px 10px; gap:6px; height:var(--player-height); border-radius:12px;
+    left:0; right:0;
+    bottom:calc(var(--rail-h) + var(--safe-bottom));
+    padding:8px 10px; gap:6px; height:var(--player-height); border-radius:12px 12px 0 0;
     z-index:50; overflow:hidden;
   }
   .cover-info-popover{
     right:12px;
-    bottom:calc(var(--rail-h) + var(--rail-inset) + var(--safe-bottom) + var(--nowbar-gap) + var(--player-height) + 12px);
+    bottom:calc(var(--rail-h) + var(--safe-bottom) + var(--player-height) + 12px);
   }
   .now-track{ width:min(40%, 168px); flex:0 1 auto; min-width:0; gap:6px; }
   .now-art-wrap, .now-art{ width:40px; height:40px; border-radius:8px; }
@@ -1829,9 +1834,9 @@ button:focus-visible{
 
 @media (min-width:901px){
   .nowbar{
-    left:calc(var(--nowbar-rail-width) + var(--nowbar-edge-gap));
-    right:var(--nowbar-edge-gap);
-    bottom:18px;
+    left:var(--nowbar-rail-width);
+    right:0;
+    bottom:0;
     height:86px;
     padding-inline:22px;
   }
@@ -1949,14 +1954,16 @@ button:focus-visible{
 .nowbar.glass{
   position:fixed;
   z-index:1000;
-  border-radius:12px;
-  border:1px solid rgba(255,255,255,.22);
-  background:rgba(18,20,31,.20);
-  box-shadow:
-    0 -12px 34px rgba(0,0,0,.18),
-    inset 0 1px 0 rgba(255,255,255,.48),
-    inset 0 -1px 0 rgba(255,255,255,.1);
+  border:0;
+  border-top:1px solid rgba(255,255,255,.13);
+  border-radius:12px 12px 0 0;
+  background:#10121b;
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+  box-shadow:none;
+  text-shadow:none;
 }
+.nowbar.glass::before{ display:none; }
 .lyrics-player.glass{
   position:absolute;
   z-index:4;
@@ -1996,8 +2003,28 @@ button:focus-visible{
     position:fixed; margin:0; border:0; border-top:1px solid rgba(255,255,255,.1);
     border-radius:0; background-color:#090b11;
   }
-  .nowbar.glass{ border-radius:12px; }
+  .nowbar.glass{ border-radius:12px 12px 0 0; }
   .mobile-player-info.glass{ padding:14px; border-radius:12px; }
+}
+
+@media (prefers-reduced-motion: no-preference){
+  html.player-view-transition #nowbar .now-art{
+    view-transition-name:player-artwork;
+  }
+  html.player-view-transition body.expanded-player-open #nowbar .now-art{
+    view-transition-name:none;
+  }
+  html.player-view-transition body.expanded-player-open .mobile-player-art{
+    view-transition-name:player-artwork;
+  }
+  ::view-transition-group(player-artwork){
+    animation-duration:var(--dur-med);
+    animation-timing-function:var(--ease);
+  }
+  ::view-transition-image-pair(player-artwork){ overflow:clip; }
+}
+@media (prefers-reduced-motion: reduce){
+  .mobile-player.open{ animation:none; }
 }
 
 @media (min-width:641px){

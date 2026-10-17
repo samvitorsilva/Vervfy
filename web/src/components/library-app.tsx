@@ -8,7 +8,7 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { apiFetch, expectOk, fetchWithRetry, uploadWithRetry } from "@/lib/api/client";
 import type { Account, LibraryState } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
@@ -2115,6 +2115,24 @@ export default function LibraryApp() {
     expandedPlayerReturnFocusRef.current =
       trigger ??
       (activeElement instanceof HTMLElement ? activeElement : null);
+
+    if (
+      typeof document.startViewTransition === "function" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      const transitionRoot = document.documentElement;
+      transitionRoot.classList.add("player-view-transition");
+      document.body.classList.add("player-view-transition-supported");
+      const transition = document.startViewTransition(() => {
+        document.body.classList.add("expanded-player-open");
+        flushSync(() => setExpandedPlayerOpen(true));
+      });
+      const clearTransitionClass = () =>
+        transitionRoot.classList.remove("player-view-transition");
+      void transition.finished.then(clearTransitionClass, clearTransitionClass);
+      return;
+    }
+
     setExpandedPlayerOpen(true);
   }
 
@@ -2929,7 +2947,7 @@ export default function LibraryApp() {
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
-            setExpandedPlayerOpen(true);
+            openExpandedPlayer();
           }
         }}
       >
