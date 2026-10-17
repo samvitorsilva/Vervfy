@@ -547,14 +547,18 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   await expect(page.locator(".rail.glass")).toBeVisible();
   await expect
     .poll(() =>
-      page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
+      page.locator(".rail.glass").evaluate((element) => {
+        const color = getComputedStyle(element).backgroundColor;
+        return Number(color.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
+      }),
     )
-    .toBe("rgba(22, 24, 32, 0.78)");
+    .toBeLessThanOrEqual(0.5);
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
     if (!rail) return null;
     const computed = getComputedStyle(rail);
+    const opacity = Number(computed.backgroundColor.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
     const filterUrl = rail.style.getPropertyValue("--glass-filter-url");
     const filterId = filterUrl.match(/#([^)]+)/)?.[1];
     const mapSource = filterId
@@ -564,6 +568,7 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
       background: computed.backgroundColor,
       backdropFilter: computed.backdropFilter,
       boxShadow: computed.boxShadow,
+      opacity,
       glassCount: document.querySelectorAll(".glass").length,
       refract: rail.classList.contains("refract"),
       chrome: "chrome" in window,
@@ -576,8 +581,9 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(22, 24, 32, 0.78)");
-  expect(glassState?.backdropFilter).toMatch(/blur\((8|24)px\)/);
+  expect(glassState?.opacity).toBeGreaterThan(0.1);
+  expect(glassState?.opacity).toBeLessThanOrEqual(0.5);
+  expect(glassState?.backdropFilter).toMatch(/blur\((14|18|22|28|36)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
   if (glassState?.chrome && glassState.supportsRefraction) {

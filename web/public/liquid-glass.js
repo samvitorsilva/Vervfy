@@ -5,12 +5,12 @@
   const BEZEL_WIDTH = 14;
   const CORNER_RADIUS = 22;
   const DISPLACEMENT_SCALE = 20;
-  const BLUR = 8;
-  const FROST_BLUR = 24;
-  const SATURATION_FROST = 1.28;
-  const SATURATION_REFRACT = 1.2;
-  const TINT_ALPHA = 0.72;
-  const TINT_ALPHA_REFRACT = 0.64;
+  const BLUR = 14;
+  const FROST_BLUR = 22;
+  const SATURATION_FROST = 1.42;
+  const SATURATION_REFRACT = 1.4;
+  const TINT_ALPHA = 0.42;
+  const TINT_ALPHA_REFRACT = 0.3;
   const MAX_ACTIVE_SURFACES = 4;
 
   document.documentElement.style.setProperty("--glass-blur", `${BLUR}px`);
@@ -40,12 +40,51 @@
     [".lyrics-player", 4],
   ];
 
+  function setAccentFromArtwork(image) {
+    const root = document.documentElement;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = 16;
+      canvas.height = 16;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return;
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
+      let weight = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const r = pixels[index];
+        const g = pixels[index + 1];
+        const b = pixels[index + 2];
+        const maximum = Math.max(r, g, b);
+        const minimum = Math.min(r, g, b);
+        const saturation = maximum ? (maximum - minimum) / maximum : 0;
+        const luminance = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255;
+        const pixelWeight = saturation * Math.max(0.15, 1 - Math.abs(luminance - 0.55));
+        red += r * pixelWeight;
+        green += g * pixelWeight;
+        blue += b * pixelWeight;
+        weight += pixelWeight;
+      }
+      if (!weight) return;
+      const accent = `rgb(${Math.round(red / weight)}, ${Math.round(green / weight)}, ${Math.round(blue / weight)})`;
+      root.style.setProperty("--accent", accent);
+      root.style.setProperty("--accent-soft", `color-mix(in srgb, ${accent} 28%, transparent)`);
+    } catch {
+      // Cross-origin covers can taint canvas; the gradient fallback remains in place.
+    }
+  }
+
   function updateArtwork() {
     if (!backdrop || !backdropImage || !artwork) return;
     const source = artwork.dataset.artwork || "";
     if (!source) {
       backdrop.classList.remove("has-art");
       backdropImage.removeAttribute("src");
+      document.documentElement.style.removeProperty("--accent");
+      document.documentElement.style.removeProperty("--accent-soft");
       return;
     }
     if (backdropImage.src === new URL(source, document.baseURI).href) return;
@@ -55,6 +94,7 @@
 
   backdropImage?.addEventListener("load", () => {
     backdrop?.classList.toggle("has-art", backdropImage.naturalWidth > 0);
+    if (backdropImage.naturalWidth > 0) setAccentFromArtwork(backdropImage);
   });
   backdropImage?.addEventListener("error", () => backdrop?.classList.remove("has-art"));
 
