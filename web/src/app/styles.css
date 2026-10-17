@@ -2297,3 +2297,113 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
   .credits-card{ max-height:calc(100dvh - 32px); padding:24px 20px; }
   .credits-back{ min-height:44px; margin-bottom:22px; }
 }
+
+/* Library surfaces: keep artwork crisp and let the surrounding chrome recede. */
+.card{
+  border:1px solid rgba(255,255,255,.055);
+  background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.012));
+  transition:transform .28s var(--ease),background .28s var(--ease),border-color .28s var(--ease),box-shadow .28s var(--ease);
+}
+.card:hover{
+  transform:translateY(-3px);
+  border-color:rgba(255,255,255,.16);
+  background:linear-gradient(145deg,rgba(255,255,255,.11),rgba(255,255,255,.035));
+  box-shadow:0 18px 38px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.12);
+}
+.card-art{
+  border-radius:18px;
+  box-shadow:0 14px 34px rgba(0,0,0,.34),0 0 0 1px rgba(255,255,255,.12);
+}
+.card.playing .card-art{
+  box-shadow:0 0 0 2px var(--accent),0 12px 34px var(--accent-soft);
+}
+.card.playing .card-title,.row.playing .row-title{ color:var(--accent); }
+.card-fav,.card-menu,.card-queue{
+  width:38px;
+  height:38px;
+  background:rgba(16,18,28,.58);
+  border-color:rgba(255,255,255,.2);
+  -webkit-backdrop-filter:blur(16px) saturate(1.5);
+  backdrop-filter:blur(16px) saturate(1.5);
+}
+.card-fav.on,.row-actions button.fav-on{ color:var(--accent); }
+.row{
+  border:1px solid transparent;
+  transition:transform .22s var(--ease),background .22s var(--ease),border-color .22s var(--ease);
+}
+.row:hover{
+  transform:translateY(-1px);
+  border-color:rgba(255,255,255,.11);
+  background:linear-gradient(110deg,rgba(255,255,255,.09),rgba(255,255,255,.025));
+}
+.row.playing{
+  border-color:color-mix(in srgb,var(--accent) 28%,transparent);
+  background:linear-gradient(100deg,var(--accent-soft),rgba(255,255,255,.035));
+}
+.row-idx .bars span{ background:var(--accent); }
+.row-art{ border-radius:12px; box-shadow:0 5px 14px rgba(0,0,0,.26); }
+.pl-card{
+  border:1px solid rgba(255,255,255,.1);
+  background:linear-gradient(145deg,rgba(255,255,255,.095),rgba(255,255,255,.025));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 12px 28px rgba(0,0,0,.15);
+  transition:transform .25s var(--ease),border-color .25s var(--ease),background .25s var(--ease),box-shadow .25s var(--ease);
+}
+.pl-card:hover{
+  transform:translateY(-3px);
+  border-color:rgba(255,255,255,.24);
+  background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.045));
+  box-shadow:0 18px 36px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.2);
+}
+.playlist-hero,.artist-hero,.artist-info{
+  border-color:rgba(255,255,255,.2);
+  background:
+    radial-gradient(80% 140% at 0% 0%,var(--accent-soft),transparent 70%),
+    linear-gradient(145deg,rgba(255,255,255,.13),rgba(255,255,255,.035) 56%),
+    rgba(19,21,31,.44);
+  -webkit-backdrop-filter:blur(26px) saturate(1.55);
+  backdrop-filter:blur(26px) saturate(1.55);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 18px 50px rgba(0,0,0,.2);
+}
+.playlist-hero-cover,.artist-photo{
+  box-shadow:0 20px 50px rgba(0,0,0,.4),0 0 44px var(--accent-soft),0 0 0 1px rgba(255,255,255,.2);
+}
+.artist-card{
+  border-color:rgba(255,255,255,.1);
+  background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.025));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 12px 28px rgba(0,0,0,.14);
+}
+.artist-card:hover{
+  border-color:rgba(255,255,255,.24);
+  background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.04));
+  box-shadow:0 18px 38px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.2);
+}
+.artist-card-photo-open{
+  background:linear-gradient(145deg,rgba(255,255,255,.8),var(--accent),rgba(255,255,255,.16));
+  box-shadow:0 12px 32px var(--accent-soft);
+}
+.artist-card-play{
+  border-color:color-mix(in srgb,var(--accent) 46%,transparent);
+  background:var(--accent-soft);
+  color:var(--accent);
+}
+.artist-library-stat{
+  border-color:rgba(255,255,255,.14);
+  border-radius:18px;
+  background:linear-gradient(145deg,rgba(255,255,255,.085),rgba(255,255,255,.025));
+}
+.artist-tags .artist-tag{
+  border-color:rgba(255,255,255,.16);
+  background:rgba(255,255,255,.07);
+  color:var(--text-mid);
+}
+@supports not (backdrop-filter:blur(1px)){
+  .playlist-hero,.artist-hero,.artist-info{ background:rgba(20,22,30,.88); }
+}
+@media (max-width:640px){
+  .card{ border-color:rgba(255,255,255,.08); }
+  .playlist-hero,.artist-hero,.artist-info{
+    background:
+      radial-gradient(95% 100% at 0% 0%,var(--accent-soft),transparent 72%),
+      rgba(20,22,30,.62);
+  }
+}
