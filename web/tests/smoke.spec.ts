@@ -139,6 +139,12 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     );
     expect(playerRegions[0].right).toBeLessThanOrEqual(playerRegions[1].left + 1);
     expect(playerRegions[1].right).toBeLessThanOrEqual(playerRegions[2].left + 1);
+    if (viewport.width === 360) {
+      const hasHorizontalOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      );
+      expect(hasHorizontalOverflow).toBe(false);
+    }
   }
 
   await page.getByRole("button", { name: "Artists" }).click();

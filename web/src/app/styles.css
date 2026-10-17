@@ -2081,6 +2081,8 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
 @media (max-width:640px){
   .rail.glass{ position:fixed; margin:0; border-radius:22px; }
   .nowbar.glass{ border-radius:20px; }
+  .topbar.glass{ margin:10px 10px 0; padding:9px 12px; }
+  :root{ --glass-blur:18px; }
 }
 
 @media (min-width:641px){
