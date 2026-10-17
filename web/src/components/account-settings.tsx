@@ -411,7 +411,7 @@ export default function AccountSettings({
             if (event.target === event.currentTarget && !photoSaving) closePhotoEditor();
           }}
         >
-          <section className="photo-editor-card glass glass-thick" role="dialog" aria-modal="true" aria-labelledby="photo-editor-title">
+          <section className="photo-editor-card" role="dialog" aria-modal="true" aria-labelledby="photo-editor-title">
             <div className="photo-editor-head">
               <div>
                 <h3 id="photo-editor-title">{t("Profile photo")}</h3>

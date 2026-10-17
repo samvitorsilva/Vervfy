@@ -714,7 +714,7 @@ export default function LyricsOverlay({
         <button className="lyrics-edit-top" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? lyrics?.text ?? ""); setEditorOpen(true); }}>{t("Edit lyrics")}</button>
       </header>
       <div className="lyrics-stage">
-        <div className="lyrics-side glass glass-regular">
+        <div className="lyrics-side">
           <div className="lyrics-art"><img src={activeTrack.coverUrl} alt="" /></div>
           <div className="lyrics-meta">
             <div className="t">{activeTrack.title}</div>
@@ -774,7 +774,7 @@ export default function LyricsOverlay({
           )}
         </div>
       </div>
-      <div className="lyrics-player glass glass-thick">
+      <div className="lyrics-player">
         <div className="lyrics-player-track">
           <img src={activeTrack.coverUrl} alt="" />
           <span><strong>{activeTrack.title}</strong><small>{activeTrack.artist}</small></span>

@@ -590,15 +590,6 @@ export default function ArtistExplorer({
   return (
     <div className="artist-page">
       <header className="artist-hero">
-        <div className="artist-hero-backdrop" aria-hidden="true">
-          <ArtistAvatar
-            name={currentArtist.name}
-            className="artist-photo artist-hero-backdrop-avatar"
-            userPhotoUrl={photoPreview ?? userPhotoUrl}
-            artistImageUrl={audioDbPhotoUrl}
-            coverUrls={artistCovers}
-          />
-        </div>
         <figure className="artist-photo-wrap">
           <ArtistAvatar
             name={currentArtist.name}
@@ -708,7 +699,7 @@ export default function ArtistExplorer({
             if (event.target === event.currentTarget && !photoPending) closePhotoEditor();
           }}
         >
-          <section className="queue-picker-card glass glass-thick track-editor-card artist-photo-editor">
+          <section className="queue-picker-card track-editor-card artist-photo-editor">
             <div className="queue-picker-head">
               <h3 id="artistPhotoEditorTitle">{t("Photo for")} {currentArtist.name}</h3>
               <button

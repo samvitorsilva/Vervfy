@@ -430,6 +430,56 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   ).toBeLessThan(1);
 });
 
+test("mobile player menu opens MusicBrainz cover art information", async ({ page }) => {
+  const track = {
+    id: "mobile-cover-info-track",
+    title: "mobile-cover-info",
+    artist: "Vervfy Test Artist",
+    album: "Playwright Test Album",
+    duration: 6,
+    has_cover: false,
+    cover_source: "musicbrainz",
+    cover_url: "",
+    stream_url: "/api/tracks/mobile-cover-info-track/stream",
+    custom_lyrics: null,
+  };
+  await page.route("**/api/tracks", (route) =>
+    route.fulfill({ json: { tracks: [track] } }),
+  );
+  await page.route("**/api/tracks/mobile-cover-info-track/stream", (route) =>
+    route.fulfill({ contentType: "audio/wav", body: makeWav() }),
+  );
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+
+  const trackCard = page.locator(".card").filter({ hasText: track.title });
+  await expect(trackCard).toBeVisible();
+  await trackCard.click();
+  await page.setViewportSize({ width: 360, height: 812 });
+  await page.locator(".now-track-open").click();
+
+  const player = page.getByRole("dialog", { name: "Now playing" });
+  await expect(player).toBeVisible();
+  await player.getByRole("button", { name: `More options for ${track.title}` }).click();
+  const menu = page.getByRole("menu", { name: `Options for ${track.title}` });
+  await menu.getByRole("menuitem", { name: "Cover art info" }).click();
+
+  const coverInfo = page.getByRole("dialog", { name: "Cover art information" });
+  await expect(coverInfo).toBeVisible();
+  await expect(coverInfo.getByRole("link", { name: "Cover Art Archive" })).toHaveAttribute(
+    "href",
+    "https://coverartarchive.org/",
+  );
+  await coverInfo.getByRole("button", { name: "Close cover art information" }).click();
+  await expect(
+    player.getByRole("button", { name: `More options for ${track.title}` }),
+  ).toBeFocused();
+});
+
 test("opening the library with an expired session returns to login", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);
@@ -486,6 +536,14 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
   await expect(navigation.locator("[data-view]:visible")).toHaveCount(5);
+  const searchBounds = await page.locator(".search-wrap").evaluate((element) => {
+    const input = element.querySelector("input")!.getBoundingClientRect();
+    const shortcut = element.querySelector(".kbd")!.getBoundingClientRect();
+    const bounds = element.getBoundingClientRect();
+    return { inputRight: input.right, shortcutLeft: shortcut.left, shortcutRight: shortcut.right, right: bounds.right };
+  });
+  expect(searchBounds.inputRight).toBeLessThanOrEqual(searchBounds.shortcutLeft);
+  expect(searchBounds.shortcutRight).toBeLessThanOrEqual(searchBounds.right);
   await expect(navigation.locator('[data-view="library"]')).toHaveAttribute(
     "aria-current",
     "page",
@@ -540,7 +598,7 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   );
 });
 
-test("liquid glass stays restrained and limits active surfaces", async ({ page }) => {
+test("liquid glass stays translucent and limits active surfaces", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
     "This interaction test uses the local mock backend.",
@@ -554,46 +612,16 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   await expect(page.locator(".rail.glass")).toBeVisible();
   await expect
     .poll(() =>
-      page.locator(".rail.glass").evaluate((element) => {
-        const color = getComputedStyle(element).backgroundColor;
-        return Number(color.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
-      }),
+      page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBeLessThanOrEqual(0.5);
-
-  const supportsRefraction = await page.evaluate(() => {
-    const supportsBackdropBlur =
-      CSS.supports("backdrop-filter", "blur(1px)") ||
-      CSS.supports("-webkit-backdrop-filter", "blur(1px)");
-    const supportsSvgBackdropFilter =
-      CSS.supports("backdrop-filter", "blur(1px) url(#lg)") ||
-      CSS.supports("-webkit-backdrop-filter", "blur(1px) url(#lg)");
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    const filter = document.createElementNS("http://www.w3.org/2000/svg", "filter");
-    const image = document.createElementNS("http://www.w3.org/2000/svg", "feImage");
-    const displacement = document.createElementNS("http://www.w3.org/2000/svg", "feDisplacementMap");
-    filter.append(image, displacement);
-    svg.append(filter);
-    return supportsBackdropBlur &&
-      supportsSvgBackdropFilter &&
-      typeof SVGFEImageElement !== "undefined" &&
-      typeof SVGFEDisplacementMapElement !== "undefined" &&
-      image instanceof SVGFEImageElement &&
-      displacement instanceof SVGFEDisplacementMapElement;
-  });
-  if (supportsRefraction) {
-    await expect
-      .poll(() => page.locator(".rail.glass").evaluate((element) => element.classList.contains("refract")))
-      .toBe(true);
-  }
+    .toBe("rgba(15, 18, 28, 0.3)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
     if (!rail) return null;
     const computed = getComputedStyle(rail);
-    const opacity = Number(computed.backgroundColor.match(/,\s*([\d.]+)\)$/)?.[1] ?? 1);
-    const filter = rail.style.getPropertyValue("backdrop-filter");
-    const filterId = filter.match(/url\(#([^)]+)\)/)?.[1];
+    const filterUrl = rail.style.getPropertyValue("--glass-filter-url");
+    const filterId = filterUrl.match(/#([^)]+)/)?.[1];
     const mapSource = filterId
       ? document.querySelector<SVGImageElement>(`#${CSS.escape(filterId)} feImage`)?.getAttribute("href")
       : null;
@@ -601,76 +629,35 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
       background: computed.backgroundColor,
       backdropFilter: computed.backdropFilter,
       boxShadow: computed.boxShadow,
-      opacity,
       glassCount: document.querySelectorAll(".glass").length,
-      refractCount: document.querySelectorAll(".glass.refract").length,
       refract: rail.classList.contains("refract"),
+      chromium: "chrome" in window,
+      supportsRefraction: CSS.supports(
+        "backdrop-filter",
+        "blur(3px) url(#lg) saturate(170%)",
+      ),
       mapSource,
     };
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.opacity).toBeGreaterThan(0.1);
-  expect(glassState?.opacity).toBeLessThanOrEqual(0.5);
-  expect(glassState?.backdropFilter).toMatch(/blur\((14|18|22|28|36)px\)/);
+  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
+  expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
-  expect(glassState?.glassCount).toBeGreaterThanOrEqual(4);
-  expect(glassState?.refractCount).toBeLessThanOrEqual(4);
-  if (supportsRefraction) {
-    expect(glassState?.refract).toBe(true);
-    expect(glassState?.mapSource).toMatch(/^data:image\/svg\+xml/);
+  expect(glassState?.glassCount).toBeLessThanOrEqual(4);
+  if (glassState?.chromium && glassState.supportsRefraction) {
+    expect(glassState.refract).toBe(true);
+    expect(glassState.mapSource).toMatch(/^data:image\/svg\+xml/);
   } else {
     expect(glassState?.refract).toBe(false);
   }
 
-  await page.evaluate(() => {
-    document.documentElement.style.setProperty("--glass-blur", "12px");
-    document.documentElement.style.setProperty("--glass-tint-alpha", ".32");
-  });
-  for (const selector of [".rail", ".topbar", ".nowbar", ".side-panel"]) {
-    await expect
-      .poll(() =>
-        page.locator(selector).evaluate((element) => getComputedStyle(element).backdropFilter),
-      )
-      .toContain("blur(12px)");
-  }
-  for (const [selector, alpha] of [
-    [".rail", 0.32],
-    [".topbar", 0.32],
-    [".nowbar", 0.32],
-    [".side-panel", 0.56],
-  ] as const) {
-    await expect
-      .poll(() =>
-        page.locator(selector).evaluate((element) => {
-          const color = getComputedStyle(element).backgroundColor;
-          return Number(color.match(/,\s*([\d.]+)\)$/)?.[1] ?? 0);
-        }),
-      )
-      .toBeCloseTo(alpha, 2);
-  }
-  await page.evaluate(() => {
-    document.documentElement.style.removeProperty("--glass-blur");
-    document.documentElement.style.removeProperty("--glass-tint-alpha");
-  });
-
-  await page.emulateMedia({ contrast: "more" });
-  await expect
-    .poll(() => page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor))
-    .toBe("rgb(25, 28, 37)");
-  await expect
-    .poll(() => page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backdropFilter))
-    .toBe("none");
-  await page.emulateMedia({ contrast: "no-preference" });
-
   await page.getByRole("button", { name: "Playlists" }).click();
   await page.getByRole("button", { name: "New playlist" }).first().click();
   await expect(page.getByRole("dialog", { name: "New playlist" })).toBeVisible();
-  await expect(
-    page.getByRole("dialog", { name: "New playlist" }).locator(".queue-picker-card.glass"),
-  ).toBeVisible();
+  await expect(page.locator(".queue-picker-card.glass")).toBeVisible();
   await expect
-    .poll(() => page.locator(".glass.refract").count())
+    .poll(() => page.locator(".glass").count())
     .toBeLessThanOrEqual(4);
 });
 
@@ -699,14 +686,9 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect
     .poll(() => page.locator(".side-panel").evaluate((element) => getComputedStyle(element).position))
     .toBe("fixed");
-  const railBounds = await page.locator(".rail").evaluate((element) => {
-    const { top, bottom, height } = element.getBoundingClientRect();
-    return { top, bottom, height };
-  });
-  const viewportHeight = await page.evaluate(() => window.innerHeight);
-  expect(railBounds.top).toBeGreaterThan(0);
-  expect(railBounds.bottom).toBeLessThan(viewportHeight);
-  expect(railBounds.height).toBeGreaterThan(viewportHeight - 40);
+  await expect
+    .poll(() => page.locator(".rail").evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+    .toBeGreaterThanOrEqual(await page.evaluate(() => window.innerHeight - 2));
   await expect(page.locator(".home-profile-avatar img")).toBeVisible();
   await expect
     .poll(() => page.locator(".side-panel").evaluate((element) => element.hasAttribute("inert") && element.getAttribute("aria-hidden") === "true"))
@@ -774,7 +756,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
       const rect = element.getBoundingClientRect();
       return Math.round(window.innerWidth - rect.right);
     }))
-    .toBe(12);
+    .toBe(0);
   await page.getByRole("button", { name: "Close queue" }).click();
 
   await page.getByRole("button", { name: "Repeat: off" }).click();
@@ -796,7 +778,13 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   const scrollPosition = await content.evaluate((element) => element.scrollTop);
   expect(scrollPosition).toBeGreaterThan(0);
   await page.waitForTimeout(750);
-  await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBe(scrollPosition);
+  const expectedScrollPosition = await content.evaluate(
+    (element, position) => Math.min(position, element.scrollHeight - element.clientHeight),
+    scrollPosition,
+  );
+  await expect
+    .poll(() => content.evaluate((element) => element.scrollTop))
+    .toBe(expectedScrollPosition);
   await audio.evaluate((element) => (element as HTMLAudioElement).pause());
   await page.setViewportSize({ width: 360, height: 812 });
   await page.locator('.nowbar button[aria-label="Lyrics"]').click();

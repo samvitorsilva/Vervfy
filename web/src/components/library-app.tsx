@@ -526,7 +526,7 @@ function getMetaFromStore(): LibraryMeta {
   };
 }
 
-type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "drag";
+type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "info" | "drag";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -556,6 +556,7 @@ function Icon({ name }: { name: IconName }) {
     "volume-muted": <><path d="M4 10v4h3l4 3V7l-4 3H4Z"/><path d="m16 9 5 6m0-6-5 6"/></>,
     lyrics: <><path d="M6 3.75h8l4 4V20.25H6z"/><path d="M14 3.75v4h4M9 12h6M9 15.5h6"/></>,
     visualizer: <><path d="M5 14v5M5 5v5M12 10v9M12 5v2M19 15v4M19 5v7"/><path d="M3 10h4M10 7h4M17 12h4"/></>,
+    info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></>,
     drag: <><circle cx="9" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="19" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="19" r="1" fill="currentColor" stroke="none"/></>,
   };
 
@@ -601,6 +602,10 @@ export default function LibraryApp() {
   const setPlaylists = usePlayerStore((state) => state.setPlaylists);
   const playbackAttemptRef = useRef<PlaybackAttempt | null>(null);
   const runPlaybackAttemptRef = useRef<(attempt: PlaybackAttempt) => void>(() => {});
+  const coverInfoButtonRef = useRef<HTMLButtonElement>(null);
+  const coverInfoPopoverRef = useRef<HTMLElement>(null);
+  const coverInfoReturnFocusRef = useRef<HTMLElement | null>(null);
+  const mobilePlayerMenuButtonRef = useRef<HTMLButtonElement>(null);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -609,6 +614,7 @@ export default function LibraryApp() {
   const [toast, setToast] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [coverInfoTrackId, setCoverInfoTrackId] = useState<string | null>(null);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [queuePickerOpen, setQueuePickerOpen] = useState(false);
@@ -706,6 +712,26 @@ export default function LibraryApp() {
 
   const activeTrackId = queueIndex >= 0 ? queue[queueIndex] ?? null : null;
   const currentTrack = tracks.find((track) => track.id === activeTrackId) ?? null;
+  const coverInfoOpen =
+    coverInfoTrackId === currentTrack?.id && currentTrack?.coverSource === "musicbrainz";
+  useEffect(() => {
+    if (coverInfoOpen) coverInfoPopoverRef.current?.focus();
+  }, [coverInfoOpen]);
+  useEffect(() => {
+    if (!coverInfoOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        !coverInfoPopoverRef.current?.contains(target) &&
+        !coverInfoButtonRef.current?.contains(target)
+      ) {
+        setCoverInfoTrackId(null);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [coverInfoOpen]);
   const cachedLyrics = currentTrack ? lyricsByTrack[currentTrack.id] : undefined;
   const previewLyrics = currentTrack?.customLyrics
     ? parseLyricsText(currentTrack.customLyrics, "custom")
@@ -1627,6 +1653,8 @@ export default function LibraryApp() {
       if (event.key === "Escape") {
         setExpandedPlayerOpen(false);
         setLyricsOpen(false);
+        setCoverInfoTrackId(null);
+        if (coverInfoOpen) coverInfoButtonRef.current?.focus();
         setVisualizerOpen(false);
         setQueueOpen(false);
         setPlaylistPicker(null);
@@ -1680,7 +1708,7 @@ export default function LibraryApp() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [playPrevious, toggleCurrentFavorite, togglePlayback]);
+  }, [coverInfoOpen, playPrevious, toggleCurrentFavorite, togglePlayback]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2228,7 +2256,11 @@ export default function LibraryApp() {
     const rect = event.currentTarget.getBoundingClientRect();
     const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
     const inPlaylist = playlists.find((playlist) => playlist.id === playlistId)?.trackIds.includes(track.id);
-    const itemCount = 9 + artistNames(track).length + (inPlaylist ? 1 : 0);
+    const itemCount =
+      9 +
+      artistNames(track).length +
+      (inPlaylist ? 1 : 0) +
+      (expandedPlayerOpen && track.coverSource === "musicbrainz" ? 1 : 0);
     const menuHeight = Math.min(16 + itemCount * 38, window.innerHeight - 16);
     const top = Math.max(
       8,
@@ -2308,6 +2340,21 @@ export default function LibraryApp() {
         {track.coverSource !== "upload" && track.coverSource !== "user" ? (
           <button className="menu-item" role="menuitem" type="button" onClick={() => void retryCoverLookup(track)}>
             {t("Retry cover")}
+          </button>
+        ) : null}
+        {expandedPlayerOpen && track.coverSource === "musicbrainz" ? (
+          <button
+            className="menu-item"
+            role="menuitem"
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => {
+              coverInfoReturnFocusRef.current = mobilePlayerMenuButtonRef.current;
+              setCoverInfoTrackId(track.id);
+              setTrackMenu(null);
+            }}
+          >
+            {t("Cover art info")}
           </button>
         ) : null}
         <button className="menu-item" role="menuitem" type="button" onClick={() => openMetadataEditor(track)}>
@@ -2552,6 +2599,7 @@ export default function LibraryApp() {
               aria-label={`${t("More options for")} ${currentTrack.title}`}
               aria-haspopup="menu"
               data-track-menu-trigger
+              ref={mobilePlayerMenuButtonRef}
               onClick={(event) => toggleTrackMenu(currentTrack, event)}
             >
               <Icon name="more" />
@@ -2702,7 +2750,7 @@ export default function LibraryApp() {
         setIsDraggingFiles(false);
         void uploadFiles(event.dataTransfer.files);
       }}>
-        <nav className="rail glass glass-regular" aria-label={t("Main navigation")}>
+        <nav className="rail" aria-label={t("Main navigation")}>
           <div className="logo-mark">
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
@@ -2720,7 +2768,7 @@ export default function LibraryApp() {
         </nav>
 
         <div className="main">
-          <div className="topbar glass glass-thin">
+          <div className="topbar">
             <button className="home-profile-avatar" type="button" title={t("Account")} aria-label={t("Open account")} onClick={() => setView("account")}>
               {profile?.photo_url
                 ? <img src={profile.photo_url} alt="" onError={() => setProfile((current) => current ? { ...current, photo_url: null } : null)} />
@@ -2877,7 +2925,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar glass glass-thin${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
+      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
@@ -2900,9 +2948,6 @@ export default function LibraryApp() {
             >
               <span className="now-title">{currentTrack?.title ?? "—"}</span>
             </button>
-            {currentTrack?.coverSource === "musicbrainz" ? (
-              <span className="now-cover-attribution">{t("Cover art from MusicBrainz / Cover Art Archive")}</span>
-            ) : null}
             <span className="now-artist">
               {currentTrack
                 ? artistNames(currentTrack).map((name, index) => (
@@ -2935,6 +2980,24 @@ export default function LibraryApp() {
           />
         </div>
         <div className="now-extra">
+          {currentTrack?.coverSource === "musicbrainz" ? (
+            <button
+              ref={coverInfoButtonRef}
+              className={`icon-btn player-control-cover-info${coverInfoOpen ? " on" : ""}`}
+              type="button"
+              title={t("Cover art info")}
+              aria-label={t("Cover art info")}
+              aria-haspopup="dialog"
+              aria-expanded={coverInfoOpen}
+              aria-controls="cover-art-info"
+              onClick={(event) => {
+                coverInfoReturnFocusRef.current = event.currentTarget;
+                setCoverInfoTrackId(coverInfoOpen ? null : currentTrack?.id ?? null);
+              }}
+            >
+              <Icon name="info" />
+            </button>
+          ) : null}
           <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title={t("Lyrics (L)")} aria-label={t("Lyrics")} aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
           <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title={t("Visualizer (V)")} aria-label={t("Visualizer")} aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
           <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title={t("Queue")} aria-label={t("Queue")} aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
@@ -2954,6 +3017,54 @@ export default function LibraryApp() {
           }}><div className="vol-fill" style={{ width: `${(muted ? 0 : volume) * 100}%` }} /></div></div>
         </div>
       </div>
+
+      {coverInfoOpen && currentTrack?.coverSource === "musicbrainz" ? (
+        <section
+          id="cover-art-info"
+          ref={coverInfoPopoverRef}
+          className="cover-info-popover"
+          role="dialog"
+          tabIndex={-1}
+          aria-label={t("Cover art information")}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="cover-info-heading">
+            <span className="cover-info-icon"><Icon name="info" /></span>
+            <div>
+              <p>{t("NOW PLAYING")}</p>
+              <h2>{t("Cover art source")}</h2>
+            </div>
+            <button
+              className="icon-btn"
+              type="button"
+              aria-label={t("Close cover art information")}
+              onClick={() => {
+                setCoverInfoTrackId(null);
+                const returnFocusTarget = coverInfoReturnFocusRef.current ?? coverInfoButtonRef.current;
+                returnFocusTarget?.focus();
+                coverInfoReturnFocusRef.current = null;
+              }}
+            >
+              <Icon name="close" />
+            </button>
+          </div>
+          <p className="cover-info-copy">
+            {t("This cover is provided through MusicBrainz and the Cover Art Archive.")}
+          </p>
+          <p className="cover-info-note">
+            {t("Vervfy links to the image instead of storing a copy.")}
+          </p>
+          <div className="cover-info-links">
+            <a href="https://musicbrainz.org/" target="_blank" rel="noopener noreferrer">
+              MusicBrainz <span aria-hidden="true">↗</span>
+            </a>
+            <a href="https://coverartarchive.org/" target="_blank" rel="noopener noreferrer">
+              Cover Art Archive <span aria-hidden="true">↗</span>
+            </a>
+            <a href="/credits">{t("View all credits")} <span aria-hidden="true">→</span></a>
+          </div>
+        </section>
+      ) : null}
 
       {expandedPlayer}
       {lyricsOpen && currentTrack ? (
@@ -2975,13 +3086,13 @@ export default function LibraryApp() {
       ) : null}
       {visualizerOpen ? <VisualizerOverlay onClose={() => setVisualizerOpen(false)} /> : null}
       {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
-        <section className="queue-picker-card glass glass-thick shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
+        <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
           <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
           <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
       </div> : null}
 
-      <aside ref={queuePanelRef} className={`side-panel glass glass-regular${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
+      <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
         <div className="side-head"><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
         <div className="side-body">
           {queue.length === 0 ? <div className="side-empty"><p>{t("Your queue is empty.")}</p><button className="btn" type="button" onClick={() => setQueuePickerOpen(true)}>{t("Add from library")}</button></div> : queue.map((trackId, index) => {
@@ -3036,7 +3147,7 @@ export default function LibraryApp() {
       </aside>
 
       <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
-        <div className="queue-picker-card glass glass-thick">
+        <div className="queue-picker-card">
           <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
           <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t("Search library")} aria-label={t("Search library")} /></label>
           <div className="queue-picker-list">{filteredQueueTracks.length ? filteredQueueTracks.map((track) => <button className="qp-row" type="button" key={track.id} onClick={(event) => {
@@ -3048,7 +3159,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
-        <form className="queue-picker-card glass glass-thick playlist-name-card" onSubmit={createOrRenamePlaylist}>
+        <form className="queue-picker-card playlist-name-card" onSubmit={createOrRenamePlaylist}>
           <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? t("Rename playlist") : t("New playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
           <label className="playlist-name-label" htmlFor="playlistNameInput">{t("Playlist name")}</label>
           <input ref={playlistNameInputRef} className="playlist-name-input" id="playlistNameInput" maxLength={200} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} />
@@ -3057,7 +3168,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
-        <div className="queue-picker-card glass glass-thick">
+        <div className="queue-picker-card">
           <div className="queue-picker-head"><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">{playlists.length ? playlists.map((playlist) => {
             const trackId = playlistPicker;
@@ -3073,7 +3184,7 @@ export default function LibraryApp() {
       </div>
 
       <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
-        <div className="queue-picker-card glass glass-thick">
+        <div className="queue-picker-card">
           <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">
             {tracksAvailableToAdd.length ? tracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
@@ -3094,7 +3205,7 @@ export default function LibraryApp() {
             if (event.target === event.currentTarget && !coverPending) closeCoverEditor();
           }}
         >
-          <section className="queue-picker-card glass glass-thick track-editor-card">
+          <section className="queue-picker-card track-editor-card">
             <div className="queue-picker-head">
               <h3 id="coverEditorTitle">{t("Cover for")} {coverEditorTrack.title}</h3>
               <button className="icon-btn" type="button" aria-label={t("Close")} onClick={closeCoverEditor} disabled={coverPending}>
@@ -3196,7 +3307,7 @@ export default function LibraryApp() {
             if (event.target === event.currentTarget && !metadataPending) setMetadataEditorTrack(null);
           }}
         >
-          <form className="queue-picker-card glass glass-thick track-editor-card" onSubmit={saveTrackDetails}>
+          <form className="queue-picker-card track-editor-card" onSubmit={saveTrackDetails}>
             <div className="queue-picker-head">
               <h3 id="trackDetailsTitle">{t("Track details")}</h3>
               <button className="icon-btn" type="button" aria-label={t("Close")} onClick={() => setMetadataEditorTrack(null)} disabled={metadataPending}>
