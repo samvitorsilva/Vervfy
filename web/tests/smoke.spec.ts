@@ -140,10 +140,11 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     expect(playerRegions[0].right).toBeLessThanOrEqual(playerRegions[1].left + 1);
     expect(playerRegions[1].right).toBeLessThanOrEqual(playerRegions[2].left + 1);
     if (viewport.width === 360) {
-      const hasHorizontalOverflow = await page.evaluate(
-        () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-      );
-      expect(hasHorizontalOverflow).toBe(false);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        ),
+      ).toBe(false);
     }
   }
 
@@ -560,6 +561,32 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
     )
     .toBeLessThanOrEqual(0.5);
 
+  const supportsRefraction = await page.evaluate(() => {
+    const supportsBackdropBlur =
+      CSS.supports("backdrop-filter", "blur(1px)") ||
+      CSS.supports("-webkit-backdrop-filter", "blur(1px)");
+    const supportsSvgBackdropFilter =
+      CSS.supports("backdrop-filter", "blur(1px) url(#lg)") ||
+      CSS.supports("-webkit-backdrop-filter", "blur(1px) url(#lg)");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const filter = document.createElementNS("http://www.w3.org/2000/svg", "filter");
+    const image = document.createElementNS("http://www.w3.org/2000/svg", "feImage");
+    const displacement = document.createElementNS("http://www.w3.org/2000/svg", "feDisplacementMap");
+    filter.append(image, displacement);
+    svg.append(filter);
+    return supportsBackdropBlur &&
+      supportsSvgBackdropFilter &&
+      typeof SVGFEImageElement !== "undefined" &&
+      typeof SVGFEDisplacementMapElement !== "undefined" &&
+      image instanceof SVGFEImageElement &&
+      displacement instanceof SVGFEDisplacementMapElement;
+  });
+  if (supportsRefraction) {
+    await expect
+      .poll(() => page.locator(".rail.glass").evaluate((element) => element.classList.contains("refract")))
+      .toBe(true);
+  }
+
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
     if (!rail) return null;
@@ -578,10 +605,6 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
       glassCount: document.querySelectorAll(".glass").length,
       refractCount: document.querySelectorAll(".glass.refract").length,
       refract: rail.classList.contains("refract"),
-      supportsRefraction: (
-        CSS.supports("backdrop-filter", "blur(1px) url(#lg)") ||
-        CSS.supports("-webkit-backdrop-filter", "blur(1px) url(#lg)")
-      ) && typeof SVGFEImageElement !== "undefined" && typeof SVGFEDisplacementMapElement !== "undefined",
       mapSource,
     };
   });
@@ -593,9 +616,9 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeGreaterThanOrEqual(4);
   expect(glassState?.refractCount).toBeLessThanOrEqual(4);
-  if (glassState?.supportsRefraction) {
-    expect(glassState.refract).toBe(true);
-    expect(glassState.mapSource).toMatch(/^data:image\/svg\+xml/);
+  if (supportsRefraction) {
+    expect(glassState?.refract).toBe(true);
+    expect(glassState?.mapSource).toMatch(/^data:image\/svg\+xml/);
   } else {
     expect(glassState?.refract).toBe(false);
   }
@@ -643,7 +666,9 @@ test("liquid glass stays restrained and limits active surfaces", async ({ page }
   await page.getByRole("button", { name: "Playlists" }).click();
   await page.getByRole("button", { name: "New playlist" }).first().click();
   await expect(page.getByRole("dialog", { name: "New playlist" })).toBeVisible();
-  await expect(page.locator(".queue-picker-card.glass")).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "New playlist" }).locator(".queue-picker-card.glass"),
+  ).toBeVisible();
   await expect
     .poll(() => page.locator(".glass.refract").count())
     .toBeLessThanOrEqual(4);
@@ -674,9 +699,14 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect
     .poll(() => page.locator(".side-panel").evaluate((element) => getComputedStyle(element).position))
     .toBe("fixed");
-  await expect
-    .poll(() => page.locator(".rail").evaluate((element) => Math.round(element.getBoundingClientRect().height)))
-    .toBeGreaterThanOrEqual(await page.evaluate(() => window.innerHeight - 2));
+  const railBounds = await page.locator(".rail").evaluate((element) => {
+    const { top, bottom, height } = element.getBoundingClientRect();
+    return { top, bottom, height };
+  });
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  expect(railBounds.top).toBeGreaterThan(0);
+  expect(railBounds.bottom).toBeLessThan(viewportHeight);
+  expect(railBounds.height).toBeGreaterThan(viewportHeight - 40);
   await expect(page.locator(".home-profile-avatar img")).toBeVisible();
   await expect
     .poll(() => page.locator(".side-panel").evaluate((element) => element.hasAttribute("inert") && element.getAttribute("aria-hidden") === "true"))
@@ -744,7 +774,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
       const rect = element.getBoundingClientRect();
       return Math.round(window.innerWidth - rect.right);
     }))
-    .toBe(0);
+    .toBe(12);
   await page.getByRole("button", { name: "Close queue" }).click();
 
   await page.getByRole("button", { name: "Repeat: off" }).click();

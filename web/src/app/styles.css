@@ -1931,6 +1931,7 @@ button:focus-visible{
 .rail.glass .rail-btn.active{
   color:#fff;
 }
+.side-panel.glass{ position:fixed; }
 button,.card,.pl-card,.artist-card{
   transition-timing-function:var(--ease);
 }
@@ -1973,6 +1974,7 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
   }
 }
 .nowbar.glass{
+  position:fixed;
   border-radius:24px;
   border-color:rgba(255,255,255,.24);
   box-shadow:0 14px 38px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.3);
@@ -2011,8 +2013,8 @@ button:not(:disabled){ transition:transform .24s var(--ease),background-color .2
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more){
   .glass,
   .glass.refract{
-    -webkit-backdrop-filter:none;
-    backdrop-filter:none;
+    -webkit-backdrop-filter:none !important;
+    backdrop-filter:none !important;
     background:#191c25 !important;
     border-color:rgba(255,255,255,.48);
     box-shadow:0 0 0 1px rgba(255,255,255,.12), 0 10px 28px rgba(0,0,0,.32);
