@@ -8,6 +8,12 @@ import LogoutButton from "@/components/auth/logout-button";
 import { artistNames } from "@/components/artist-explorer";
 import { usePlayerStore, type LibraryView } from "@/store/player-store";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
+import {
+  ACCENT_COLOR_KEY,
+  applyAppearance,
+  GLASS_MATERIAL_KEY,
+  type GlassMaterial,
+} from "@/components/liquid-glass";
 
 function dateLabel(timestamp: number, language: string): string {
   if (!timestamp) return "—";
@@ -61,6 +67,8 @@ export default function AccountSettings({
   const [photoSaving, setPhotoSaving] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const [glassMaterial, setGlassMaterial] = useState<GlassMaterial>("default");
+  const [accentColor, setAccentColor] = useState("#8b7fff");
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoImageRef = useRef<HTMLImageElement>(null);
   const photoStageRef = useRef<HTMLDivElement>(null);
@@ -79,6 +87,28 @@ export default function AccountSettings({
     },
     [],
   );
+
+  useEffect(() => {
+    const savedMaterial = localStorage.getItem(GLASS_MATERIAL_KEY);
+    const savedAccent = localStorage.getItem(ACCENT_COLOR_KEY);
+    const nextMaterial: GlassMaterial = savedMaterial === "clear" || savedMaterial === "tinted"
+      ? savedMaterial
+      : "default";
+    setGlassMaterial(nextMaterial);
+    if (savedAccent) setAccentColor(savedAccent);
+  }, []);
+
+  function updateGlassMaterial(material: GlassMaterial) {
+    setGlassMaterial(material);
+    localStorage.setItem(GLASS_MATERIAL_KEY, material);
+    applyAppearance(material, accentColor);
+  }
+
+  function updateAccentColor(color: string) {
+    setAccentColor(color);
+    localStorage.setItem(ACCENT_COLOR_KEY, color);
+    applyAppearance(glassMaterial, color);
+  }
 
   useEffect(() => {
     if (!photoEditorOpen || photoSaving) return;
@@ -360,6 +390,28 @@ export default function AccountSettings({
         <div className="acct-settings-title">{t("Language")}</div>
         <p className="acct-danger-copy">{t("Choose the language used by Vervfy.")}</p>
         <LanguageSelect />
+      </section>
+
+      <section className="acct-settings appearance-settings">
+        <div className="acct-settings-title">Liquid Glass</div>
+        <p className="acct-danger-copy">Choose how much of the wallpaper comes through Vervfy&apos;s controls.</p>
+        <div className="appearance-controls" role="group" aria-label="Liquid Glass">
+          {(["clear", "default", "tinted"] as const).map((material) => (
+            <button
+              className={`appearance-choice${glassMaterial === material ? " active" : ""}`}
+              type="button"
+              key={material}
+              aria-pressed={glassMaterial === material}
+              onClick={() => updateGlassMaterial(material)}
+            >
+              {material.charAt(0).toUpperCase() + material.slice(1)}
+            </button>
+          ))}
+        </div>
+        <label className="accent-picker">
+          <span>Accent color</span>
+          <input type="color" value={accentColor} onChange={(event) => updateAccentColor(event.target.value)} aria-label="Accent color" />
+        </label>
       </section>
 
       <section className="acct-settings">
