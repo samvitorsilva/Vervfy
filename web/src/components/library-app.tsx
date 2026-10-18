@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -8,7 +8,7 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { createPortal } from "react-dom";
 import { apiFetch, expectOk, fetchWithRetry, uploadWithRetry } from "@/lib/api/client";
 import type { Account, LibraryState } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
@@ -61,7 +61,6 @@ const OFFLINE_DATABASE = "auralis-db";
 const OFFLINE_DATABASE_VERSION = 2;
 const OFFLINE_STORE = "offlineTracks";
 
-const FALLBACK_ART = "/gemini-svg.svg";
 const AURA_PALETTE = [
   ["#8b7fff", "#54e8d4"],
   ["#ff8fb1", "#8b7fff"],
@@ -69,7 +68,15 @@ const AURA_PALETTE = [
   ["#ffb86b", "#ff6b9d"],
   ["#6bd6ff", "#8b7fff"],
   ["#c084fc", "#54e8d4"],
-];
+] as const;
+
+function hashCoverSeed(seed: string): number {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (Math.imul(31, hash) + seed.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
 
 interface PlaybackAttempt {
   src: string;
@@ -103,17 +110,53 @@ function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknow
 }
 
 function generateAura(seed: string): string {
-  let hash = 0;
-  for (let index = 0; index < seed.length; index += 1) {
-    hash = (Math.imul(31, hash) + seed.charCodeAt(index)) | 0;
-  }
-  hash = Math.abs(hash);
+  const hash = hashCoverSeed(seed);
   const [first, second] = AURA_PALETTE[hash % AURA_PALETTE.length];
   const angle = (hash % 360) * (Math.PI / 180);
   const x = Math.round(50 + Math.cos(angle) * 15);
   const y = Math.round(50 + Math.sin(angle) * 15);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><defs><radialGradient id="a" cx="${x}%" cy="${y}%" r="75%"><stop stop-color="${first}"/><stop offset=".5" stop-color="${second}" stop-opacity=".34"/><stop offset="1" stop-color="#0c0e14" stop-opacity="0"/></radialGradient><radialGradient id="b" cx="${100 - x}%" cy="${100 - y}%" r="60%"><stop stop-color="${second}"/><stop offset="1" stop-color="#0c0e14" stop-opacity="0"/></radialGradient></defs><rect width="300" height="300" fill="#12151e"/><rect width="300" height="300" fill="url(#a)" opacity=".9"/><rect width="300" height="300" fill="url(#b)" opacity=".55"/></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function GeneratedAura({ seed, className = "" }: { seed: string; className?: string }) {
+  const hash = hashCoverSeed(seed);
+  const id = `aura-${useId().replace(/:/g, "")}`;
+  const [first, second] = AURA_PALETTE[hash % AURA_PALETTE.length];
+  const angle = (hash % 360) * (Math.PI / 180);
+  const x = Math.round(50 + Math.cos(angle) * 15);
+  const y = Math.round(50 + Math.sin(angle) * 15);
+  return (
+    <svg className={`generated-aura ${className}`} viewBox="0 0 300 300" aria-hidden="true">
+      <defs>
+        <radialGradient id={`${id}-a`} cx={`${x}%`} cy={`${y}%`} r="75%">
+          <stop stopColor={first} />
+          <stop offset=".5" stopColor={second} stopOpacity=".34" />
+          <stop offset="1" stopColor="#0c0e14" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id={`${id}-b`} cx={`${100 - x}%`} cy={`${100 - y}%`} r="60%">
+          <stop stopColor={second} />
+          <stop offset="1" stopColor="#0c0e14" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <rect width="300" height="300" fill="#12151e" />
+      <rect className="generated-aura-first" width="300" height="300" fill={`url(#${id}-a)`} opacity=".9" />
+      <rect className="generated-aura-second" width="300" height="300" fill={`url(#${id}-b)`} opacity=".55" />
+    </svg>
+  );
+}
+
+const FALLBACK_ART = generateAura("Unknown song");
+
+function coverUrlForTrack(
+  track: Pick<ServerTrack, "artist" | "album" | "title" | "cover_url" | "cover_source" | "has_cover">,
+): string {
+  const source = track.cover_source ?? "unknown";
+  const hasGeneratedCover = ["generated", "placeholder", "unknown"].includes(source);
+  if (!track.has_cover && hasGeneratedCover) {
+    return generateAura(`${track.artist}|${track.album}|${track.title}`);
+  }
+  return track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`);
 }
 
 function normalizeMeta(value: LibraryState): LibraryMeta {
@@ -145,9 +188,11 @@ function activePreviewLine(lines: NonNullable<CachedLyrics["lines"]>, timeMs: nu
 
 const LoadedTrackImage = memo(function LoadedTrackImage({
   src,
+  fallbackSrc = FALLBACK_ART,
   className = "",
 }: {
   src: string;
+  fallbackSrc?: string;
   className?: string;
 }) {
   const [loaded, setLoaded] = useState(false);
@@ -160,8 +205,8 @@ const LoadedTrackImage = memo(function LoadedTrackImage({
       decoding="async"
       onLoad={() => setLoaded(true)}
       onError={(event) => {
-        if (event.currentTarget.src !== new URL(FALLBACK_ART, window.location.href).href) {
-          event.currentTarget.src = FALLBACK_ART;
+        if (event.currentTarget.src !== new URL(fallbackSrc, window.location.href).href) {
+          event.currentTarget.src = fallbackSrc;
         } else {
           setLoaded(true);
         }
@@ -177,8 +222,20 @@ const TrackImage = memo(function TrackImage({
   track: TrackRecord;
   className?: string;
 }) {
-  const src = track.coverUrl || FALLBACK_ART;
-  return <LoadedTrackImage key={src} src={src} className={className} />;
+  if (
+    !track.hasCover &&
+    ["generated", "placeholder", "unknown"].includes(track.coverSource ?? "unknown")
+  ) {
+    return (
+      <GeneratedAura
+        seed={`${track.artist}|${track.album}|${track.title}`}
+        className={className}
+      />
+    );
+  }
+  const fallback = generateAura(`${track.artist}|${track.album}|${track.title}`);
+  const src = track.coverUrl || fallback;
+  return <LoadedTrackImage key={`${track.id}:${src}`} src={src} fallbackSrc={fallback} className={className} />;
 });
 
 function PlaybackSeek({
@@ -575,6 +632,133 @@ function Icon({ name }: { name: IconName }) {
   );
 }
 
+interface TrackMenuPortalProps {
+  track: TrackRecord;
+  position: { top: number; left: number };
+  view: LibraryView;
+  playlists: PlaylistRecord[];
+  offlinePendingId: string | null;
+  expandedPlayerOpen: boolean;
+  onPlayNext: () => void;
+  onAddToQueue: () => void;
+  onAddToPlaylist: () => void;
+  onToggleOffline: () => void;
+  onToggleFavorite: () => void;
+  onViewArtist: (name: string) => void;
+  onShare: () => void;
+  onRemoveFromPlaylist?: () => void;
+  onAddOrChangeCover: () => void;
+  onRetryCover: () => void;
+  onCoverInfo: () => void;
+  onEditDetails: () => void;
+  onRemove: () => void;
+}
+
+function TrackMenuPortal({
+  track,
+  position,
+  view,
+  playlists,
+  offlinePendingId,
+  expandedPlayerOpen,
+  onPlayNext,
+  onAddToQueue,
+  onAddToPlaylist,
+  onToggleOffline,
+  onToggleFavorite,
+  onViewArtist,
+  onShare,
+  onRemoveFromPlaylist,
+  onAddOrChangeCover,
+  onRetryCover,
+  onCoverInfo,
+  onEditDetails,
+  onRemove,
+}: TrackMenuPortalProps) {
+  const { t } = useLanguage();
+  const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
+  const playlist = playlists.find((item) => item.id === playlistId);
+  const inPlaylist = playlist?.trackIds.includes(track.id) ?? false;
+  const hasPlaceholderCover = ["placeholder", "unknown", "generated"].includes(track.coverSource ?? "unknown");
+
+  return createPortal(
+    <div
+      className="menu track-context-menu"
+      role="menu"
+      aria-label={`${t("Options for")} ${track.title}`}
+      style={{ top: position.top, left: position.left }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button className="menu-item" role="menuitem" type="button" onClick={onPlayNext}>{t("Play next")}</button>
+      <button className="menu-item" role="menuitem" type="button" onClick={onAddToQueue}>{t("Add to queue")}</button>
+      <button className="menu-item" role="menuitem" type="button" onClick={onAddToPlaylist}>{t("Add to playlist")}</button>
+      <button
+        className="menu-item"
+        role="menuitem"
+        type="button"
+        disabled={offlinePendingId !== null}
+        onClick={onToggleOffline}
+      >
+        {offlinePendingId === track.id
+          ? t("Saving offline…")
+          : track.offlineUrl
+            ? t("Remove offline download")
+            : t("Download for offline")}
+      </button>
+      <button
+        className="menu-item"
+        role="menuitemcheckbox"
+        type="button"
+        aria-checked={track.favorite}
+        onClick={onToggleFavorite}
+      >
+        {track.favorite ? t("Remove from liked songs") : t("Save to liked songs")}
+      </button>
+      {artistNames(track).map((name) => (
+        <button
+          className="menu-item"
+          role="menuitem"
+          type="button"
+          key={name}
+          onClick={() => onViewArtist(name)}
+        >
+          View artist: {name}
+        </button>
+      ))}
+      <button className="menu-item" role="menuitem" type="button" onClick={onShare}>{t("Share song")}</button>
+      {inPlaylist && playlist ? (
+        <button className="menu-item" role="menuitem" type="button" onClick={onRemoveFromPlaylist}>
+          {t("Remove from this playlist")}
+        </button>
+      ) : null}
+      <div className="menu-sep" />
+      <button className={`menu-item${hasPlaceholderCover ? " cover-menu-item" : ""}`} role="menuitem" type="button" onClick={onAddOrChangeCover}>
+        <span>{t(hasPlaceholderCover ? "Add cover" : "Change cover")}</span>
+        {hasPlaceholderCover ? <small>{t("Generated placeholder")}</small> : null}
+      </button>
+      {track.coverSource !== "upload" && track.coverSource !== "user" ? (
+        <button className="menu-item" role="menuitem" type="button" onClick={onRetryCover}>
+          {t("Retry cover")}
+        </button>
+      ) : null}
+      {expandedPlayerOpen && track.coverSource === "musicbrainz" ? (
+        <button className="menu-item" role="menuitem" type="button" aria-haspopup="dialog" onClick={onCoverInfo}>
+          {t("Cover art info")}
+        </button>
+      ) : null}
+      <button className="menu-item" role="menuitem" type="button" onClick={onEditDetails}>
+        {t("Edit track details")}
+      </button>
+      <div className="menu-sep" />
+      <button className="menu-item" role="menuitem" type="button" onClick={onRemove}>
+        {t("Remove from library")}
+      </button>
+    </div>,
+    document.body,
+    `track-menu-${track.id}`,
+  );
+}
+
 export default function LibraryApp() {
   const { t } = useLanguage();
   const audioElement = usePlayerStore((state) => state.audioElement);
@@ -657,7 +841,6 @@ export default function LibraryApp() {
   const [muted, setMuted] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [contentScrolled, setContentScrolled] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
@@ -666,7 +849,6 @@ export default function LibraryApp() {
   const expandedPlayerCloseRef = useRef<HTMLButtonElement>(null);
   const expandedPlayerReturnFocusRef = useRef<HTMLElement | null>(null);
   const queuePanelRef = useRef<HTMLElement>(null);
-  const contentRef = useRef<HTMLElement>(null);
 
   const baselineRef = useRef<LibraryMeta>({ favorites: [], playlists: [] });
   const etagRef = useRef<string | null>(null);
@@ -684,11 +866,11 @@ export default function LibraryApp() {
   }, []);
 
   useEffect(() => {
-    const app = document.getElementById("app");
-    if (!app) return;
-    app.inert = expandedPlayerOpen;
+    const shell = document.querySelector<HTMLElement>("#app > .shell");
+    if (!shell) return;
+    shell.inert = expandedPlayerOpen;
     return () => {
-      app.inert = false;
+      shell.inert = false;
     };
   }, [expandedPlayerOpen]);
 
@@ -793,6 +975,7 @@ export default function LibraryApp() {
     () => new Map(tracks.map((track) => [track.id, track])),
     [tracks],
   );
+  const trackMenuTrack = trackMenu ? tracksById.get(trackMenu.trackId) ?? null : null;
   const title = t(viewName(view, playlists));
   const playlistForView = view.startsWith("playlist:")
     ? playlists.find((playlist) => `playlist:${playlist.id}` === view)
@@ -847,7 +1030,7 @@ export default function LibraryApp() {
         previous?.coverSource === "audiodb" &&
         !track.has_cover &&
         (track.cover_source === "placeholder" || track.cover_source === "generated");
-      const fallback = track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`);
+      const fallback = coverUrlForTrack(track);
       return {
         id: track.id,
         title: track.title || "Unknown title",
@@ -901,10 +1084,16 @@ export default function LibraryApp() {
           ) {
             return track;
           }
+          const coverUrl = coverUrlForTrack({
+            ...track,
+            has_cover: track.hasCover ?? false,
+            cover_url: result.cover_url,
+            cover_source: result.cover_source ?? "generated",
+          });
           return {
             ...track,
-            coverUrl: result.cover_url,
-            remoteCoverUrl: result.cover_url,
+            coverUrl,
+            remoteCoverUrl: coverUrl,
             coverSource: result.cover_source ?? "generated",
           };
         }),
@@ -938,6 +1127,7 @@ export default function LibraryApp() {
 
   function openCoverEditor(track: TrackRecord) {
     setTrackMenu(null);
+    setExpandedPlayerOpen(false);
     setCoverFile(null);
     setCoverError("");
     setApplyCoverToAlbum(false);
@@ -958,6 +1148,7 @@ export default function LibraryApp() {
 
   function openMetadataEditor(track: TrackRecord) {
     setTrackMenu(null);
+    setExpandedPlayerOpen(false);
     setMetadataDraft({ title: track.title, artist: track.artist, album: track.album });
     setMetadataError("");
     setMetadataEditorTrack(track);
@@ -1735,8 +1926,8 @@ export default function LibraryApp() {
           album: track.album || "Unknown album",
           duration: track.duration || 0,
           hasCover: track.has_cover,
-          coverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
-          remoteCoverUrl: track.cover_url || generateAura(`${track.artist}|${track.album}|${track.title}`),
+          coverUrl: coverUrlForTrack(track),
+          remoteCoverUrl: coverUrlForTrack(track),
           streamUrl: track.stream_url,
           coverSource: track.cover_source ?? "unknown",
           favorite: false,
@@ -2117,24 +2308,6 @@ export default function LibraryApp() {
     expandedPlayerReturnFocusRef.current =
       trigger ??
       (activeElement instanceof HTMLElement ? activeElement : null);
-
-    if (
-      typeof document.startViewTransition === "function" &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      const transitionRoot = document.documentElement;
-      transitionRoot.classList.add("player-view-transition");
-      document.body.classList.add("player-view-transition-supported");
-      const transition = document.startViewTransition(() => {
-        document.body.classList.add("expanded-player-open");
-        flushSync(() => setExpandedPlayerOpen(true));
-      });
-      const clearTransitionClass = () =>
-        transitionRoot.classList.remove("player-view-transition");
-      void transition.finished.then(clearTransitionClass, clearTransitionClass);
-      return;
-    }
-
     setExpandedPlayerOpen(true);
   }
 
@@ -2295,108 +2468,6 @@ export default function LibraryApp() {
     );
   }
 
-  function renderTrackMenu(track: TrackRecord) {
-    if (trackMenu?.trackId !== track.id || typeof document === "undefined") return null;
-    const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
-    const playlist = playlists.find((item) => item.id === playlistId);
-    const inPlaylist = playlist?.trackIds.includes(track.id) ?? false;
-    return createPortal(
-      <div
-        className="menu track-context-menu"
-        role="menu"
-        aria-label={`${t("Options for")} ${track.title}`}
-        style={{ top: trackMenu.top, left: trackMenu.left }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track, true); setTrackMenu(null); }}>
-          <Icon name="play" />
-          {t("Play next")}
-        </button>
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { addToQueue(track); setTrackMenu(null); }}>{t("Add to queue")}</button>
-        <button className="menu-item" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); setPlaylistPicker(track.id); setTrackMenu(null); }}>{t("Add to playlist")}</button>
-        <button
-          className={`menu-item${track.offlineUrl ? " menu-item-remove" : ""}`}
-          role="menuitem"
-          type="button"
-          disabled={offlinePendingId !== null}
-          onClick={() => void toggleOfflineDownload(track)}
-        >
-          {track.offlineUrl ? <Icon name="close" /> : null}
-          {offlinePendingId === track.id
-            ? t("Saving offline…")
-            : track.offlineUrl
-              ? t("Remove offline download")
-              : t("Download for offline")}
-        </button>
-        <button
-          className="menu-item menu-item-favorite"
-          role="menuitemcheckbox"
-          type="button"
-          aria-checked={track.favorite}
-          onClick={() => { toggleFavoriteFor(track); setTrackMenu(null); }}
-        >
-          <Icon name="heart" />
-          {track.favorite ? t("Remove from liked songs") : t("Save to liked songs")}
-        </button>
-        {artistNames(track).map((name) => (
-          <button
-            className="menu-item"
-            role="menuitem"
-            type="button"
-            key={name}
-            onClick={() => openArtist(name)}
-          >
-            View artist: {name}
-          </button>
-        ))}
-        <button className="menu-item" role="menuitem" type="button" onClick={() => void shareTrack(track)}>{t("Share song")}</button>
-        {inPlaylist && playlist ? (
-          <button className="menu-item menu-item-remove" role="menuitem" type="button" onClick={() => removeTrackFromPlaylist(playlist.id, track)}>
-            <Icon name="close" />
-            {t("Remove from this playlist")}
-          </button>
-        ) : null}
-        <div className="menu-sep" />
-        <button className={`menu-item${track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? " cover-menu-item" : ""}`} role="menuitem" type="button" onClick={() => openCoverEditor(track)}>
-          <span>{t(track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? "Add cover" : "Change cover")}</span>
-          {track.coverSource === "placeholder" || track.coverSource === "unknown" || track.coverSource === "generated" ? (
-            <small>{t("Generated placeholder")}</small>
-          ) : null}
-        </button>
-        {track.coverSource !== "upload" && track.coverSource !== "user" ? (
-          <button className="menu-item" role="menuitem" type="button" onClick={() => void retryCoverLookup(track)}>
-            {t("Retry cover")}
-          </button>
-        ) : null}
-        {expandedPlayerOpen && track.coverSource === "musicbrainz" ? (
-          <button
-            className="menu-item"
-            role="menuitem"
-            type="button"
-            aria-haspopup="dialog"
-            onClick={() => {
-              coverInfoReturnFocusRef.current = mobilePlayerMenuButtonRef.current;
-              setCoverInfoTrackId(track.id);
-              setTrackMenu(null);
-            }}
-          >
-            {t("Cover art info")}
-          </button>
-        ) : null}
-        <button className="menu-item" role="menuitem" type="button" onClick={() => openMetadataEditor(track)}>
-          {t("Edit track details")}
-        </button>
-        <div className="menu-sep" />
-        <button className="menu-item menu-item-destructive" role="menuitem" type="button" onClick={() => { setExpandedPlayerOpen(false); void removeTrack(track); }}>
-          <Icon name="close" />
-          {t("Remove from library")}
-        </button>
-      </div>,
-      document.body,
-      `track-menu-${track.id}`,
-    );
-  }
-
   const renderTrack = (
     track: TrackRecord,
     index: number,
@@ -2453,7 +2524,6 @@ export default function LibraryApp() {
           >
             <Icon name="more" />
           </button>
-          {renderTrackMenu(track)}
           <div className="card-title">{track.title}</div>
           <div className="card-sub">
             {artistNames(track).map((name, artistIndex) => (
@@ -2515,7 +2585,6 @@ export default function LibraryApp() {
             data-track-menu-trigger
             onClick={(event) => toggleTrackMenu(track, event)}
           ><Icon name="more" /></button>
-          {renderTrackMenu(track)}
         </div>
       </div>
     );
@@ -2634,7 +2703,7 @@ export default function LibraryApp() {
           </header>
           <main className="mobile-player-scroll">
             <div className="mobile-player-art">
-              <img src={currentTrack.coverUrl || FALLBACK_ART} alt="" />
+              <TrackImage track={currentTrack} />
             </div>
             <section className="mobile-player-info">
               <div className="mobile-player-title-row">
@@ -2782,13 +2851,12 @@ export default function LibraryApp() {
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
           </div>
-          <span className="rail-section-label" aria-hidden="true">Library</span>
-          <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /><span className="rail-label">{t("Library")}</span></button>
-          <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /><span className="rail-label">{t("Offline")}</span></button>
-          <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /><span className="rail-label">{t("Playlists")}</span></button>
-          <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip={t("Artists")} aria-label={t("Artists")} aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /><span className="rail-label">{t("Artists")}</span></button>
-          <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip={t("Favorites")} aria-label={t("Favorites")} aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /><span className="rail-label">{t("Favorites")}</span></button>
-          <button className={`rail-btn${view === "account" ? " active" : ""}`} type="button" data-view="account" data-tip={t("Account")} aria-label={t("Account")} aria-current={view === "account" ? "page" : undefined} onClick={() => setView("account")}><Icon name="account" /><span className="rail-label">{t("Account")}</span></button>
+          <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
+          <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
+          <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
+          <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip={t("Artists")} aria-label={t("Artists")} aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /></button>
+          <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip={t("Favorites")} aria-label={t("Favorites")} aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /></button>
+          <button className={`rail-btn${view === "account" ? " active" : ""}`} type="button" data-view="account" data-tip={t("Account")} aria-label={t("Account")} aria-current={view === "account" ? "page" : undefined} onClick={() => setView("account")}><Icon name="account" /></button>
           <div className="rail-spacer" />
           <div className="rail-logout"><LogoutButton className="rail-btn rail-logout-button" ariaLabel="Log out"><Icon name="logout" /></LogoutButton></div>
           <button className="rail-btn rail-shortcuts-button" type="button" data-tip={t("Shortcuts (?)")} aria-label={t("Shortcuts")} onClick={() => setShortcutsOpen(true)}><Icon name="help" /></button>
@@ -2828,11 +2896,7 @@ export default function LibraryApp() {
             )}
           </div>
 
-          <main
-            ref={contentRef}
-            className={`content${contentScrolled ? " is-scrolled" : ""}`}
-            onScroll={(event) => setContentScrolled(event.currentTarget.scrollTop > 4)}
-          >
+          <div className="content">
             {loading ? (
               <div className="library-skeleton" aria-label={t("Loading library")} aria-busy="true">
                 {[0, 1, 2].map((item) => <div className="skeleton-row" key={item}><span className="skeleton-art" /><span className="skeleton-copy"><i /><i /></span><span className="skeleton-time" /></div>)}
@@ -2953,20 +3017,20 @@ export default function LibraryApp() {
                 )}
               </>
             )}
-          </main>
+          </div>
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen} inert={!currentTrack || lyricsOpen}
+      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen || expandedPlayerOpen} inert={!currentTrack || lyricsOpen || expandedPlayerOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
-            openExpandedPlayer();
+            setExpandedPlayerOpen(true);
           }
         }}
       >
         <div className="now-track">
-          <span className="now-art-wrap"><span className="now-art"><img id="nowArt" src={currentTrack?.coverUrl ?? FALLBACK_ART} data-artwork={currentTrack?.coverUrl ?? ""} alt="" /></span></span>
+          <span className="now-art-wrap"><span className="now-art">{currentTrack ? <TrackImage track={currentTrack} /> : <img src={FALLBACK_ART} alt="" />}</span></span>
           <span className="now-meta">
             <button
               className="now-track-open"
@@ -3051,15 +3115,16 @@ export default function LibraryApp() {
       </div>
 
       {coverInfoOpen && currentTrack?.coverSource === "musicbrainz" ? (
-        <section
-          id="cover-art-info"
-          ref={coverInfoPopoverRef}
-          className="cover-info-popover"
-          role="dialog"
-          tabIndex={-1}
-          aria-label={t("Cover art information")}
-          onClick={(event) => event.stopPropagation()}
-        >
+        createPortal(
+          <section
+            id="cover-art-info"
+            ref={coverInfoPopoverRef}
+            className="cover-info-popover"
+            role="dialog"
+            tabIndex={-1}
+            aria-label={t("Cover art information")}
+            onClick={(event) => event.stopPropagation()}
+          >
           <div className="cover-info-heading">
             <span className="cover-info-icon"><Icon name="info" /></span>
             <div>
@@ -3095,10 +3160,62 @@ export default function LibraryApp() {
             </a>
             <a href="/credits">{t("View all credits")} <span aria-hidden="true">→</span></a>
           </div>
-        </section>
+          </section>,
+          document.body,
+        )
       ) : null}
 
       {expandedPlayer}
+      {trackMenu && trackMenuTrack ? (
+        <TrackMenuPortal
+          track={trackMenuTrack}
+          position={{ top: trackMenu.top, left: trackMenu.left }}
+          view={view}
+          playlists={playlists}
+          offlinePendingId={offlinePendingId}
+          expandedPlayerOpen={expandedPlayerOpen}
+          onPlayNext={() => {
+            addToQueue(trackMenuTrack, true);
+            setTrackMenu(null);
+          }}
+          onAddToQueue={() => {
+            addToQueue(trackMenuTrack);
+            setTrackMenu(null);
+          }}
+          onAddToPlaylist={() => {
+            setExpandedPlayerOpen(false);
+            setPlaylistPicker(trackMenuTrack.id);
+            setTrackMenu(null);
+          }}
+          onToggleOffline={() => void toggleOfflineDownload(trackMenuTrack)}
+          onToggleFavorite={() => {
+            toggleFavoriteFor(trackMenuTrack);
+            setTrackMenu(null);
+          }}
+          onViewArtist={openArtist}
+          onShare={() => {
+            setTrackMenu(null);
+            void shareTrack(trackMenuTrack);
+          }}
+          onRemoveFromPlaylist={
+            view.startsWith("playlist:")
+              ? () => removeTrackFromPlaylist(view.slice("playlist:".length), trackMenuTrack)
+              : undefined
+          }
+          onAddOrChangeCover={() => openCoverEditor(trackMenuTrack)}
+          onRetryCover={() => void retryCoverLookup(trackMenuTrack)}
+          onCoverInfo={() => {
+            coverInfoReturnFocusRef.current = mobilePlayerMenuButtonRef.current;
+            setCoverInfoTrackId(trackMenuTrack.id);
+            setTrackMenu(null);
+          }}
+          onEditDetails={() => openMetadataEditor(trackMenuTrack)}
+          onRemove={() => {
+            setExpandedPlayerOpen(false);
+            void removeTrack(trackMenuTrack);
+          }}
+        />
+      ) : null}
       {lyricsOpen && currentTrack ? (
         <LyricsOverlay
           key={currentTrack.id}
@@ -3396,8 +3513,12 @@ export default function LibraryApp() {
         setIsDraggingFiles(false);
         void uploadFiles(event.dataTransfer.files);
       }}><h3>{t("Drop to add music")}</h3><p>{t("Your files are uploaded to your account.")}</p></div> : null}
-      {uploadStatus ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div> : null}
-      {toast ? <div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{toast}</div></div> : null}
+      {uploadStatus && typeof document !== "undefined"
+        ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div>, document.body)
+        : null}
+      {toast && typeof document !== "undefined"
+        ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{toast}</div></div>, document.body)
+        : null}
     </div>
   );
 }

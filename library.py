@@ -1,8 +1,8 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
-import base64, hashlib, io, logging, os, re, tempfile
+import base64, hashlib, io, logging, math, os, re, tempfile
 from dataclasses import dataclass
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import load_only
 import audio_store
@@ -46,70 +46,37 @@ def track_id_for_file(path: str) -> str:
     return digest.hexdigest()
 
 def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
-    """Create title-specific fallback art with a soft translucent-glass look."""
+    """Create title-specific abstract aura artwork for tracks without a cover."""
     seed = hashlib.sha256(title.strip().casefold().encode("utf-8")).digest()
-    start = (18 + seed[0] % 30, 20 + seed[1] % 26, 48 + seed[2] % 38)
-    end = (52 + seed[3] % 58, 26 + seed[4] % 34, 76 + seed[5] % 70)
-    gradient = Image.linear_gradient("L").resize(
-        (size, size),
-        Image.Resampling.BILINEAR,
+    palettes = (
+        ("8b7fff", "54e8d4"),
+        ("ff8fb1", "8b7fff"),
+        ("54e8d4", "3aa0ff"),
+        ("ffb86b", "ff6b9d"),
+        ("6bd6ff", "8b7fff"),
+        ("c084fc", "54e8d4"),
     )
-    gradient = Image.blend(
-        gradient,
-        gradient.transpose(Image.Transpose.ROTATE_90),
-        0.5,
-    )
-    image = ImageOps.colorize(gradient, start, end)
+    palette = palettes[seed[2] % len(palettes)]
+    angle = int.from_bytes(seed[:2], "big") / 65535 * math.tau
+    x = size * (0.5 + math.cos(angle) * 0.15)
+    y = size * (0.5 + math.sin(angle) * 0.15)
 
+    gradient = Image.linear_gradient("L").resize((size, size), Image.Resampling.BILINEAR)
+    gradient = Image.blend(gradient, gradient.transpose(Image.Transpose.ROTATE_90), 0.5)
+    image = ImageOps.colorize(gradient, "#0c0e14", "#191d2b").convert("RGBA")
     glow = Image.new("RGBA", (size, size))
-    glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse(
-        (size * 0.48, -size * 0.24, size * 1.2, size * 0.48),
-        fill=(170 + seed[6] % 70, 150 + seed[7] % 80, 255, 105),
-    )
-    glow_draw.ellipse(
-        (-size * 0.28, size * 0.52, size * 0.5, size * 1.2),
-        fill=(255, 110 + seed[8] % 80, 190 + seed[9] % 60, 75),
-    )
-    glow = glow.filter(ImageFilter.GaussianBlur(max(1, size * 0.12)))
-    image = Image.alpha_composite(image.convert("RGBA"), glow)
-
-    glass = Image.new("RGBA", (size, size))
-    draw = ImageDraw.Draw(glass)
-    margin = size * 0.13
-    draw.rounded_rectangle(
-        (margin, margin, size - margin, size - margin),
-        radius=size * 0.12,
-        fill=(255, 255, 255, 24),
-        outline=(255, 255, 255, 105),
-        width=max(1, size // 170),
-    )
-    inset = size * 0.045
-    draw.rounded_rectangle(
-        (margin + inset, margin + inset, size - margin - inset, size - margin - inset),
-        radius=size * 0.09,
-        outline=(255, 255, 255, 36),
-        width=max(1, size // 256),
-    )
-    image = Image.alpha_composite(image, glass)
-
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", max(1, int(size * 0.42)))
-    except OSError:
-        font = ImageFont.load_default()
-    letter = (title.strip()[:1] or "?").upper()
-    box = draw.textbbox((0, 0), letter, font=font)
-    text_layer = Image.new("RGBA", (size, size))
-    text_draw = ImageDraw.Draw(text_layer)
-    text_draw.text(
-        (size / 2 - (box[2] - box[0]) / 2, size / 2 - (box[3] - box[1]) / 2),
-        letter,
-        font=font,
-        fill=(255, 255, 255, 238),
-        stroke_width=max(0, size // 256),
-        stroke_fill=(255, 255, 255, 45),
-    )
-    return Image.alpha_composite(image, text_layer).convert("RGB")
+    draw = ImageDraw.Draw(glow)
+    for color, center, radius, alpha in (
+        (palette[0], (x, y), size * 0.72, 150),
+        (palette[1], (size - x, size - y), size * 0.58, 115),
+    ):
+        rgb = tuple(bytes.fromhex(color))
+        draw.ellipse(
+            (center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius),
+            fill=(*rgb, alpha),
+        )
+    glow = glow.filter(ImageFilter.GaussianBlur(max(1, size * 0.18)))
+    return Image.alpha_composite(image, glow).convert("RGB")
 
 _NOISE_WORDS = {
     "official", "lyric", "lyrics", "video", "music", "audio", "visualizer",

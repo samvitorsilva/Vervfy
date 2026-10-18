@@ -5,14 +5,26 @@
   const BEZEL_WIDTH = 22;       // rim thickness in the displacement map
   const CORNER_RADIUS = 32;     // fallback when element radius can't be read
   const DISPLACEMENT_SCALE = 70;
+  const BLUR = 3;               // Chromium refraction blur
+  const FROST_BLUR = 18;        // Safari / Firefox frost
+  const SATURATION_FROST = 1.8;
+  const SATURATION_REFRACT = 1.7;
+  const TINT_ALPHA = 0.1;       // frost fill
+  const TINT_ALPHA_REFRACT = 0.04;
   const MAX_ACTIVE_SURFACES = 4;
+
+  document.documentElement.style.setProperty("--glass-blur", `${BLUR}px`);
+  document.documentElement.style.setProperty("--glass-frost-blur", `${FROST_BLUR}px`);
+  document.documentElement.style.setProperty("--glass-saturation", String(SATURATION_FROST));
+  document.documentElement.style.setProperty("--glass-saturation-refract", String(SATURATION_REFRACT));
+  document.documentElement.style.setProperty("--glass-tint-alpha", String(TINT_ALPHA));
+  document.documentElement.style.setProperty("--glass-tint-alpha-refract", String(TINT_ALPHA_REFRACT));
 
   const backdrop = document.getElementById("artworkBackdrop");
   const backdropImage = document.getElementById("artworkBackdropImage");
   const artwork = document.getElementById("nowArt");
   const defs = document.querySelector(".glass-filters defs");
   const reducedTransparency = matchMedia("(prefers-reduced-transparency: reduce)");
-  const increasedContrast = matchMedia("(prefers-contrast: more)");
   // SVG filters inside backdrop-filter only work in Chromium.
   const canRefract = Boolean(window.chrome);
 
@@ -21,12 +33,11 @@
   let nextFilterId = 0;
   let syncFrame = 0;
   const surfacePriorities = [
-    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side, .track-context-menu", 0],
+    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side", 0],
     [".mobile-player-info", 1],
     [".nowbar", 2],
-    [".topbar", 3],
-    [".rail", 4],
-    [".side-panel", 5],
+    [".rail", 3],
+    [".side-panel", 4],
   ];
 
   function updateArtwork() {
@@ -170,7 +181,7 @@
   }
 
   function updateSurface(element) {
-    if (!canRefract || reducedTransparency.matches || increasedContrast.matches) {
+    if (!canRefract || reducedTransparency.matches) {
       element.classList.remove("refract");
       element.style.removeProperty("--glass-filter-url");
       return;
@@ -279,7 +290,7 @@
 
       element.classList.add("glass");
 
-      if (reducedTransparency.matches || increasedContrast.matches || !canRefract) {
+      if (reducedTransparency.matches || !canRefract) {
         element.classList.remove("refract");
         element.style.removeProperty("--glass-filter-url");
         const state = filterStates.get(element);
@@ -349,7 +360,6 @@
   });
 
   reducedTransparency.addEventListener?.("change", syncSurfaces);
-  increasedContrast.addEventListener?.("change", syncSurfaces);
   window.addEventListener("resize", queueSync, { passive: true });
 
   updateArtwork();

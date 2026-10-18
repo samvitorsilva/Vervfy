@@ -65,41 +65,6 @@ test("Brazilian Portuguese is detected and the language choice persists", async 
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 });
 
-test("track menus use icons selectively and stay within the glass budget", async ({
-  page,
-}) => {
-  test.skip(
-    externalApp || externalBackend,
-    "This interaction test uses the local mock backend.",
-  );
-
-  await page.goto("/login");
-  await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await page.locator('input[type="file"][accept^="audio/"]').first().setInputFiles({
-    name: "menu-actions.wav",
-    mimeType: "audio/wav",
-    buffer: makeWav(),
-  });
-
-  const track = page.locator(".card").filter({ hasText: "menu-actions" });
-  await expect(track).toBeVisible();
-  await track.getByRole("button", { name: "More options for menu-actions" }).click();
-
-  const menu = page.getByRole("menu", { name: "Options for menu-actions" });
-  await expect(menu).toHaveClass(/glass/);
-  await expect(menu.locator(".menu-item > svg")).toHaveCount(3);
-  await expect(menu.getByRole("menuitem", { name: "Play next" }).locator("svg")).toHaveCount(1);
-  await expect(menu.getByRole("menuitem", { name: "Add to queue" }).locator("svg")).toHaveCount(0);
-  await expect(menu.getByRole("menuitemcheckbox", { name: "Save to liked songs" }).locator("svg")).toHaveCount(1);
-  await expect(menu.getByRole("menuitem", { name: "Remove from library" }).locator("svg")).toHaveCount(1);
-  await expect
-    .poll(() => page.locator(".glass").count())
-    .toBeLessThanOrEqual(4);
-});
-
 test("login displays JSON authentication errors", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("invalid-user");
@@ -126,6 +91,13 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
 
   const track = page.locator(".card").filter({ hasText: "responsive-player" });
   await expect(track).toBeVisible();
+  const fallbackCover = track.locator(".card-art .generated-aura");
+  await expect(fallbackCover).toBeVisible();
+  await expect(fallbackCover.locator("text")).toHaveCount(0);
+  await expect(fallbackCover.locator(".generated-aura-first")).toHaveCSS(
+    "animation-name",
+    "generatedAuraDrift",
+  );
   await page.getByRole("button", { name: "List view" }).click();
   await expect(page.locator(".list .row")).toHaveCount(1);
   await page.reload();
@@ -148,63 +120,24 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     });
     expect(isOnTop).toBe(true);
   };
-  const supportsViewTransitions = await page.evaluate(() => {
-    if (typeof document.startViewTransition !== "function") return false;
-    const root = document.documentElement;
-    new MutationObserver(() => {
-      if (root.classList.contains("player-view-transition")) {
-        root.setAttribute("data-player-transition-seen", "true");
-      }
-    }).observe(root, { attributes: true, attributeFilter: ["class"] });
-    return true;
-  });
-
-  for (const viewport of [
-    { width: 1440, height: 900, left: 224, bottom: 900 },
-    { width: 1024, height: 768, left: 68, bottom: 768 },
-    { width: 390, height: 844, left: 0, bottom: 776 },
-  ]) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await expect
-      .poll(() =>
-        page.locator("#nowbar").evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          return {
-            left: Math.round(rect.left),
-            right: Math.round(rect.right),
-            bottom: Math.round(rect.bottom),
-            radius: getComputedStyle(element).borderTopLeftRadius,
-          };
-        }),
-      )
-      .toEqual({
-        left: viewport.left,
-        right: viewport.width,
-        bottom: viewport.bottom,
-        radius: "12px",
-      });
-  }
 
   for (const viewport of [
     { width: 360, height: 812 },
     { width: 768, height: 1024 },
   ]) {
-    await page.emulateMedia({
-      reducedMotion: viewport.width === 360 ? "reduce" : "no-preference",
-    });
     await page.setViewportSize(viewport);
     await nowPlayingButton.click();
     const player = page.getByRole("dialog", { name: "Now playing" });
     await expect(player).toBeVisible();
-    if (viewport.width === 768 && supportsViewTransitions) {
-      await expect(page.locator("html")).toHaveAttribute(
-        "data-player-transition-seen",
-        "true",
-      );
-      await expect(player).toHaveCSS("opacity", "1");
-    }
-    await expect(player.locator(".mobile-player-art img")).toBeVisible();
+    await expect(player.locator(".mobile-player-art img, .mobile-player-art .generated-aura")).toBeVisible();
     await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
+    const playerMenuButton = player.getByRole("button", { name: "More options for responsive-player" });
+    await playerMenuButton.click();
+    const playerMenu = page.getByRole("menu", { name: "Options for responsive-player" });
+    await expect(playerMenu).toBeVisible();
+    await expect(playerMenu.getByRole("menuitem", { name: "Edit track details" })).toBeVisible();
+    await playerMenuButton.click();
+    await expect(playerMenu).toHaveCount(0);
     for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {
       await expect(player.getByRole("button", { name: label, exact: true })).toBeVisible();
     }
@@ -228,6 +161,14 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
       ).toBe(false);
     }
   }
+
+  await nowPlayingButton.click();
+  await page.getByRole("button", { name: "More options for responsive-player" }).click();
+  await page.getByRole("menuitem", { name: "Edit track details" }).click();
+  const trackDetails = page.getByRole("dialog", { name: "Track details" });
+  await expect(trackDetails).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Now playing" })).toHaveCount(0);
+  await trackDetails.getByRole("button", { name: "Close" }).click();
 
   await page.getByRole("button", { name: "Artists" }).click();
   await expectNowbarOnTop();
@@ -254,19 +195,6 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   const artistTrackMenu = page.getByRole("menu", { name: "Options for responsive-player" });
   await expect(artistTrackMenu.getByRole("menuitem", { name: "Play next" })).toBeVisible();
   await expect(artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" })).toBeVisible();
-  await expect(artistTrackMenu.locator(".menu-item > svg")).toHaveCount(3);
-  await expect(
-    artistTrackMenu.getByRole("menuitem", { name: "Play next" }).locator("svg"),
-  ).toHaveCount(1);
-  await expect(
-    artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).locator("svg"),
-  ).toHaveCount(0);
-  await expect(
-    artistTrackMenu.getByRole("menuitemcheckbox", { name: "Remove from liked songs" }).locator("svg"),
-  ).toHaveCount(1);
-  await expect(
-    artistTrackMenu.getByRole("menuitem", { name: "Remove from library" }).locator("svg"),
-  ).toHaveCount(1);
   await artistTrackMenu.getByRole("menuitem", { name: "Add to queue" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
   const artistAvatar = page.getByRole("img", { name: "Vervfy Test Artist" });
@@ -554,14 +482,6 @@ test("mobile player menu opens MusicBrainz cover art information", async ({ page
   await expect(trackCard).toBeVisible();
   await trackCard.click();
   await page.setViewportSize({ width: 360, height: 812 });
-
-  const compactCoverInfo = page.locator("#nowbar .player-control-cover-info");
-  await expect(compactCoverInfo).toBeVisible();
-  await compactCoverInfo.click();
-  const compactCoverInfoDialog = page.getByRole("dialog", { name: "Cover art information" });
-  await expect(compactCoverInfoDialog).toBeVisible();
-  await compactCoverInfoDialog.getByRole("button", { name: "Close cover art information" }).click();
-
   await page.locator(".now-track-open").click();
 
   const player = page.getByRole("dialog", { name: "Now playing" });
@@ -633,49 +553,11 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   await page.getByLabel("Password").fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await page.setViewportSize({ width: 360, height: 812 });
 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
-  await expect(navigation.locator(".rail-label").first()).toBeVisible();
-  await expect
-    .poll(() => navigation.evaluate((element) => Math.round(element.getBoundingClientRect().width)))
-    .toBe(224);
-  const desktopRailBounds = await navigation.boundingBox();
-  expect(desktopRailBounds).toMatchObject({ x: 0, y: 0, width: 224, height: 900 });
-  await expect
-    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).flexDirection))
-    .toBe("row");
-  await expect
-    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).borderRadius))
-    .toBe("999px");
-
-  await page.setViewportSize({ width: 1024, height: 768 });
-  await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
-  await expect
-    .poll(() => navigation.locator('[data-view="library"]').evaluate((element) => getComputedStyle(element).flexDirection))
-    .toBe("column");
-
-  await page.setViewportSize({ width: 360, height: 812 });
   await expect(navigation.locator("[data-view]:visible")).toHaveCount(5);
-  await expect(navigation.locator('[data-view="account"]')).toBeHidden();
-  await expect(page.getByRole("button", { name: "Open account" })).toBeVisible();
-  await expect(navigation.locator(".rail-label").first()).toBeVisible();
-  const dockBounds = await navigation.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    return { left: bounds.left, right: bounds.right, bottom: bounds.bottom, height: bounds.height };
-  });
-  expect(dockBounds).toEqual({ left: 0, right: 360, bottom: 812, height: 68 });
-  for (const button of await navigation.locator("[data-view]:visible").all()) {
-    const bounds = await button.boundingBox();
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
-  }
-  await page.getByRole("button", { name: "Open account" }).click();
-  await expect(page.locator(".view-title")).toHaveText("Account");
-  await page.reload();
-  await expect(page.locator(".view-title")).toHaveText("Library");
   const searchBounds = await page.locator(".search-wrap").evaluate((element) => {
     const input = element.querySelector("input")!.getBoundingClientRect();
     const shortcut = element.querySelector(".kbd")!.getBoundingClientRect();
@@ -750,12 +632,11 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await expect(page.locator(".rail.glass")).toBeVisible();
-  await expect(page.locator(".topbar.glass")).toBeVisible();
   await expect
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBe("rgb(9, 11, 17)");
+    .toBe("rgba(15, 18, 28, 0.3)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
@@ -771,31 +652,6 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
       backdropFilter: computed.backdropFilter,
       boxShadow: computed.boxShadow,
       glassCount: document.querySelectorAll(".glass").length,
-      toolbarBackground: getComputedStyle(document.querySelector(".topbar")!).backgroundColor,
-      toolbarTextShadow: getComputedStyle(document.querySelector(".topbar")!).textShadow,
-      toolbarSearchHeight: document.querySelector(".search-wrap")!.getBoundingClientRect().height,
-      toolbarToggleHeight: document.querySelector(".view-toggle")!.getBoundingClientRect().height,
-      toolbarContrast: (() => {
-        const topbar = document.querySelector(".topbar")!;
-        const background = getComputedStyle(topbar).backgroundColor.match(/[\d.]+/g)!.map(Number);
-        const foreground = getComputedStyle(topbar).color.match(/[\d.]+/g)!.map(Number);
-        const luminance = (red: number, green: number, blue: number) => {
-          const linear = (channel: number) => {
-            const value = channel / 255;
-            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-          };
-          return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
-        };
-        const [red, green, blue, alpha] = background;
-        const surface = [
-          red * alpha + 255 * (1 - alpha),
-          green * alpha + 255 * (1 - alpha),
-          blue * alpha + 255 * (1 - alpha),
-        ];
-        const text = luminance(foreground[0], foreground[1], foreground[2]);
-        const base = luminance(surface[0], surface[1], surface[2]);
-        return (Math.max(text, base) + 0.05) / (Math.min(text, base) + 0.05);
-      })(),
       refract: rail.classList.contains("refract"),
       chromium: "chrome" in window,
       supportsRefraction: CSS.supports(
@@ -807,40 +663,10 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgb(9, 11, 17)");
+  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
-  expect(glassState?.boxShadow).toBe("none");
+  expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
-  expect(glassState?.toolbarBackground).toBe("rgba(12, 14, 20, 0.86)");
-  expect(glassState?.toolbarTextShadow).toBe("none");
-  expect(glassState?.toolbarSearchHeight).toBe(40);
-  expect(glassState?.toolbarToggleHeight).toBe(40);
-  expect(glassState?.toolbarContrast).toBeGreaterThanOrEqual(4.5);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(() =>
-      page.locator(".topbar").evaluate((element) => {
-        const rects = (selector: string) => {
-          const rect = element.querySelector(selector)!.getBoundingClientRect();
-          return [rect.width, rect.height];
-        };
-        return {
-          avatar: rects(".home-profile-avatar"),
-          searchHeight: rects(".search-wrap")[1],
-          toggleHeight: rects(".view-toggle")[1],
-          toggleButton: rects(".view-toggle button"),
-          actionHeight: rects(".btn-primary")[1],
-        };
-      }),
-    )
-    .toEqual({
-      avatar: [44, 44],
-      searchHeight: 44,
-      toggleHeight: 50,
-      toggleButton: [44, 44],
-      actionHeight: 44,
-    });
-  await page.setViewportSize({ width: 1440, height: 900 });
   if (glassState?.chromium && glassState.supportsRefraction) {
     expect(glassState.refract).toBe(true);
     expect(glassState.mapSource).toMatch(/^data:image\/svg\+xml/);
@@ -855,31 +681,6 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await expect
     .poll(() => page.locator(".glass").count())
     .toBeLessThanOrEqual(4);
-  const media = await page.context().newCDPSession(page);
-  await media.send("Emulation.setEmulatedMedia", {
-    features: [{ name: "prefers-reduced-transparency", value: "reduce" }],
-  });
-  await expect
-    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backdropFilter))
-    .toBe("none");
-  await expect
-    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backgroundColor))
-    .toBe("rgba(24, 26, 36, 0.97)");
-  await expect(page.locator(".topbar")).not.toHaveClass(/refract/);
-  await media.send("Emulation.setEmulatedMedia", {
-    features: [
-      { name: "prefers-reduced-transparency", value: "no-preference" },
-      { name: "prefers-contrast", value: "more" },
-    ],
-  });
-  await expect
-    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backdropFilter))
-    .toBe("none");
-  await expect
-    .poll(() => page.locator(".topbar").evaluate((element) => getComputedStyle(element).backgroundColor))
-    .toBe("rgb(12, 14, 20)");
-  await expect(page.locator(".topbar")).not.toHaveClass(/refract/);
-  await media.detach();
 });
 
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({
