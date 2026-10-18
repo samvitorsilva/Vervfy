@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import httpx
 
-from library import Library
+from library import Library, make_placeholder_cover
 
 
 def silent_wav() -> bytes:
@@ -23,6 +23,15 @@ def silent_wav() -> bytes:
 
 
 class UploadMetadataTests(unittest.TestCase):
+    def test_placeholder_cover_uses_deterministic_glass_artwork(self) -> None:
+        first = make_placeholder_cover("Glass song")
+        second = make_placeholder_cover("Glass song")
+
+        self.assertEqual(first.size, (512, 512))
+        self.assertEqual(first.mode, "RGB")
+        self.assertEqual(first.tobytes(), second.tobytes())
+        self.assertNotEqual(first.getpixel((20, 20)), first.getpixel((256, 256)))
+
     def test_unarted_upload_uses_filename_tags_and_placeholder_without_network(self) -> None:
         with (
             patch.object(httpx, "Client") as http_client,
