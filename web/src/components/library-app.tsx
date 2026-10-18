@@ -657,6 +657,7 @@ export default function LibraryApp() {
   const [muted, setMuted] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [contentScrolled, setContentScrolled] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
@@ -665,6 +666,7 @@ export default function LibraryApp() {
   const expandedPlayerCloseRef = useRef<HTMLButtonElement>(null);
   const expandedPlayerReturnFocusRef = useRef<HTMLElement | null>(null);
   const queuePanelRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
 
   const baselineRef = useRef<LibraryMeta>({ favorites: [], playlists: [] });
   const etagRef = useRef<string | null>(null);
@@ -2825,7 +2827,11 @@ export default function LibraryApp() {
             )}
           </div>
 
-          <div className="content">
+          <main
+            ref={contentRef}
+            className={`content${contentScrolled ? " is-scrolled" : ""}`}
+            onScroll={(event) => setContentScrolled(event.currentTarget.scrollTop > 4)}
+          >
             {loading ? (
               <div className="library-skeleton" aria-label={t("Loading library")} aria-busy="true">
                 {[0, 1, 2].map((item) => <div className="skeleton-row" key={item}><span className="skeleton-art" /><span className="skeleton-copy"><i /><i /></span><span className="skeleton-time" /></div>)}
@@ -2946,7 +2952,7 @@ export default function LibraryApp() {
                 )}
               </>
             )}
-          </div>
+          </main>
         </div>
       </div>
 
