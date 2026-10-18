@@ -5,20 +5,7 @@
   const BEZEL_WIDTH = 22;       // rim thickness in the displacement map
   const CORNER_RADIUS = 32;     // fallback when element radius can't be read
   const DISPLACEMENT_SCALE = 70;
-  const BLUR = 3;               // Chromium refraction blur
-  const FROST_BLUR = 18;        // Safari / Firefox frost
-  const SATURATION_FROST = 1.8;
-  const SATURATION_REFRACT = 1.7;
-  const TINT_ALPHA = 0.1;       // frost fill
-  const TINT_ALPHA_REFRACT = 0.04;
   const MAX_ACTIVE_SURFACES = 4;
-
-  document.documentElement.style.setProperty("--glass-blur", `${BLUR}px`);
-  document.documentElement.style.setProperty("--glass-frost-blur", `${FROST_BLUR}px`);
-  document.documentElement.style.setProperty("--glass-saturation", String(SATURATION_FROST));
-  document.documentElement.style.setProperty("--glass-saturation-refract", String(SATURATION_REFRACT));
-  document.documentElement.style.setProperty("--glass-tint-alpha", String(TINT_ALPHA));
-  document.documentElement.style.setProperty("--glass-tint-alpha-refract", String(TINT_ALPHA_REFRACT));
 
   const backdrop = document.getElementById("artworkBackdrop");
   const backdropImage = document.getElementById("artworkBackdropImage");
