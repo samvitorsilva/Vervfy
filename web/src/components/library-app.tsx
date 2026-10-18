@@ -2782,6 +2782,7 @@ export default function LibraryApp() {
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
           </div>
+          <span className="rail-section-label" aria-hidden="true">Library</span>
           <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /><span className="rail-label">{t("Library")}</span></button>
           <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /><span className="rail-label">{t("Offline")}</span></button>
           <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /><span className="rail-label">{t("Playlists")}</span></button>
