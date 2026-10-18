@@ -96,6 +96,7 @@ input{ background:none; border:none; }
   padding:18px 0; gap:4px;
   position:relative; z-index:50;
   background:#12151e;
+  border-top-left-radius:var(--radius-l);
   border-right:1px solid var(--border);
   box-shadow:inset -1px 0 0 rgba(255,255,255,0.04);
 }
@@ -149,7 +150,10 @@ input{ background:none; border:none; }
 }
 
 /* main */
-.main{ flex:1; min-width:0; display:flex; flex-direction:column; min-height:0; }
+.main{
+  flex:1; min-width:0; display:flex; flex-direction:column; min-height:0;
+  border-top-right-radius:var(--radius-l); overflow:hidden;
+}
 
 .topbar{
   height:68px; flex:0 0 auto; display:flex; align-items:center; gap:12px; padding:0 24px;
@@ -1564,7 +1568,7 @@ span.artist-photo{
   .rail-btn[data-tip]:hover::after{ display:block; }
   .rail-btn[data-view="playlists"][data-tip]::after{ content:"Lists"; }
   .rail-btn[data-view="favorites"][data-tip]::after{ content:"Liked"; }
-  .main{ width:100%; height:100vh; height:100dvh; }
+  .main{ width:100%; height:100vh; height:100dvh; border-radius:0; overflow:visible; }
   .topbar{ padding:12px; gap:8px; height:auto; flex-wrap:wrap; }
   .topbar-id{ flex:1 1 auto; min-width:0; }
   .view-title{ font-size:20px; }
@@ -1666,11 +1670,12 @@ span.artist-photo{
   .time{ width:32px; font-size:10px; }
   .now-extra{ flex:0 0 auto; gap:0; width:auto; }
   .now-artist{ display:none; }
-  /* Keep lyrics, queue, and mute reachable; hide viz to save width.
+  /* Keep lyrics, queue, offline download, and mute reachable; hide viz to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
-  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-mute){ display:none; }
+  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-offline):not(.player-control-mute){ display:none; }
+  .now-extra .player-control-offline{ display:flex; width:28px; height:28px; }
   .now-extra .player-control-mute{ display:flex; width:28px; height:28px; }
   .player-control-mute svg{ width:17px; height:17px; }
   .toasts{ bottom:calc(var(--mobile-rail-clear) + 8px); }
@@ -1762,8 +1767,8 @@ span.artist-photo{
   body:has(#nowbar:not(.hidden)) .side-panel{ padding-bottom:var(--mobile-player-clear); }
 }
 @media (max-width:480px){
-  /* Keep lyrics, cover info, and mute available on narrow phones; hide queue to save width. */
-  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-mute){ display:none; }
+  /* Keep lyrics, offline download, cover info, and mute available on narrow phones; hide queue to save width. */
+  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-offline):not(.player-control-mute){ display:none; }
   .now-track{ width:min(44%, 150px); }
   .view-count{ display:none; }
   .artist-info, .artist-hero{ padding-inline:16px; }

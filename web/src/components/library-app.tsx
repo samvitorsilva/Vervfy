@@ -1672,10 +1672,6 @@ export default function LibraryApp() {
         nextIndex = choices[Math.floor(Math.random() * choices.length)];
         shufflePlayedRef.current.add(nextIndex);
       } else if (nextIndex >= state.queue.length) {
-        if (automatic && state.repeat === "off") {
-          audio.pause();
-          return;
-        }
         nextIndex = 0;
       }
       playQueueIndex(nextIndex);
@@ -3097,6 +3093,20 @@ export default function LibraryApp() {
           <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title={t("Lyrics (L)")} aria-label={t("Lyrics")} aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
           <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title={t("Visualizer (V)")} aria-label={t("Visualizer")} aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
           <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title={t("Queue")} aria-label={t("Queue")} aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
+          <button
+            className={`icon-btn player-control-offline${currentTrack?.offlineUrl ? " on" : ""}`}
+            type="button"
+            title={t(currentTrack?.offlineUrl ? "Remove offline download" : "Download for offline listening")}
+            aria-label={t(currentTrack?.offlineUrl ? "Remove offline download" : "Download for offline listening")}
+            aria-pressed={Boolean(currentTrack?.offlineUrl)}
+            aria-busy={offlinePendingId === currentTrack?.id}
+            disabled={!currentTrack || offlinePendingId !== null}
+            onClick={() => {
+              if (currentTrack) void toggleOfflineDownload(currentTrack);
+            }}
+          >
+            <Icon name="offline" />
+          </button>
           <button className={`icon-btn player-control-mute${muted ? " on" : ""}`} type="button" title={muted ? "Unmute" : "Mute"} aria-label={muted ? "Unmute" : "Mute"} aria-pressed={muted} onClick={() => {
           const audio = usePlayerStore.getState().audioElement;
           if (!audio) return;

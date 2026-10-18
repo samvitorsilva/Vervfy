@@ -34,6 +34,12 @@
   outline:none; transition:border-color var(--dur-fast) var(--ease);
 }
 .auth-field input:focus{ border-color:var(--violet); }
+.auth-field input[aria-invalid="true"]{ border-color:var(--danger); }
+.auth-password-hint{
+  margin-top:6px; color:var(--text-dim); font-size:0.78rem; line-height:1.4;
+}
+.auth-password-hint.error{ color:var(--danger); }
+.auth-password-hint.ok{ color:var(--cyan); }
 .auth-error{
   background:rgba(255,107,122,0.12); border:1px solid rgba(255,107,122,0.35);
   color:var(--danger); padding:10px 14px; border-radius:var(--radius-s);

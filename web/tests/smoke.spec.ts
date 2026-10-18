@@ -73,6 +73,33 @@ test("login displays JSON authentication errors", async ({ page }) => {
   await expect(page.locator(".auth-error[role='alert']")).toHaveText(
     "Incorrect username or password",
   );
+  await expect(page.getByLabel("Password")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Password")).toBeFocused();
+});
+
+test("registration gives live password length and byte-limit guidance", async ({ page }) => {
+  await page.goto("/register");
+  const password = page.getByLabel("Password");
+  const hint = page.locator("#password-hint");
+
+  await expect(hint).toHaveText("Use at least 8 characters.");
+  await password.fill("short");
+  await expect(hint).toHaveText("Add 3 more characters to meet the 8-character minimum.");
+  await expect(password).toHaveAttribute("aria-invalid", "true");
+
+  await password.fill("long-enough");
+  await expect(hint).toHaveText("Password meets the 8-character minimum.");
+  await expect(password).toHaveAttribute("aria-invalid", "false");
+
+  await password.fill("é".repeat(36));
+  await expect(hint).toHaveText("Password meets the 8-character minimum.");
+  await expect(password).toHaveAttribute("aria-invalid", "false");
+
+  await password.fill(`${"é".repeat(36)}a`);
+  await expect(hint).toHaveText(
+    "Password must be 72 UTF-8 bytes or fewer. Remove some characters.",
+  );
+  await expect(password).toHaveAttribute("aria-invalid", "true");
 });
 
 test("tablet and mobile can open the full now-playing screen", async ({ page }) => {
@@ -767,7 +794,12 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect(page.getByRole("heading", { name: "Vervfy Test Artist" })).toBeVisible();
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(trackCard).toBeVisible();
-  await trackCard.click();
+  await page.locator(".card").filter({ hasText: "pw-batch-60" }).click();
+  await expect(page.locator(".now-title")).toHaveText("pw-batch-60");
+  await page.locator("audio").evaluate((element) => {
+    element.dispatchEvent(new Event("ended"));
+  });
+  await expect(page.locator(".now-title")).toHaveText("pw-batch-01");
   await page.locator('.nowbar button[title="Queue"]').click();
   await expect(page.getByRole("complementary", { name: "Up next" })).toHaveClass(/open/);
   await expect

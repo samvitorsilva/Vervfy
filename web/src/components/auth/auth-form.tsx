@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 
@@ -16,7 +16,27 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
   const [error, setError] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordIncorrect, setPasswordIncorrect] = useState(false);
   const [pending, setPending] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const passwordLength = Array.from(password).length;
+  const passwordBytes = new TextEncoder().encode(password).length;
+  const passwordHint = isLogin
+    ? t("Your password is checked when you log in. If it doesn't match, check it and try again.")
+    : passwordBytes > 72
+      ? t("Password must be 72 UTF-8 bytes or fewer. Remove some characters.")
+      : passwordLength < 8
+        ? passwordLength > 0
+          ? t(passwordLength === 7
+            ? "Add 1 more character to meet the 8-character minimum."
+            : "Add {count} more characters to meet the 8-character minimum.")
+              .replace("{count}", String(8 - passwordLength))
+          : t("Use at least 8 characters.")
+        : t("Password meets the 8-character minimum.");
+  const passwordInvalid = isLogin
+    ? passwordIncorrect
+    : passwordLength > 0 && (passwordLength < 8 || passwordBytes > 72);
 
   useEffect(() => {
     let active = true;
@@ -43,6 +63,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
 
     setPending(true);
     setError(null);
+    setPasswordIncorrect(false);
     const body = new URLSearchParams({
       username: username.trim(),
       password: String(new FormData(event.currentTarget).get("password") ?? ""),
@@ -68,11 +89,13 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       const result = (await response.json().catch(() => null)) as {
         detail?: unknown;
       } | null;
-      setError(
-        typeof result?.detail === "string"
-          ? result.detail
-          : `Could not ${isLogin ? "log in" : "create the account"} (${response.status}).`,
-      );
+      const detail = typeof result?.detail === "string"
+        ? result.detail
+        : `Could not ${isLogin ? "log in" : "create the account"} (${response.status}).`;
+      const incorrectPassword = isLogin && detail === "Incorrect username or password";
+      setPasswordIncorrect(incorrectPassword);
+      setError(t(detail));
+      if (incorrectPassword) passwordInputRef.current?.focus();
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -103,7 +126,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
         </p>
 
         {(error || csrfError) && (
-          <div className="auth-error" role="alert">
+          <div id="auth-error" className="auth-error" role="alert">
             {error || csrfError}
           </div>
         )}
@@ -124,7 +147,11 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               required
               autoFocus
               value={username}
-              onChange={(event) => setUsername(event.currentTarget.value)}
+              onChange={(event) => {
+                setUsername(event.currentTarget.value);
+                setError(null);
+                setPasswordIncorrect(false);
+              }}
             />
           </div>
           {!isLogin && (
@@ -149,7 +176,23 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               autoComplete={isLogin ? "current-password" : "new-password"}
               minLength={isLogin ? undefined : 8}
               required
+              ref={passwordInputRef}
+              value={password}
+              aria-invalid={passwordInvalid}
+              aria-describedby={passwordIncorrect ? "auth-error password-hint" : "password-hint"}
+              onChange={(event) => {
+                setPassword(event.currentTarget.value);
+                setError(null);
+                setPasswordIncorrect(false);
+              }}
             />
+            <p
+              id="password-hint"
+              className={`auth-password-hint${passwordInvalid ? " error" : !isLogin && passwordLength >= 8 && passwordBytes <= 72 ? " ok" : ""}`}
+              aria-live="polite"
+            >
+              {passwordHint}
+            </p>
           </div>
           <button
             className="auth-submit"
