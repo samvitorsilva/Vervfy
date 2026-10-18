@@ -13,6 +13,7 @@ import {
   applyAppearance,
   GLASS_MATERIAL_KEY,
   type GlassMaterial,
+  WALLPAPER_KEY,
 } from "@/components/liquid-glass";
 
 function dateLabel(timestamp: number, language: string): string {
@@ -69,6 +70,7 @@ export default function AccountSettings({
   const [pending, setPending] = useState(false);
   const [glassMaterial, setGlassMaterial] = useState<GlassMaterial>("default");
   const [accentColor, setAccentColor] = useState("#8b7fff");
+  const [wallpaper, setWallpaper] = useState<"sunset" | "night">("sunset");
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoImageRef = useRef<HTMLImageElement>(null);
   const photoStageRef = useRef<HTMLDivElement>(null);
@@ -96,18 +98,25 @@ export default function AccountSettings({
       : "default";
     setGlassMaterial(nextMaterial);
     if (savedAccent) setAccentColor(savedAccent);
+    if (localStorage.getItem(WALLPAPER_KEY) === "night") setWallpaper("night");
   }, []);
 
   function updateGlassMaterial(material: GlassMaterial) {
     setGlassMaterial(material);
     localStorage.setItem(GLASS_MATERIAL_KEY, material);
-    applyAppearance(material, accentColor);
+    applyAppearance(material, accentColor, wallpaper);
   }
 
   function updateAccentColor(color: string) {
     setAccentColor(color);
     localStorage.setItem(ACCENT_COLOR_KEY, color);
-    applyAppearance(glassMaterial, color);
+    applyAppearance(glassMaterial, color, wallpaper);
+  }
+
+  function updateWallpaper(nextWallpaper: "sunset" | "night") {
+    setWallpaper(nextWallpaper);
+    localStorage.setItem(WALLPAPER_KEY, nextWallpaper);
+    applyAppearance(glassMaterial, accentColor, nextWallpaper);
   }
 
   useEffect(() => {
@@ -412,6 +421,13 @@ export default function AccountSettings({
           <span>Accent color</span>
           <input type="color" value={accentColor} onChange={(event) => updateAccentColor(event.target.value)} aria-label="Accent color" />
         </label>
+        <div className="wallpaper-picker" role="group" aria-label="Backdrop">
+          {(["sunset", "night"] as const).map((variant) => (
+            <button className={`wallpaper-swatch ${variant}${wallpaper === variant ? " active" : ""}`} type="button" key={variant} aria-pressed={wallpaper === variant} onClick={() => updateWallpaper(variant)}>
+              <span aria-hidden="true" />{variant === "sunset" ? "Sunset" : "Night"}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="acct-settings">

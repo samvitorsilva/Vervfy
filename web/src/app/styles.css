@@ -2204,6 +2204,8 @@ button{ transition:transform var(--dur-fast) var(--ease),opacity var(--dur-fast)
 button:focus-visible,input:focus-visible,[tabindex]:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
 
 .field{ background:linear-gradient(135deg,#0a1230 0%,#172751 37%,#b75139 73%,#f0a23d 100%); }
+:root[data-wallpaper="night"] .field{ background:linear-gradient(135deg,#05091a 0%,#102454 48%,#35275f 100%); }
+:root[data-wallpaper="night"] .field::before{ background:radial-gradient(ellipse at 80% 75%,rgba(255,167,75,.22),transparent 22%),radial-gradient(ellipse at 18% 14%,rgba(76,126,255,.36),transparent 38%),radial-gradient(ellipse at 60% 42%,rgba(126,80,217,.23),transparent 35%); }
 .field::before,.field::after{ content:""; position:absolute; inset:0; pointer-events:none; }
 .field::before{ opacity:.52; background:radial-gradient(ellipse at 76% 84%,rgba(255,208,97,.42),transparent 28%),radial-gradient(ellipse at 12% 12%,rgba(101,147,255,.32),transparent 37%),linear-gradient(180deg,transparent 55%,rgba(3,7,19,.38)); }
 .field::after{ opacity:.13; background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); mix-blend-mode:soft-light; }
@@ -2270,6 +2272,11 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{ outline:2px s
 .appearance-choice.active{ color:var(--text); background:rgba(255,255,255,.15); box-shadow:inset 0 1px rgba(255,255,255,.16); }
 .accent-picker{ display:flex; align-items:center; gap:10px; margin-top:12px; color:var(--text-mid); font-size:12px; }
 .accent-picker input{ width:28px; height:22px; padding:1px; border:1px solid var(--border-hi); border-radius:6px; background:transparent; }
+.wallpaper-picker{ display:flex; gap:8px; margin-top:14px; }
+.wallpaper-swatch{ display:inline-flex; align-items:center; gap:7px; padding:4px 7px 4px 4px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--text-mid); font-size:12px; }
+.wallpaper-swatch span{ width:28px; height:20px; border-radius:5px; background:linear-gradient(135deg,#0a1230,#b75139 68%,#f0a23d); }
+.wallpaper-swatch.night span{ background:linear-gradient(135deg,#05091a,#102454 55%,#593b84); }
+.wallpaper-swatch.active{ border-color:var(--glass-edge); color:var(--text); background:rgba(255,255,255,.09); }
 
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
   .glass,.glass.refract,.rail.glass,.topbar.glass,.nowbar.glass,.track-context-menu.glass,.queue-picker-card.glass,.photo-editor-card.glass{ background:#171d2e; }

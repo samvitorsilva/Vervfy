@@ -6,15 +6,18 @@ export type GlassMaterial = "clear" | "default" | "tinted";
 
 export const GLASS_MATERIAL_KEY = "vervfy.glass-material";
 export const ACCENT_COLOR_KEY = "vervfy.accent-color";
+export const WALLPAPER_KEY = "vervfy.wallpaper";
 
 export function applyAppearance(
   material: GlassMaterial = "default",
   accentColor?: string,
+  wallpaper?: "sunset" | "night",
 ) {
   const root = document.documentElement;
   root.dataset.glass = material;
   if (accentColor) root.style.setProperty("--accent", accentColor);
   else root.style.removeProperty("--accent");
+  root.dataset.wallpaper = wallpaper === "night" ? "night" : "sunset";
 }
 
 export default function LiquidGlass() {
@@ -23,7 +26,11 @@ export default function LiquidGlass() {
     const material: GlassMaterial = storedMaterial === "clear" || storedMaterial === "tinted"
       ? storedMaterial
       : "default";
-    applyAppearance(material, localStorage.getItem(ACCENT_COLOR_KEY) ?? undefined);
+    applyAppearance(
+      material,
+      localStorage.getItem(ACCENT_COLOR_KEY) ?? undefined,
+      localStorage.getItem(WALLPAPER_KEY) === "night" ? "night" : "sunset",
+    );
 
     const existing = document.querySelector<HTMLScriptElement>(
       'script[data-vervfy-liquid-glass="true"]',
