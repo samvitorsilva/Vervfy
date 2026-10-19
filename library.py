@@ -618,6 +618,62 @@ class Library:
                 )
             ).one_or_none()
 
+    def ensure_audio_storage(self, track_id: str) -> str | None:
+        """Move one legacy audio blob to Storage and return its stable object path."""
+        with tenant_session(self.user_id) as session:
+            row = session.execute(
+                select(TrackRecord.filename, TrackRecord.storage_path).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            filename, storage_path = row
+            if storage_path:
+                return storage_path
+            audio_data = session.scalar(
+                select(TrackRecord.audio_data).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            )
+            if audio_data is None:
+                raise AudioUnavailableError(
+                    f"Track {track_id} has no audio in Storage or the database."
+                )
+            data = bytes(audio_data)
+
+        if not data:
+            raise AudioUnavailableError(
+                f"Track {track_id} has no audio in Storage or the database."
+            )
+
+        storage_path = f"{self.user_id}/{track_id}.mp3"
+        size = len(data)
+        audio_store.upload(storage_path, data, audio_store.guess_content_type(filename))
+        del data, audio_data, row
+
+        with tenant_session(self.user_id) as session:
+            result = session.execute(
+                update(TrackRecord)
+                .where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                    TrackRecord.storage_path.is_(None),
+                )
+                .values(storage_path=storage_path, size_bytes=size)
+            )
+            session.commit()
+            if result.rowcount == 1:
+                return storage_path
+            return session.scalar(
+                select(TrackRecord.storage_path).where(
+                    TrackRecord.id == track_id,
+                    TrackRecord.user_id == self.user_id,
+                )
+            )
+
     def storage_paths(self) -> list[str]:
         """Every Storage object this user owns (used when deleting an account)."""
         with tenant_session(self.user_id) as s:

@@ -229,7 +229,12 @@ class TrackCoverApiTests(unittest.TestCase):
             response.headers["location"],
             "https://project.supabase.co/storage/v1/object/sign/song.jpg",
         )
-        create_signed_url.assert_called_once_with("covers/user-a/owned-track.jpg")
+        create_signed_url.assert_called_once_with(
+            "covers/user-a/owned-track.jpg", expires_in=7 * 24 * 60 * 60
+        )
+        self.assertEqual(
+            response.headers["cache-control"], "private, max-age=86400"
+        )
 
     def test_cover_lookup_returns_saved_remote_url(self) -> None:
         self.library.get("owned-track").cover_source = "musicbrainz"

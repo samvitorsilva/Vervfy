@@ -23,7 +23,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
@@ -198,6 +198,21 @@ async def add_security_headers(request: Request, call_next):
         "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
     )
     response.headers.setdefault("Content-Security-Policy-Report-Only", CSP_REPORT_ONLY)
+    if (
+        request.method == "GET"
+        and request.url.path.startswith("/api/")
+        and response.status_code < 400
+        and "cache-control" not in response.headers
+    ):
+        path = request.url.path
+        is_image = (
+            path == "/api/account/photo"
+            or path == "/api/artists/photo"
+            or (path.startswith("/api/tracks/") and path.endswith("/cover"))
+        )
+        response.headers["Cache-Control"] = (
+            "private, max-age=86400" if is_image else "private, max-age=60"
+        )
     if https_only:
         response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
     return response
@@ -239,8 +254,8 @@ CSP_REPORT_ONLY = (
         "font-src 'self' https://fonts.gstatic.com data:; "
         "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com "
         "https://coverartarchive.org https://*.archive.org https://archive.org https://*.supabase.co; "
-        "media-src 'self' blob:; "
-        "connect-src 'self' https://lrclib.net; "
+        "media-src 'self' blob: https://*.supabase.co; "
+        "connect-src 'self' https://lrclib.net https://*.supabase.co; "
         "frame-ancestors 'none'"
 )
 
@@ -1186,7 +1201,7 @@ def account_photo(user=Depends(require_api_user)) -> Response:
     return Response(
         content=photo_data,
         media_type=photo_mime,
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "private, max-age=86400"},
     )
 
 
@@ -1359,44 +1374,6 @@ def _library_state_etag(state: dict) -> str:
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return f'"{digest}"'
-
-
-class RangeNotSatisfiable(ValueError):
-    """A syntactically valid byte range that has no bytes in the resource."""
-
-
-def _parse_range_header(range_header: str, size: int) -> tuple[int, int] | None:
-    """Return one requested byte range, or None when the header is malformed."""
-    if not range_header or not range_header.startswith("bytes="):
-        return None
-    spec = range_header[6:].strip()
-    if not spec or "," in spec:
-        return None
-    match = re.fullmatch(r"(\d*)-(\d*)", spec)
-    if match is None:
-        return None
-    start_str, end_str = match.groups()
-    if not start_str and not end_str:
-        return None
-    if not start_str:
-        suffix = int(end_str)
-        if suffix <= 0 or size <= 0:
-            raise RangeNotSatisfiable
-        return max(0, size - suffix), size - 1
-    start = int(start_str)
-    if start >= size:
-        raise RangeNotSatisfiable
-    end = int(end_str) if end_str else size - 1
-    end = min(end, size - 1)
-    if end < start:
-        raise RangeNotSatisfiable
-    return start, end
-
-
-def _content_disposition_filename(filename: str) -> str:
-    """Keep uploaded names safe when placed in a response header."""
-    ascii_name = os.path.basename(filename).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r'[\r\n"\\]', "_", ascii_name) or "audio"
 
 
 def verify_current_password(user: User, password: str) -> None:
@@ -1730,7 +1707,9 @@ def artist_photo(
     storage_path = photo.get("storage_path")
     if isinstance(storage_path, str) and storage_path:
         try:
-            signed_url = audio_store.create_signed_url(storage_path)
+            signed_url = audio_store.create_signed_url(
+                storage_path, expires_in=7 * 24 * 60 * 60
+            )
         except audio_store.StorageError as exc:
             log.error("Could not create artist image URL: %s", exc)
             raise HTTPException(
@@ -1740,7 +1719,7 @@ def artist_photo(
         return RedirectResponse(
             signed_url,
             status_code=307,
-            headers={"Cache-Control": "private, no-store"},
+            headers={"Cache-Control": "private, max-age=86400"},
         )
     data = photo.get("jpeg_data")
     if not isinstance(data, bytes):
@@ -1749,7 +1728,7 @@ def artist_photo(
         content=data,
         media_type="image/jpeg",
         headers={
-            "Cache-Control": "private, no-store",
+            "Cache-Control": "private, max-age=86400",
             "Content-Length": str(len(data)),
             "X-Artist-Photo-Source": str(photo["source"]),
         },
@@ -2117,7 +2096,9 @@ def track_cover(
     storage_path = library.cover_storage_path(track_id)
     if storage_path:
         try:
-            signed_url = audio_store.create_signed_url(storage_path)
+            signed_url = audio_store.create_signed_url(
+                storage_path, expires_in=7 * 24 * 60 * 60
+            )
         except audio_store.StorageError as exc:
             log.exception("track cover storage URL creation failed")
             raise HTTPException(
@@ -2126,14 +2107,14 @@ def track_cover(
         return RedirectResponse(
             signed_url,
             status_code=307,
-            headers={"Cache-Control": "private, no-store"},
+            headers={"Cache-Control": "private, max-age=86400"},
         )
     payload = library.cover_jpeg(track_id, size)
     return Response(
         content=payload,
         media_type="image/jpeg",
         headers={
-            "Cache-Control": "private, no-store",
+            "Cache-Control": "private, max-age=86400",
             "Content-Length": str(len(payload)),
         },
     )
@@ -2276,120 +2257,25 @@ def update_track_metadata(
 
 
 @app.get("/api/tracks/{track_id}/stream")
-def track_stream(request: Request, track_id: str, user=Depends(require_api_user)) -> Response:
-    library = get_library(user["id"])
-    info = library.audio_info(track_id)
-    if info is None or not info.size_bytes:
-        raise HTTPException(status_code=404, detail="Track not found")
-    filename, size, storage_path = info.filename, info.size_bytes, info.storage_path
-
-    media_type = "audio/webm" if filename.lower().endswith(".weba") else mimetypes.guess_type(filename)[0] or "audio/mpeg"
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Disposition": (
-            f'inline; filename="{_content_disposition_filename(filename)}"; '
-            f"filename*=UTF-8''{quote(os.path.basename(filename), safe='')}"
-        ),
-        "Cache-Control": "private, max-age=3600",
-    }
-    range_header = request.headers.get("range")
-    if range_header:
-        try:
-            range_match = _parse_range_header(range_header, size)
-        except RangeNotSatisfiable:
-            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
-        if range_match is None:
-            start, end, status_code = 0, size - 1, 200
-        else:
-            start, end = range_match
-            status_code = 206
-            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-    else:
-        start, end, status_code = 0, size - 1, 200
-    headers["Content-Length"] = str(end - start + 1)
-
-    if storage_path:
-        # Relay only the requested byte range from Supabase Storage.
-        try:
-            _, upstream = audio_store.open_range(storage_path, start, end)
-        except audio_store.StorageError:
-            log.exception("audio storage read failed for %s", track_id)
-            raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
-
-        def body():
-            try:
-                remaining = end - start + 1
-                skip = start if upstream.status_code == 200 else 0
-                for chunk in upstream.iter_bytes(64 * 1024):
-                    if skip:
-                        skipped = min(skip, len(chunk))
-                        chunk = chunk[skipped:]
-                        skip -= skipped
-                    if not chunk:
-                        continue
-                    chunk = chunk[:remaining]
-                    if chunk:
-                        yield chunk
-                        remaining -= len(chunk)
-                    if remaining == 0:
-                        break
-            finally:
-                upstream.close()
-
-        return StreamingResponse(body(), status_code=status_code, media_type=media_type, headers=headers)
-
-    # Legacy track whose audio is still in Postgres: fetch just the slice.
-    try:
-        payload = library.read_range(track_id, start, end) or b""
-    except AudioUnavailableError:
-        log.error("track %s has no audio in Storage or the database", track_id)
-        raise HTTPException(status_code=502, detail="Track audio is unavailable") from None
-    headers["Content-Length"] = str(len(payload))
-    return Response(content=payload, status_code=status_code, media_type=media_type, headers=headers)
-
-
-@app.get("/api/tracks/{track_id}/tag-head")
-def track_tag_head(track_id: str, user=Depends(require_api_user)) -> Response:
-    """Return the start of the audio file so the client can parse embedded ID3.
-
-    Lyrics (SYLT/USLT) and the MPEG frame header used for frame-count timestamps
-    both live near the start of the file. Serving just that prefix lets the UI
-    reuse its existing ID3 parser without downloading the whole track.
-    """
+def track_stream(track_id: str, user=Depends(require_api_user)) -> Response:
     library = get_library(user["id"])
     info = library.audio_info(track_id)
     if info is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    initial_bytes = min(info.size_bytes, 256 * 1024) if info.storage_path else 256 * 1024
     try:
-        data = library.read_range(track_id, 0, initial_bytes - 1, info=info) if initial_bytes else b""
-        if data and len(data) >= 10 and data[:3] == b"ID3":
-            tag_size = sum(
-                (data[index] & 0x7F) << shift
-                for index, shift in zip(range(6, 10), (21, 14, 7, 0))
-            )
-            tag_bytes = 10 + tag_size
-            if tag_bytes > 32 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="Embedded metadata tag is too large")
-            if tag_bytes > len(data):
-                end = min(tag_bytes, info.size_bytes) - 1 if info.storage_path else tag_bytes - 1
-                remainder = library.read_range(track_id, len(data), end, info=info)
-                data += remainder or b""
-            else:
-                data = data[:tag_bytes]
-        elif data:
-            data = data[:10]
-    except audio_store.StorageError:
-        log.exception("audio storage read failed for %s", track_id)
-        raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
+        storage_path = info.storage_path or library.ensure_audio_storage(track_id)
+        if not storage_path:
+            raise HTTPException(status_code=404, detail="Track not found")
+        signed_url = audio_store.create_signed_url(storage_path)
     except AudioUnavailableError:
-        log.error("track %s has no audio in Storage or the database", track_id)
-        raise HTTPException(status_code=502, detail="Track audio is unavailable") from None
-    return Response(
-        content=data or b"",
-        media_type="application/octet-stream",
-        headers={
-            "Cache-Control": "private, max-age=3600",
-            "Content-Length": str(len(data or b"")),
-        },
+        raise HTTPException(status_code=404, detail="Track audio not found") from None
+    except audio_store.StorageError as exc:
+        log.exception("audio storage migration or URL creation failed for %s", track_id)
+        raise HTTPException(
+            status_code=502, detail="Audio storage is unavailable"
+        ) from exc
+    return RedirectResponse(
+        signed_url,
+        status_code=302,
+        headers={"Cache-Control": "private, no-store"},
     )

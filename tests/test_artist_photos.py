@@ -105,7 +105,7 @@ class ArtistPhotoApiTests(unittest.TestCase):
             server.audio_store,
             "create_signed_url",
             return_value="https://project.supabase.co/storage/v1/object/sign/songs/photo.jpg?token=x",
-        ):
+        ) as create_signed_url:
             response = self.client.get(
                 "/api/artists/photo",
                 params={"name": "Vervfy Test Artist"},
@@ -115,6 +115,11 @@ class ArtistPhotoApiTests(unittest.TestCase):
         self.assertEqual(
             response.headers["location"],
             "https://project.supabase.co/storage/v1/object/sign/songs/photo.jpg?token=x",
+        )
+        self.assertEqual(response.headers["cache-control"], "private, max-age=86400")
+        create_signed_url.assert_called_once_with(
+            "artist-photos/artist-user-a/vervfytestartist.jpg",
+            expires_in=7 * 24 * 60 * 60,
         )
 
     def test_upload_rejects_invalid_format_oversize_and_excessive_pixels(self) -> None:
