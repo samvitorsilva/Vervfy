@@ -85,16 +85,41 @@ Render web service and proxies browser API requests to that backend.
 ## Persistent data and deployment
 
 PostgreSQL stores accounts, bcrypt password hashes, profile photos, artist
-photos, track metadata, cover art, custom lyrics, favorites, and playlists. Legacy audio may
-remain in `tracks.audio_data`; new uploads use the private Supabase Storage
-bucket configured by `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, and
-`SUPABASE_BUCKET`. Production startup fails if Storage credentials are absent.
+photos, track metadata, cover art, custom lyrics, favorites, and playlists.
+New uploads use the private Supabase Storage bucket; audio is redirected to a
+one-hour signed URL, so the FastAPI service never relays the audio bytes.
+Tracks still in `tracks.audio_data` are copied lazily on first play or can be
+migrated in advance with `scripts/migrate_audio_to_storage.py`. Production
+startup fails if Storage credentials are absent.
 Use a dedicated PostgreSQL `app_runtime` role without `BYPASSRLS` for the
 application's `DATABASE_URL`. Apply every Alembic migration manually with the
 database owner connection (for example, `MIGRATION_DATABASE_URL`), before
 deploying the application; Render runs the app as the limited `app_runtime`
 role and must not apply migrations. A migration is not part of application
 startup.
+
+On Render, set `SUPABASE_URL` to the project URL,
+`SUPABASE_SERVICE_KEY` to the server-side service-role key, and
+`SUPABASE_BUCKET` to the private bucket name (`songs` by default). Keep
+`DATABASE_URL` on the `app_runtime` role; never put the service key or the
+database owner URL in frontend/Vercel variables. For the one-off audio
+migration, use a PostgreSQL admin/owner URL in `MIGRATION_DATABASE_URL` in a
+trusted local shell; do not configure that admin URL on the running web
+service. First preview the work with:
+
+```sh
+MIGRATION_DATABASE_URL='postgresql://<admin-connection>' \
+SUPABASE_URL='https://<project-ref>.supabase.co' \
+SUPABASE_SERVICE_KEY='<service-role-key>' \
+SUPABASE_BUCKET='songs' \
+python scripts/migrate_audio_to_storage.py --dry-run
+```
+
+Then run the same command without `--dry-run`. The migration processes one
+track at a time, retries Storage uploads, verifies each object, commits
+`storage_path`, and only then clears `audio_data`; failed uploads leave the
+database audio intact. `--dry-run` does not read audio blobs or modify either
+Storage or PostgreSQL.
 Profile photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
 
 Before applying an Alembic migration to a live database, create and verify a
