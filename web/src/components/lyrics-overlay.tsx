@@ -104,14 +104,31 @@ function parseUnsynchronizedId3Frame(frame: Uint8Array): string | null {
 }
 
 async function readEmbeddedLyrics(trackId: string, signal: AbortSignal): Promise<LyricsData | null> {
-  const response = await apiFetch(`/api/tracks/${encodeURIComponent(trackId)}/tag-head`, {
-    cache: "no-store",
-    signal,
-  });
-  if (!response.ok) return null;
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const readRange = async (start: number, end: number): Promise<Uint8Array | null> => {
+    const response = await apiFetch(`/api/tracks/${encodeURIComponent(trackId)}/stream`, {
+      cache: "no-store",
+      headers: { Range: `bytes=${start}-${end}` },
+      signal,
+    });
+    if (response.status !== 206) return null;
+    return new Uint8Array(await response.arrayBuffer());
+  };
+
+  let bytes = await readRange(0, 256 * 1024 - 1);
+  if (!bytes) return null;
   if (bytes.length < 10 || bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) {
     return null;
+  }
+
+  const tagLength = 10 + syncSafeInteger(bytes, 6);
+  if (tagLength > 32 * 1024 * 1024) return null;
+  if (tagLength > bytes.length) {
+    const remainder = await readRange(bytes.length, tagLength - 1);
+    if (!remainder) return null;
+    const completeTag = new Uint8Array(bytes.length + remainder.length);
+    completeTag.set(bytes);
+    completeTag.set(remainder, bytes.length);
+    bytes = completeTag;
   }
 
   const version = bytes[3];

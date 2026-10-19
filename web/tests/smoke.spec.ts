@@ -263,6 +263,7 @@ test("public credits page keeps the nonce CSP and lists attribution", async ({ p
   const csp = response?.headers()["content-security-policy"] ?? "";
   expect(csp).toContain("script-src 'self' 'nonce-");
   expect(csp).toContain("img-src 'self' data: blob:");
+  expect(csp).toContain("media-src 'self' blob: https://*.supabase.co");
   expect(csp).toContain("https://*.theaudiodb.com");
   await expect(page.getByRole("heading", { name: "Credits and data sources" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Wikipedia" })).toBeVisible();
@@ -710,6 +711,68 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
     .toBeLessThanOrEqual(4);
 });
 
+test("playback refreshes an expired signed Storage URL once", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+
+  await page.request.post("http://127.0.0.1:8100/__test/expire-next-media");
+  await page.locator(".hidden-input").first().setInputFiles({
+    name: "expired-url.wav",
+    mimeType: "audio/wav",
+    buffer: makeWav(),
+  });
+  const trackCard = page.locator(".card").filter({ hasText: "expired-url" });
+  await expect(trackCard).toBeVisible();
+
+  let expiredSignedUrlResponses = 0;
+  let streamRedirects = 0;
+  let signedStorageUrl: string | null = null;
+  page.on("response", (response) => {
+    if (
+      response.url().includes("/storage/v1/object/sign/songs/") &&
+      response.status() === 403
+    ) {
+      expiredSignedUrlResponses += 1;
+    }
+    if (/\/api\/tracks\/playwright-track-\d+\/stream$/.test(response.url())) {
+      streamRedirects += 1;
+      if (response.status() === 302) {
+        signedStorageUrl = response.headers().location ?? null;
+      }
+    }
+  });
+
+  await trackCard.click();
+  const audio = page.locator("audio");
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(0);
+  if (!signedStorageUrl) {
+    throw new Error("The stream endpoint did not return a signed Storage URL.");
+  }
+  const rangedResponse = await page.evaluate(async (url) => {
+    const response = await fetch(url, {
+      headers: { Range: "bytes=0-1" },
+      cache: "no-store",
+    });
+    return {
+      status: response.status,
+      contentRange: response.headers.get("Content-Range"),
+    };
+  }, signedStorageUrl);
+  expect(rangedResponse.status).toBe(206);
+  expect(rangedResponse.contentRange).toMatch(/^bytes 0-1\//);
+  expect(expiredSignedUrlResponses).toBeGreaterThan(0);
+  expect(streamRedirects).toBe(2);
+});
+
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({
   page,
 }) => {
@@ -718,6 +781,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     "This deterministic full-flow test uses the local mock backend.",
   );
   test.setTimeout(180_000);
+  const wav = makeWav();
   const hydrationErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error" && /hydrated|hydration mismatch/i.test(message.text())) {
@@ -751,7 +815,6 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect(page.locator(".view-title")).toContainText("Playwright");
 
   await page.getByRole("button", { name: "Library", exact: true }).click();
-  const wav = makeWav();
   await page.locator(".hidden-input").first().setInputFiles(
     Array.from({ length: 60 }, (_, index) => ({
       name: `pw-batch-${String(index + 1).padStart(2, "0")}.wav`,
@@ -795,7 +858,11 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(trackCard).toBeVisible();
   await page.locator(".card").filter({ hasText: "pw-batch-60" }).click();
+  const audio = page.locator("audio");
   await expect(page.locator(".now-title")).toHaveText("pw-batch-60");
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(0);
   await page.locator("audio").evaluate((element) => {
     element.dispatchEvent(new Event("ended"));
   });
@@ -820,7 +887,6 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await page.getByRole("button", { name: "Repeat: one" }).click();
   await expect(page.getByRole("button", { name: "Repeat: off" })).toBeVisible();
 
-  const audio = page.locator("audio");
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).duration))
     .toBeGreaterThan(5);
@@ -841,7 +907,12 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     .toBe(expectedScrollPosition);
   await audio.evaluate((element) => (element as HTMLAudioElement).pause());
   await page.setViewportSize({ width: 360, height: 812 });
+  const embeddedLyricsRange = page.waitForRequest((request) =>
+    /\/api\/tracks\/playwright-track-\d+\/stream$/.test(request.url()) &&
+    request.headers().range === "bytes=0-262143"
+  );
   await page.locator('.nowbar button[aria-label="Lyrics"]').click();
+  await embeddedLyricsRange;
   await expect(page.getByRole("dialog", { name: "Lyrics" })).toBeVisible();
   const lyricsControls = page.locator(".lyrics-player");
   for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off"]) {
@@ -1010,5 +1081,4 @@ test("real-backend login, upload, playback, seek, playlist, and Range flow", asy
     };
   }, streamUrl);
   expect(rangeStatus.status).toBe(206);
-  expect(rangeStatus.contentRange).toMatch(/^bytes 0-1\//);
 });

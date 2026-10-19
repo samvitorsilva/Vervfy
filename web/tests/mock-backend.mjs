@@ -3,10 +3,10 @@ import { createServer } from "node:http";
 const port = 8100;
 const testCookie = "vervfy_playwright_session=authenticated";
 const csrfToken = "playwright-csrf-token";
-const audio = Buffer.alloc(44 + 22_050 * 6 * 2);
 const sampleRate = 22_050;
-const sampleCount = sampleRate * 6;
+const sampleCount = sampleRate * 30;
 const dataSize = sampleCount * 2;
+const audio = Buffer.alloc(44 + dataSize);
 audio.write("RIFF", 0);
 audio.writeUInt32LE(36 + dataSize, 4);
 audio.write("WAVE", 8);
@@ -29,6 +29,9 @@ let playlists = [];
 let tracks = [];
 let rateLimitedUploads = 1;
 let artistPhotoSource = "none";
+let signedAudioUrlVersion = 0;
+let expireNextMediaUrl = false;
+const expiredMediaTokens = new Set();
 const artistPhoto = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
   "base64",
@@ -60,7 +63,7 @@ function trackPayload(id, title) {
     title,
     artist: "Vervfy Test Artist",
     album: "Playwright Test Album",
-    duration: 6,
+    duration: 30,
     has_cover: false,
     cover_source: "placeholder",
     cover_url: `/api/tracks/${id}/cover`,
@@ -73,6 +76,60 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (url.pathname === "/__health") {
     send(response, 200, "ok");
+    return;
+  }
+
+  if (url.pathname === "/__test/expire-next-media" && request.method === "POST") {
+    expireNextMediaUrl = true;
+    send(response, 204, "");
+    return;
+  }
+
+  const signedAudio = url.pathname.match(
+    /^\/storage\/v1\/object\/sign\/songs\/(playwright-track-\d+)\.wav$/,
+  );
+  if (signedAudio && url.searchParams.has("token") && request.method === "GET") {
+    const token = url.searchParams.get("token");
+    if (request.headers["sec-fetch-dest"] === "audio" && expireNextMediaUrl) {
+      expiredMediaTokens.add(token);
+      expireNextMediaUrl = false;
+    }
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "http://127.0.0.1:3100",
+      "Access-Control-Expose-Headers": "Accept-Ranges, Content-Length, Content-Range",
+      "Accept-Ranges": "bytes",
+      "Content-Type": "audio/wav",
+      Vary: "Origin",
+    };
+    if (expiredMediaTokens.has(token)) {
+      send(response, 403, "signed URL expired", corsHeaders);
+      return;
+    }
+    const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
+    if (!range) {
+      send(response, 200, audio, {
+        ...corsHeaders,
+        "Content-Length": String(audio.length),
+      });
+      return;
+    }
+    const start = Number(range[1]);
+    const end = Math.min(
+      range[2] ? Number(range[2]) : audio.length - 1,
+      audio.length - 1,
+    );
+    if (start > end || start >= audio.length) {
+      send(response, 416, "", {
+        ...corsHeaders,
+        "Content-Range": `bytes */${audio.length}`,
+      });
+      return;
+    }
+    send(response, 206, audio.subarray(start, end + 1), {
+      ...corsHeaders,
+      "Content-Length": String(end - start + 1),
+      "Content-Range": `bytes ${start}-${end}/${audio.length}`,
+    });
     return;
   }
 
@@ -97,6 +154,9 @@ const server = createServer(async (request, response) => {
     tracks = [];
     rateLimitedUploads = 1;
     artistPhotoSource = "none";
+    signedAudioUrlVersion = 0;
+    expireNextMediaUrl = false;
+    expiredMediaTokens.clear();
     send(response, 303, "", {
       Location: "/",
       "Set-Cookie": `${testCookie}; Path=/; HttpOnly; SameSite=Lax`,
@@ -206,7 +266,12 @@ const server = createServer(async (request, response) => {
   }
 
   if (url.pathname === "/api/tracks" && request.method === "GET") {
-    json(response, 200, { tracks });
+    const orderedTracks = [...tracks].sort(
+      (left, right) =>
+        left.artist.toLowerCase().localeCompare(right.artist.toLowerCase()) ||
+        left.title.toLowerCase().localeCompare(right.title.toLowerCase()),
+    );
+    json(response, 200, { tracks: orderedTracks });
     return;
   }
 
@@ -317,28 +382,12 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (/^\/api\/tracks\/playwright-track-\d+\/stream$/.test(url.pathname) && request.method === "GET") {
-    const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
-    if (!range) {
-      send(response, 200, audio, {
-        "Content-Type": "audio/wav",
-        "Content-Length": String(audio.length),
-        "Accept-Ranges": "bytes",
-      });
-      return;
-    }
-    const start = Number(range[1]);
-    const requestedEnd = range[2] ? Number(range[2]) : audio.length - 1;
-    const end = Math.min(requestedEnd, audio.length - 1);
-    if (start > end || start >= audio.length) {
-      send(response, 416, "", { "Content-Range": `bytes */${audio.length}` });
-      return;
-    }
-    send(response, 206, audio.subarray(start, end + 1), {
-      "Content-Type": "audio/wav",
-      "Content-Length": String(end - start + 1),
-      "Content-Range": `bytes ${start}-${end}/${audio.length}`,
-      "Accept-Ranges": "bytes",
+  const audioStream = url.pathname.match(/^\/api\/tracks\/(playwright-track-\d+)\/stream$/);
+  if (audioStream && request.method === "GET") {
+    signedAudioUrlVersion += 1;
+    send(response, 302, "", {
+      Location: `http://127.0.0.1:8100/storage/v1/object/sign/songs/${audioStream[1]}.wav?token=mock-${signedAudioUrlVersion}`,
+      "Cache-Control": "private, no-store",
     });
     return;
   }

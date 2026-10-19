@@ -1462,6 +1462,7 @@ export default function LibraryApp() {
       audio: HTMLAudioElement,
       error: unknown,
       message: string,
+      refreshSignedUrl = false,
     ) => {
       if (
         playbackAttemptRef.current !== attempt ||
@@ -1482,7 +1483,8 @@ export default function LibraryApp() {
       if (
         errorName !== "NotAllowedError" &&
         attempt.retryCount === 0 &&
-        (errorName === "NetworkError" ||
+        (refreshSignedUrl ||
+          errorName === "NetworkError" ||
           audio.error?.code === MediaError.MEDIA_ERR_ABORTED ||
           audio.error?.code === MediaError.MEDIA_ERR_NETWORK)
       ) {
@@ -1598,8 +1600,7 @@ export default function LibraryApp() {
       const attempt = playbackAttemptRef.current;
       if (
         !attempt ||
-        audio.src !== attempt.src ||
-        (audio.currentSrc && audio.currentSrc !== attempt.src)
+        audio.src !== attempt.src
       ) {
         return;
       }
@@ -1608,6 +1609,7 @@ export default function LibraryApp() {
         audio,
         error,
         "This track could not be played. Check the file format or your connection.",
+        true,
       );
     },
     [handlePlaybackFailure],
