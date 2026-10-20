@@ -1,4 +1,42 @@
 services:
+  - type: keyvalue
+    name: vervfy-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: vervfy-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: VERVFY_ENVIRONMENT
+        value: production
+      - key: VERVFY_HTTPS_ONLY
+        value: "1"
+      - key: VERVFY_TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: VERVFY_SECRET_KEY
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: vervfy-redis
+          property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: songs
+
   - type: web
     name: vervfy-next
     runtime: node
@@ -11,4 +49,4 @@ services:
       - key: NODE_VERSION
         value: 22
       - key: BACKEND_URL
-        value: https://vervfy-app.onrender.com
+        sync: false
