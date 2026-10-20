@@ -256,7 +256,7 @@ def validate_password(password: str) -> str | None:
     if not password or len(password) < 8:
         return "Password must be at least 8 characters"
     if len(password.encode("utf-8")) > 72:
-        return "Password must be under 72 bytes"
+        return "Password must be 72 bytes or fewer"
     return None
 
 
