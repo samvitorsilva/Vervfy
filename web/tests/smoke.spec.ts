@@ -815,12 +815,26 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect(page.locator(".view-title")).toContainText("Playwright");
 
   await page.getByRole("button", { name: "Library", exact: true }).click();
+  const audioInputs = page.locator(".hidden-input[type='file']");
+  await expect(audioInputs).toHaveCount(2);
+  await expect(audioInputs.nth(0)).toHaveAttribute(
+    "accept",
+    "audio/*,.mp3,.m4a,.wav,.flac,.ogg,.oga,.aac,.opus,.weba",
+  );
+  await expect(audioInputs.nth(1)).toHaveAttribute(
+    "accept",
+    "audio/*,.mp3,.m4a,.wav,.flac,.ogg,.oga,.aac,.opus,.weba",
+  );
   await page.locator(".hidden-input").first().setInputFiles(
-    Array.from({ length: 60 }, (_, index) => ({
-      name: `pw-batch-${String(index + 1).padStart(2, "0")}.wav`,
-      mimeType: "audio/wav",
-      buffer: wav,
-    })),
+    [
+      ...Array.from({ length: 60 }, (_, index) => ({
+        name: `pw-batch-${String(index + 1).padStart(2, "0")}.wav`,
+        mimeType: "audio/wav",
+        buffer: wav,
+      })),
+      { name: "not-a-song.mp4", mimeType: "video/mp4", buffer: Buffer.from("video") },
+      { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") },
+    ],
   );
 
   await expect(page.locator(".card")).toHaveCount(60, { timeout: 150_000 });

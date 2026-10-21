@@ -1,1 +1,0 @@
-{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"linux","wallTime":1792448808956,"monotonicTime":7987.672,"sdkLanguage":"javascript","title":"smoke.spec.ts:36 › login page loads its CSRF token from the JSON API"}

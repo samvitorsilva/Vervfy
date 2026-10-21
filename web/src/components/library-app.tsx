@@ -60,6 +60,8 @@ interface OfflineTrackRecord {
 const OFFLINE_DATABASE = "auralis-db";
 const OFFLINE_DATABASE_VERSION = 2;
 const OFFLINE_STORE = "offlineTracks";
+const AUDIO_FILE_ACCEPT = "audio/*,.mp3,.m4a,.wav,.flac,.ogg,.oga,.aac,.opus,.weba";
+const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|wav|flac|ogg|oga|aac|opus|weba)$/i;
 
 const AURA_PALETTE = [
   ["#8b7fff", "#54e8d4"],
@@ -1243,7 +1245,8 @@ export default function LibraryApp() {
       const files = Array.from(selectedFiles).filter(
         (file) =>
           file.type.startsWith("audio/") ||
-          /\.(mp3|m4a|mp4|wav|flac|ogg|oga|aac|opus|weba)$/i.test(file.name),
+          ((!file.type || file.type === "application/octet-stream") &&
+            AUDIO_FILE_EXTENSION.test(file.name)),
       );
       if (files.length === 0) {
         notify("No audio files found in that selection.");
@@ -3501,7 +3504,7 @@ export default function LibraryApp() {
         ref={fileInputRef}
         className="hidden-input"
         type="file"
-        accept="audio/*,.mp3,.m4a,.mp4,.wav,.flac,.ogg,.oga,.aac,.opus,.weba"
+        accept={AUDIO_FILE_ACCEPT}
         multiple
         onChange={(event) => {
           if (event.currentTarget.files) void uploadFiles(event.currentTarget.files);
@@ -3512,7 +3515,7 @@ export default function LibraryApp() {
         ref={folderInputRef}
         className="hidden-input"
         type="file"
-        accept="audio/*,.mp3,.m4a,.mp4,.wav,.flac,.ogg,.oga,.aac,.opus,.weba"
+        accept={AUDIO_FILE_ACCEPT}
         multiple
         {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
         onChange={(event) => {
