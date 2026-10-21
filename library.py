@@ -1,9 +1,10 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 import base64, hashlib, io, logging, math, os, re, tempfile
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import load_only
 import audio_store
 from db import TrackRecord, User, tenant_session
@@ -731,12 +732,34 @@ class Library:
             return None
         filename, size, storage_path = info
         path = None
+        from cover_art import embedded_cover
+
         try:
             with tempfile.NamedTemporaryFile(
                 suffix=os.path.splitext(filename)[1], delete=False
             ) as audio_file:
                 path = audio_file.name
                 if storage_path:
+                    slice_size = 2 * 1024 * 1024
+                    first_slice = (
+                        audio_store.read_range(
+                            storage_path, 0, min(size, slice_size) - 1
+                        )
+                        if size
+                        else b""
+                    )
+                    audio_file.write(first_slice)
+                    audio_file.flush()
+                    try:
+                        image = embedded_cover(path)
+                    except (OSError, ValueError):
+                        image = None
+                    if image is not None:
+                        return image
+                    if size <= slice_size:
+                        return None
+                    audio_file.seek(0)
+                    audio_file.truncate()
                     audio_store.download_to_file(storage_path, path, size)
                 else:
                     with tenant_session(self.user_id) as session:
@@ -752,15 +775,43 @@ class Library:
                                 break
                             audio_file.write(bytes(chunk))
                             offset += len(chunk)
-            from cover_art import embedded_cover
-
-            return embedded_cover(path)
+            try:
+                return embedded_cover(path)
+            except (OSError, ValueError):
+                return None
         finally:
             if path:
                 try:
                     os.unlink(path)
                 except OSError:
                     log.warning("Could not remove temporary audio file %s", path)
+
+    def claim_cover_resolution(
+        self,
+        track_id: str,
+        *,
+        force: bool = False,
+        cooldown: timedelta = timedelta(hours=24),
+    ) -> bool:
+        """Atomically mark an eligible track as attempted within the cooldown."""
+        now = datetime.now(timezone.utc)
+        statement = update(TrackRecord).where(
+            TrackRecord.id == track_id,
+            TrackRecord.user_id == self.user_id,
+        )
+        if not force:
+            statement = statement.where(
+                or_(
+                    TrackRecord.cover_checked_at.is_(None),
+                    TrackRecord.cover_checked_at <= now - cooldown,
+                )
+            )
+        with tenant_session(self.user_id) as session:
+            result = session.execute(
+                statement.values(cover_checked_at=now)
+            )
+            session.commit()
+            return result.rowcount == 1
 
     def set_resolved_cover(
         self,

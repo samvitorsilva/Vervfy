@@ -1884,19 +1884,22 @@ def track_covers(
             track.cover_source in {None, "generated", "placeholder", "unknown"}
             and not track.cover_url
         )
+        is_pending = False
         if missing:
-            schedule_cover_resolution(
-                background_tasks,
-                user["id"],
-                track.id,
-                lookup_audiodb=audiodb_queue.lookup_track_cover,
+            is_pending = bool(
+                schedule_cover_resolution(
+                    background_tasks,
+                    user["id"],
+                    track.id,
+                    lookup_audiodb=audiodb_queue.lookup_track_cover,
+                )
             )
-        pending = pending or missing
+        pending = pending or is_pending
         results[track.id] = {
             "cover_url": track.cover_url or f"/api/tracks/{track.id}/cover",
             "cover_source": track.cover_source,
-            "status": "pending" if missing else "found",
-            "pending": missing,
+            "status": "pending" if is_pending else "found",
+            "pending": is_pending,
         }
     return {"covers": results, "pending": pending}
 

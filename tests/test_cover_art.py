@@ -296,6 +296,64 @@ class MusicBrainzCoverTests(unittest.TestCase):
         self.assertIsNone(url)
 
 
+class CoverResolutionScheduleTests(unittest.TestCase):
+    class BackgroundTasks:
+        def __init__(self) -> None:
+            self.tasks = []
+
+        def add_task(self, *args, **kwargs) -> None:
+            self.tasks.append((args, kwargs))
+
+    def test_cooldown_skips_a_repeat_attempt(self) -> None:
+        tasks = self.BackgroundTasks()
+        library = MagicMock()
+        library.claim_cover_resolution.side_effect = [True, False]
+        key = ("cooldown-user", "cooldown-track")
+
+        with patch("library.Library", return_value=library):
+            try:
+                self.assertTrue(
+                    cover_art.schedule_cover_resolution(
+                        tasks, *key
+                    )
+                )
+                with cover_art._lookup_pending_lock:
+                    cover_art._lookup_pending.discard(key)
+                self.assertFalse(
+                    cover_art.schedule_cover_resolution(
+                        tasks, *key
+                    )
+                )
+            finally:
+                with cover_art._lookup_pending_lock:
+                    cover_art._lookup_pending.discard(key)
+
+        self.assertEqual(len(tasks.tasks), 1)
+        self.assertEqual(library.claim_cover_resolution.call_count, 2)
+
+    def test_force_bypasses_the_persisted_cooldown(self) -> None:
+        tasks = self.BackgroundTasks()
+        library = MagicMock()
+        library.claim_cover_resolution.return_value = True
+        key = ("force-user", "force-track")
+
+        with patch("library.Library", return_value=library):
+            try:
+                self.assertTrue(
+                    cover_art.schedule_cover_resolution(
+                        tasks, *key, force=True
+                    )
+                )
+            finally:
+                with cover_art._lookup_pending_lock:
+                    cover_art._lookup_pending.discard(key)
+
+        library.claim_cover_resolution.assert_called_once_with(
+            key[1], force=True
+        )
+        self.assertEqual(len(tasks.tasks), 1)
+
+
 class ResolveCoverChainTests(unittest.TestCase):
     def test_first_hit_wins_and_logs_each_step(self) -> None:
         track = MagicMock(

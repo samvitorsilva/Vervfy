@@ -134,6 +134,9 @@ class TrackRecord(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cover_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     cover_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    cover_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ArtistPhoto(Base):

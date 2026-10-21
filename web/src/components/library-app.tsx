@@ -861,6 +861,7 @@ export default function LibraryApp() {
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineObjectUrlsRef = useRef(new Set<string>());
   const trackCoverPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
 
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
@@ -1020,6 +1021,8 @@ export default function LibraryApp() {
   }, []);
 
   const reloadTracks = useCallback(async () => {
+    trackCoverPollAttemptsRef.current = 0;
+    if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
     const response = await expectOk(
       await fetchWithRetry("/api/tracks", { cache: "no-store" }, 3),
     );
@@ -1055,6 +1058,8 @@ export default function LibraryApp() {
   }, [setTracks]);
 
   const refreshTrackCovers = useCallback(async () => {
+    if (trackCoverPollAttemptsRef.current >= 5) return;
+    trackCoverPollAttemptsRef.current += 1;
     try {
       const response = await expectOk(
         await fetchWithRetry("/api/tracks/covers", { cache: "no-store" }, 2),
@@ -1101,7 +1106,7 @@ export default function LibraryApp() {
         }),
       );
       if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
-      if (payload.pending) {
+      if (payload.pending && trackCoverPollAttemptsRef.current < 5) {
         trackCoverPollRef.current = setTimeout(
           () => void refreshTrackCoversRef.current(),
           12_000,
@@ -1110,10 +1115,12 @@ export default function LibraryApp() {
     } catch (error) {
       console.warn("[covers] Could not refresh TheAudioDB track covers.", error);
       if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
-      trackCoverPollRef.current = setTimeout(
-        () => void refreshTrackCoversRef.current(),
-        30_000,
-      );
+      if (trackCoverPollAttemptsRef.current < 5) {
+        trackCoverPollRef.current = setTimeout(
+          () => void refreshTrackCoversRef.current(),
+          30_000,
+        );
+      }
     }
   }, [setTracks]);
   useEffect(() => {
@@ -1987,7 +1994,8 @@ export default function LibraryApp() {
         if (cancelled) return;
         setProfile(account);
         setTracks(nextTracks);
-        void refreshTrackCoversRef.current();
+        trackCoverPollAttemptsRef.current = 0;
+        if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
         void refreshTrackCoversRef.current();
         baselineRef.current = remoteMeta;
         etagRef.current = stateResponse.headers.get("ETag");

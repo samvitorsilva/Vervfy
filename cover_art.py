@@ -238,6 +238,12 @@ def schedule_cover_resolution(background_tasks, user_id: str, track_id: str, **k
     key = (user_id, track_id)
     with _lookup_pending_lock:
         if key in _lookup_pending:
+            return True
+        from library import Library
+
+        if not Library(user_id).claim_cover_resolution(
+            track_id, force=bool(kwargs.get("force", False))
+        ):
             return False
         _lookup_pending.add(key)
     background_tasks.add_task(

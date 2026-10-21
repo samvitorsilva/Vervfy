@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 import os
 import unittest
 from unittest.mock import patch
@@ -101,7 +102,6 @@ class AlbumCoverTests(unittest.TestCase):
         self.assertEqual(tracks["other-artist"].cover_data, b"existing")
         self.assertEqual(tracks["other-album"].cover_data, b"existing")
         self.assertEqual(tracks["other-user"].cover_data, b"existing")
-
         replaced = album_library.set_album_user_cover(
             "placeholder", b"confirmed-cover", replace_user_covers=True
         )
@@ -116,6 +116,50 @@ class AlbumCoverTests(unittest.TestCase):
         self.assertEqual(tracks["owned"].cover_data, b"confirmed-cover")
         self.assertEqual(tracks["other-artist"].cover_data, b"existing")
         self.assertEqual(tracks["other-user"].cover_data, b"existing")
+
+    def test_cover_resolution_cooldown_can_be_forced(self) -> None:
+        library_for_user = library.Library("album-user-a")
+
+        self.assertTrue(library_for_user.claim_cover_resolution("placeholder"))
+        self.assertFalse(library_for_user.claim_cover_resolution("placeholder"))
+        self.assertTrue(
+            library_for_user.claim_cover_resolution("placeholder", force=True)
+        )
+
+        with self.sessions() as session:
+            checked_at = session.get(
+                TrackRecord, {"id": "placeholder", "user_id": "album-user-a"}
+            ).cover_checked_at
+        self.assertIsNotNone(checked_at)
+        if checked_at.tzinfo is None:
+            checked_at = checked_at.replace(tzinfo=timezone.utc)
+        self.assertGreater(
+            checked_at,
+            datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+
+    def test_embedded_cover_uses_range_then_falls_back_to_full_file(self) -> None:
+        track_library = library.Library("album-user-a")
+        audio_size = 3 * 1024 * 1024
+        with (
+            patch.object(
+                track_library,
+                "audio_info",
+                return_value=("song.mp3", audio_size, "album-user-a/song.mp3"),
+            ),
+            patch.object(
+                library.audio_store, "read_range", return_value=b"first slice"
+            ) as read_range,
+            patch("cover_art.embedded_cover", side_effect=[None, b"cover"]),
+            patch.object(library.audio_store, "download_to_file") as download,
+        ):
+            result = track_library.embedded_cover("track-id")
+
+        self.assertEqual(result, b"cover")
+        read_range.assert_called_once_with(
+            "album-user-a/song.mp3", 0, 2 * 1024 * 1024 - 1
+        )
+        download.assert_called_once()
 
     def test_album_cover_requires_an_existing_track_and_non_empty_album(self) -> None:
         album_library = library.Library("album-user-a")

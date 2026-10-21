@@ -18,6 +18,9 @@ import logging
 import mimetypes
 import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -28,6 +31,10 @@ log = logging.getLogger("vervfy.audio_store")
 _transport: httpx.BaseTransport | None = None
 _shared_client: httpx.Client | None = None
 _shared_client_key: tuple[str, str, str, int] | None = None
+_signed_url_cache: OrderedDict[tuple[str, int], tuple[str, float]] = OrderedDict()
+_signed_url_cache_lock = threading.Lock()
+_SIGNED_URL_CACHE_MAX_SIZE = 512
+_SIGNED_URL_EXPIRY_MARGIN_SECONDS = 24 * 60 * 60
 
 
 class StorageError(RuntimeError):
@@ -198,27 +205,47 @@ def upload_file(path: str, file_path: str, content_type: str = "audio/mpeg") -> 
 @_wrap_errors
 def create_signed_url(path: str, expires_in: int = 3600) -> str:
     """Create a direct-to-Storage URL for one object in the private bucket."""
-    _, _, bucket = _settings()
-    client = _client()
-    response = client.post(
-        f"/object/sign/{quote(bucket, safe='')}/{quote(path, safe='/')}",
-        json={"expiresIn": expires_in},
-    )
-    if response.status_code >= 300:
-        raise StorageError(
-            f"signed URL creation failed ({response.status_code}): {response.text[:200]}"
+    key = (path, expires_in)
+    with _signed_url_cache_lock:
+        now = time.monotonic()
+        cached = _signed_url_cache.get(key)
+        if cached is not None:
+            if cached[1] > now:
+                _signed_url_cache.move_to_end(key)
+                return cached[0]
+            del _signed_url_cache[key]
+
+        started_at = now
+        _, _, bucket = _settings()
+        client = _client()
+        response = client.post(
+            f"/object/sign/{quote(bucket, safe='')}/{quote(path, safe='/')}",
+            json={"expiresIn": expires_in},
         )
-    payload = response.json()
-    signed_path = payload.get("signedURL") if isinstance(payload, dict) else None
-    if not isinstance(signed_path, str) or not signed_path:
-        raise StorageError("signed URL creation returned no URL")
-    if signed_path.startswith("https://"):
-        if not signed_path.startswith(_settings()[0] + "/"):
-            raise StorageError("signed URL points outside the configured Supabase project")
-        return signed_path
-    if not signed_path.startswith("/"):
-        signed_path = "/" + signed_path
-    return f"{_settings()[0]}/storage/v1{signed_path}"
+        if response.status_code >= 300:
+            raise StorageError(
+                f"signed URL creation failed ({response.status_code}): {response.text[:200]}"
+            )
+        payload = response.json()
+        signed_path = payload.get("signedURL") if isinstance(payload, dict) else None
+        if not isinstance(signed_path, str) or not signed_path:
+            raise StorageError("signed URL creation returned no URL")
+        if signed_path.startswith("https://"):
+            if not signed_path.startswith(_settings()[0] + "/"):
+                raise StorageError("signed URL points outside the configured Supabase project")
+            signed_url = signed_path
+        else:
+            if not signed_path.startswith("/"):
+                signed_path = "/" + signed_path
+            signed_url = f"{_settings()[0]}/storage/v1{signed_path}"
+
+        cache_for = expires_in - _SIGNED_URL_EXPIRY_MARGIN_SECONDS
+        if cache_for > 0:
+            _signed_url_cache[key] = (signed_url, started_at + cache_for)
+            _signed_url_cache.move_to_end(key)
+            while len(_signed_url_cache) > _SIGNED_URL_CACHE_MAX_SIZE:
+                _signed_url_cache.popitem(last=False)
+        return signed_url
 
 
 @_wrap_errors
