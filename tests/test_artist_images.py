@@ -310,6 +310,32 @@ class ArtistImageLookupTests(unittest.TestCase):
         self.assertEqual(calls, [{"s": "Coldplay", "t": "Yellow"}, {"s": "Coldplay"}, {"m": "2109615"}])
         self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/thumb.jpg")
 
+    def test_invalid_title_search_retries_free_artist_search(self) -> None:
+        calls: list[dict[str, str]] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append(params)
+            if "t" in params:
+                raise httpx.DecodingError(
+                    "invalid JSON",
+                    request=httpx.Request("GET", "https://example.test"),
+                )
+            return {"track": None}
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "", request_json
+        )
+
+        self.assertEqual(calls, [{"s": "Coldplay", "t": "Yellow"}, {"s": "Coldplay"}])
+        self.assertEqual(result["status"], "not_found")
+
+    def test_invalid_provider_json_is_reported_as_decoding_error(self) -> None:
+        request = httpx.Request("GET", "https://example.test/searchtrack.php")
+        response = httpx.Response(200, content=b"", request=request)
+
+        with self.assertRaises(httpx.DecodingError):
+            artist_images._decode_json_response(response, "searchtrack.php")
+
     def test_artist_and_title_form_the_global_cache_key(self) -> None:
         first = artist_images.track_cover_cache_key("Beyoncé feat. Guest", "Halo!")
         second = artist_images.track_cover_cache_key("Beyonce", "Halo")

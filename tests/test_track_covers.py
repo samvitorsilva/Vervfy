@@ -286,7 +286,7 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertEqual(response.json()["id"], "owned-track")
         schedule.assert_called_once()
         self.assertEqual(schedule.call_args.args[1:], ("user-a", "owned-track"))
-        self.assertEqual(schedule.call_args.kwargs, {})
+        self.assertIn("lookup_audiodb", schedule.call_args.kwargs)
 
     def test_retry_endpoint_schedules_chain_for_owned_track_only(self) -> None:
         with patch.object(server, "schedule_cover_resolution") as schedule:

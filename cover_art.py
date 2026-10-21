@@ -213,8 +213,17 @@ async def musicbrainz_cover(artist: str, title: str) -> str | None:
             return cover_url
 
 
-def audiodb_cover(artist: str, title: str, album: str) -> str | None:
-    result = fetch_track_cover(artist, title, album)
+def audiodb_cover(
+    artist: str,
+    title: str,
+    album: str,
+    request_json: Callable[[str, dict[str, str]], dict] | None = None,
+) -> str | None:
+    result = (
+        fetch_track_cover(artist, title, album)
+        if request_json is None
+        else fetch_track_cover(artist, title, album, request_json)
+    )
     return result.get("cover_url") if result.get("status") == "found" else None
 
 

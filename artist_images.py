@@ -118,8 +118,18 @@ def _fetch_json(
             params=params,
         )
         response.raise_for_status()
-        payload = response.json()
+        payload = _decode_json_response(response, endpoint)
     return payload if isinstance(payload, dict) else {}
+
+
+def _decode_json_response(response: httpx.Response, endpoint: str) -> object:
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise httpx.DecodingError(
+            f"TheAudioDB returned invalid JSON for {endpoint}",
+            request=response.request,
+        ) from exc
 
 
 def fetch_artist_image(
@@ -230,11 +240,15 @@ def fetch_track_cover(
             payload = {}
     album_id = matching_album_id(payload)
 
-    if album_id is None and track_search_error is None:
+    if album_id is None and (
+        track_search_error is None
+        or isinstance(track_search_error, httpx.DecodingError)
+    ):
         try:
             payload = _fetch_json(
                 "searchtrack.php", {"s": cleaned_artist}, request_json
             )
+            track_search_error = None
             album_id = matching_album_id(payload)
         except httpx.HTTPError as exc:
             if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code not in {
@@ -378,6 +392,12 @@ class TheAudioDBQueue:
             album.strip(),
         )
 
+    def lookup_track_cover(
+        self, artist: str, title: str, album: str
+    ) -> dict[str, str | None]:
+        """Look up a cover using the shared provider rate limit."""
+        return fetch_track_cover(artist, title, album, self._request_json)
+
     def _enqueue(
         self, kind: str, key: str, first: str, second: str, third: str
     ) -> bool:
@@ -461,7 +481,7 @@ class TheAudioDBQueue:
                     params=params,
                 )
                 response.raise_for_status()
-                payload = response.json()
+                payload = _decode_json_response(response, endpoint)
             if not isinstance(payload, dict):
                 return {}
             return payload

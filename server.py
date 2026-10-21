@@ -1885,7 +1885,12 @@ def track_covers(
             and not track.cover_url
         )
         if missing:
-            schedule_cover_resolution(background_tasks, user["id"], track.id)
+            schedule_cover_resolution(
+                background_tasks,
+                user["id"],
+                track.id,
+                lookup_audiodb=audiodb_queue.lookup_track_cover,
+            )
         pending = pending or missing
         results[track.id] = {
             "cover_url": track.cover_url or f"/api/tracks/{track.id}/cover",
@@ -1984,6 +1989,7 @@ async def upload_track(
             background_tasks,
             user["id"],
             track.id,
+            lookup_audiodb=audiodb_queue.lookup_track_cover,
         )
         return _track_payload(track)
     finally:
@@ -2231,7 +2237,11 @@ async def retry_track_cover(
             "detail": "Owned covers are not replaced by automatic lookup",
         }
     schedule_cover_resolution(
-        background_tasks, user["id"], track_id, force=True
+        background_tasks,
+        user["id"],
+        track_id,
+        force=True,
+        lookup_audiodb=audiodb_queue.lookup_track_cover,
     )
     return {"status": "queued", "cover_source": track.cover_source}
 
