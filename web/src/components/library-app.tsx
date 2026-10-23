@@ -15,6 +15,7 @@ import LogoutButton from "@/components/auth/logout-button";
 import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
 import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
+import ResilientImage from "@/components/resilient-image";
 import VisualizerOverlay from "@/components/visualizer-overlay";
 import { useLanguage } from "@/lib/i18n";
 import {
@@ -188,35 +189,6 @@ function activePreviewLine(lines: NonNullable<CachedLyrics["lines"]>, timeMs: nu
   return active;
 }
 
-const LoadedTrackImage = memo(function LoadedTrackImage({
-  src,
-  fallbackSrc = FALLBACK_ART,
-  className = "",
-}: {
-  src: string;
-  fallbackSrc?: string;
-  className?: string;
-}) {
-  const [loaded, setLoaded] = useState(false);
-  return (
-    <img
-      className={`${className} media-image${loaded ? " media-image-ready" : ""}`}
-      src={src}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      onLoad={() => setLoaded(true)}
-      onError={(event) => {
-        if (event.currentTarget.src !== new URL(fallbackSrc, window.location.href).href) {
-          event.currentTarget.src = fallbackSrc;
-        } else {
-          setLoaded(true);
-        }
-      }}
-    />
-  );
-});
-
 const TrackImage = memo(function TrackImage({
   track,
   className = "",
@@ -237,7 +209,7 @@ const TrackImage = memo(function TrackImage({
   }
   const fallback = generateAura(`${track.artist}|${track.album}|${track.title}`);
   const src = track.coverUrl || fallback;
-  return <LoadedTrackImage key={`${track.id}:${src}`} src={src} fallbackSrc={fallback} className={className} />;
+  return <ResilientImage key={`${track.id}:${src}`} src={src} fallbackSrc={fallback} className={className} />;
 });
 
 function PlaybackSeek({

@@ -15,7 +15,7 @@ interface Artist {
 
 export function artistNames(track: TrackRecord): string[] {
   const names = track.artist
-    .split(/\s*(?:,|;|\/|&|\bfeat(?:uring)?\.?|\bft\.?|\bwith\b)\s*/i)
+    .split(/\s*(?:,|;|\/|\bfeat(?:uring)?\.?|\bft\.?|\bwith\b)\s*/i)
     .flatMap((part) =>
       part
         .split(/\s+and\s+/i)

@@ -12,6 +12,7 @@ import {
 } from "react";
 import { apiFetch, expectOk } from "@/lib/api/client";
 import { artistNames } from "@/components/artist-explorer";
+import ResilientImage from "@/components/resilient-image";
 import type { CachedLyrics, RepeatMode, TrackRecord } from "@/store/player-store";
 import { usePlayerStore } from "@/store/player-store";
 import { useLanguage } from "@/lib/i18n";
@@ -181,6 +182,8 @@ async function readEmbeddedLyrics(trackId: string, signal: AbortSignal): Promise
 }
 
 type LyricsData = CachedLyrics;
+const LYRICS_FALLBACK_COVER =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'%3E%3Crect width='300' height='300' fill='%2312151e'/%3E%3C/svg%3E";
 
 const LYRICS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const LYRICS_CACHE_PREFIX = "vervfy:lrclib:v1:";
@@ -322,6 +325,8 @@ export function parseLyricsText(value: string, source: string): LyricsData {
 
 export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Promise<LyricsData> {
   if (track.customLyrics?.trim()) return parseLyricsText(track.customLyrics, "custom");
+  const cached = readBrowserLyricsCache(track.id);
+  if (cached) return cached;
   if (!(await isLrclibEnabled())) return { source: "disabled" };
 
   let embedded: LyricsData | null = null;
@@ -331,8 +336,6 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     if (error instanceof DOMException && error.name === "AbortError") throw error;
   }
   if (embedded) return embedded;
-  const cached = readBrowserLyricsCache(track.id);
-  if (cached) return cached;
 
   const leadArtist = track.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
   const title = cleanTitle(track.title);
@@ -343,6 +346,7 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
   const titleKey = normalized(title);
   const artistKey = normalized(leadArtist);
   const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
+  const syncedFallbackTolerance = Math.min(20, Math.max(10, track.duration * 0.08));
 
   const sameSong = (entry: LrclibEntry) =>
     normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
@@ -381,6 +385,7 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     const usable = pool.filter((entry) => entry.instrumental !== true);
     return (
       closest(usable.filter((entry) => hasSynced(entry) && within(entry, durationTolerance))) ??
+      closest(usable.filter((entry) => hasSynced(entry) && within(entry, syncedFallbackTolerance))) ??
       closest(usable.filter((entry) => hasPlain(entry) && within(entry, durationTolerance)))
     );
   };
@@ -396,19 +401,21 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
       new URLSearchParams({ q: `${leadArtist} ${title}` }),
     ];
     const seen = new Set<unknown>(pool.map((entry) => entry.id));
-    for (const search of searches) {
-      const searchResponse = await fetch(`https://lrclib.net/api/search?${search}`, {
-        ...requestOptions,
-      });
+    const searchResponses = await Promise.all(
+      searches.map((search) =>
+        fetch(`https://lrclib.net/api/search?${search}`, requestOptions),
+      ),
+    );
+    for (const searchResponse of searchResponses) {
       if (!searchResponse.ok) continue;
       const results: unknown = await searchResponse.json();
-      if (!Array.isArray(results)) continue;
-      for (const entry of results as LrclibEntry[]) {
-        if (!sameSong(entry) || (entry.id !== undefined && seen.has(entry.id))) continue;
-        seen.add(entry.id);
-        pool.push(entry);
+      if (Array.isArray(results)) {
+        for (const entry of results as LrclibEntry[]) {
+          if (!sameSong(entry) || (entry.id !== undefined && seen.has(entry.id))) continue;
+          seen.add(entry.id);
+          pool.push(entry);
+        }
       }
-      if (hasTimedChoice()) break;
     }
   }
 
@@ -722,7 +729,7 @@ export default function LyricsOverlay({
 
   return (
     <div className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label={t("Lyrics")}>
-      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}")` }} />
+      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}"), radial-gradient(circle at 50% 40%, #302c53, #12151e 75%)` }} />
       <header className="lyrics-topbar">
         <button className="lyrics-close" type="button" aria-label={t("Close lyrics")} onClick={onClose}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 9 6 6 6-6" /></svg>
@@ -732,7 +739,7 @@ export default function LyricsOverlay({
       </header>
       <div className="lyrics-stage">
         <div className="lyrics-side">
-          <div className="lyrics-art"><img src={activeTrack.coverUrl} alt="" /></div>
+          <div className="lyrics-art"><ResilientImage key={activeTrack.coverUrl} src={activeTrack.coverUrl} fallbackSrc={LYRICS_FALLBACK_COVER} /></div>
           <div className="lyrics-meta">
             <div className="t">{activeTrack.title}</div>
             <div className="a">
@@ -793,7 +800,7 @@ export default function LyricsOverlay({
       </div>
       <div className="lyrics-player">
         <div className="lyrics-player-track">
-          <img src={activeTrack.coverUrl} alt="" />
+          <ResilientImage key={activeTrack.coverUrl} src={activeTrack.coverUrl} fallbackSrc={LYRICS_FALLBACK_COVER} />
           <span><strong>{activeTrack.title}</strong><small>{activeTrack.artist}</small></span>
         </div>
         <div className="lyrics-player-seek">

@@ -388,11 +388,12 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   const track = {
     id: "responsive-preview-track",
     title: "synced-preview",
-    artist: "Vervfy Test Artist",
+    artist: "Strings & Hearts",
     album: "Playwright Test Album",
     duration: 6,
     has_cover: false,
-    cover_url: "",
+    cover_source: "audiodb",
+    cover_url: "https://r2.theaudiodb.com/cover.jpg",
     stream_url: "/api/tracks/responsive-preview-track/stream",
     custom_lyrics: null,
   };
@@ -402,6 +403,21 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   await page.route("**/api/tracks/responsive-preview-track/stream", (route) =>
     route.fulfill({ contentType: "audio/wav", body: makeWav() }),
   );
+  let coverRequests = 0;
+  await page.route("https://r2.theaudiodb.com/**", async (route) => {
+    coverRequests += 1;
+    if (coverRequests === 1) {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+  });
   let lrclibClientHeader = "";
   await page.route("https://lrclib.net/api/get**", (route) => {
     lrclibClientHeader = route.request().headers()["lrclib-client"] ?? "";
@@ -410,12 +426,25 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
       body: JSON.stringify({
         trackName: track.title,
         artistName: track.artist,
-        duration: track.duration,
+        duration: track.duration + 8,
         syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
         plainLyrics: "First lyric line\nSecond lyric line",
       }),
     });
   });
+  await page.route("https://lrclib.net/api/search**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          trackName: track.title,
+          artistName: track.artist,
+          duration: track.duration + 8,
+          syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
+        },
+      ]),
+    }),
+  );
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
@@ -424,6 +453,9 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   await expect(page).toHaveURL(/\/$/);
   const trackCard = page.locator(".card").filter({ hasText: track.title });
   await expect(trackCard).toBeVisible();
+  await expect.poll(() => trackCard.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth))
+    .toBeGreaterThan(0);
+  expect(coverRequests).toBeGreaterThanOrEqual(2);
   await trackCard.click();
   await page.setViewportSize({ width: 360, height: 812 });
   await page.locator(".now-track-open").click();
@@ -440,7 +472,7 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   const lyricsPreview = player.locator(".mobile-lyrics-preview");
   await expect(lyricsPreview.locator(".lyric-active")).toHaveText("First lyric line");
   await expect.poll(() => lrclibClientHeader).toBe(
-    "Vervfy/1.0 (https://github.com/samvitorsilva/Verfy)",
+    "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy)",
   );
   await page.locator("audio").evaluate(async (audio: HTMLAudioElement) => {
     if (audio.paused) await audio.play();
@@ -453,6 +485,8 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   await lyricsPreview.click();
   const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
   await expect(lyricsDialog).toBeVisible();
+  await expect(lyricsDialog.locator(".lyrics-meta .artist-link")).toHaveCount(1);
+  await expect(lyricsDialog.locator(".lyrics-meta .artist-link")).toHaveText("Strings & Hearts");
   await expect(lyricsDialog).toContainText("Second lyric line");
   const phoneTrackCard = lyricsDialog.locator(".lyrics-side");
   const phoneCoverArt = lyricsDialog.locator(".lyrics-art");

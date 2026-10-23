@@ -1,7 +1,7 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
-import base64, hashlib, io, logging, math, os, re, tempfile
+import base64, hashlib, io, logging, math, os, re, tempfile, unicodedata
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from sqlalchemy import func, or_, select, update
@@ -33,6 +33,31 @@ class UploadQuotaExceeded(RuntimeError):
 
 class AudioUnavailableError(RuntimeError):
     """A track has neither a Storage object nor a legacy database audio blob."""
+
+
+def _normalized_track_metadata(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value.casefold())
+    without_marks = "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    )
+    return " ".join(re.sub(r"[^\w]+", " ", without_marks).split())
+
+
+def _same_recording_metadata(
+    track: TrackRecord,
+    title: str,
+    artist: str,
+    album: str,
+    duration: float,
+) -> bool:
+    return (
+        duration > 0
+        and track.duration > 0
+        and abs(track.duration - duration) <= 2
+        and _normalized_track_metadata(track.title) == _normalized_track_metadata(title)
+        and _normalized_track_metadata(track.artist) == _normalized_track_metadata(artist)
+        and _normalized_track_metadata(track.album) == _normalized_track_metadata(album)
+    )
 
 
 def track_id_for_bytes(data: BytesLike) -> str:
@@ -332,6 +357,10 @@ class Library:
         meta=self._read_metadata_path(safe,path)
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta
+        with tenant_session(self.user_id) as s:
+            duplicate = self._find_duplicate_recording(s, title, artist, album, duration)
+            if duplicate is not None:
+                return self._track(duplicate)
         try:
             cover.thumbnail((600,600), Image.Resampling.LANCZOS)
             output=io.BytesIO()
@@ -364,30 +393,40 @@ class Library:
                 legacy_data = audio_file.read()
         row=TrackRecord(id=track_id,user_id=self.user_id,filename=safe,title=title,artist=artist,album=album,duration=duration,has_cover=has_cover,cover_source="embedded" if has_cover else "generated",cover_url=None,audio_data=None if storage_path else legacy_data,storage_path=storage_path,size_bytes=size_bytes,cover_data=None if cover_path else output.getvalue(),cover_path=cover_path)
         try:
+            duplicate_track = None
             with tenant_session(self.user_id) as s:
                 if s.bind.dialect.name == "postgresql":
                     # Serialize quota checks for this account across workers.
                     s.get(User, self.user_id, with_for_update=True)
-                if quota_bytes is not None or max_tracks is not None:
-                    current_bytes = s.scalar(
-                        select(func.coalesce(func.sum(TrackRecord.size_bytes), 0)).where(
-                            TrackRecord.user_id == self.user_id
-                        )
-                    ) or 0
-                    current_count = s.scalar(
-                        select(func.count()).select_from(TrackRecord).where(
-                            TrackRecord.user_id == self.user_id
-                        )
-                    ) or 0
-                    if (
-                        quota_bytes is not None and current_bytes + size_bytes > quota_bytes
-                    ) or (
-                        max_tracks is not None and current_count >= max_tracks
-                    ):
-                        raise UploadQuotaExceeded()
-                s.add(row)
-                s.commit()
-                return self._track(row)
+                duplicate = self._find_duplicate_recording(s, title, artist, album, duration)
+                if duplicate is not None:
+                    duplicate_track = self._track(duplicate)
+                else:
+                    if quota_bytes is not None or max_tracks is not None:
+                        current_bytes = s.scalar(
+                            select(func.coalesce(func.sum(TrackRecord.size_bytes), 0)).where(
+                                TrackRecord.user_id == self.user_id
+                            )
+                        ) or 0
+                        current_count = s.scalar(
+                            select(func.count()).select_from(TrackRecord).where(
+                                TrackRecord.user_id == self.user_id
+                            )
+                        ) or 0
+                        if (
+                            quota_bytes is not None and current_bytes + size_bytes > quota_bytes
+                        ) or (
+                            max_tracks is not None and current_count >= max_tracks
+                        ):
+                            raise UploadQuotaExceeded()
+                    s.add(row)
+                    s.commit()
+                    return self._track(row)
+            if duplicate_track is not None:
+                if not storage_path_override:
+                    audio_store.delete_quietly(storage_path)
+                audio_store.delete_quietly(cover_path)
+                return duplicate_track
         except Exception:
             # Don't leave an orphaned object behind — unless a concurrent upload of
             # the same file already owns it (or we can't tell).
@@ -399,6 +438,39 @@ class Library:
                     audio_store.delete_quietly(storage_path)
                 audio_store.delete_quietly(cover_path)
             raise
+
+    def _find_duplicate_recording(
+        self, session, title: str, artist: str, album: str, duration: float
+    ) -> TrackRecord | None:
+        candidates = session.scalars(
+            select(TrackRecord)
+            .options(
+                load_only(
+                    TrackRecord.id,
+                    TrackRecord.filename,
+                    TrackRecord.title,
+                    TrackRecord.artist,
+                    TrackRecord.album,
+                    TrackRecord.duration,
+                    TrackRecord.has_cover,
+                    TrackRecord.cover_source,
+                    TrackRecord.custom_lyrics,
+                    TrackRecord.cover_path,
+                    TrackRecord.cover_url,
+                )
+            )
+            .where(TrackRecord.user_id == self.user_id)
+        )
+        matching = [
+            track
+            for track in candidates
+            if _same_recording_metadata(track, title, artist, album, duration)
+        ]
+        return min(
+            matching,
+            key=lambda track: (abs(track.duration - duration), track.id),
+            default=None,
+        )
 
     def remove(self, track_id: str):
         from db import Favorite, Playlist, PlaylistTrack
