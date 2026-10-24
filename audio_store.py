@@ -270,6 +270,8 @@ def delete_quietly(path: str | None) -> None:
 def delete_many(paths: list[str]) -> None:
     """Delete account-owned objects, raising if Storage cannot confirm deletion."""
     paths = [p for p in paths if p]
+    if not paths:
+        return
     for i in range(0, len(paths), 100):
         chunk = paths[i : i + 100]
         _, _, bucket = _settings()

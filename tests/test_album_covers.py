@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker, undefer
@@ -195,6 +195,31 @@ class AlbumCoverTests(unittest.TestCase):
             )
         self.assertIsNone(row.cover_data)
         self.assertEqual(row.cover_path, "covers/album-user-a/placeholder.jpg")
+
+    def test_removing_track_preserves_a_cover_shared_with_other_tracks(self) -> None:
+        with self.sessions() as session:
+            for track_id in ("placeholder", "embedded"):
+                row = session.get(
+                    TrackRecord,
+                    {"id": track_id, "user_id": "album-user-a"},
+                )
+                row.cover_path = "covers/album-user-a/albums/shared.jpg"
+            session.commit()
+
+        album_library = library.Library("album-user-a")
+        with patch.object(library.audio_store, "delete_quietly") as delete:
+            self.assertTrue(album_library.remove("placeholder"))
+
+        self.assertEqual(delete.call_args_list, [call(None)])
+        with self.sessions() as session:
+            remaining = session.get(
+                TrackRecord,
+                {"id": "embedded", "user_id": "album-user-a"},
+            )
+        self.assertEqual(
+            remaining.cover_path,
+            "covers/album-user-a/albums/shared.jpg",
+        )
 
 
 if __name__ == "__main__":

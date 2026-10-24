@@ -512,17 +512,28 @@ export default function LyricsOverlay({
   useEffect(() => {
     if (!audioElement || !isPlaying) return;
     let frame = 0;
-    const update = () => {
+    let lastUiUpdate = 0;
+    let previousLineIndex = lyrics?.lines
+      ? activeLine(lyrics.lines, smoothTimeRef.current * 1000)
+      : -1;
+    const update = (timestamp: number) => {
       const nextTime = audioElement.currentTime;
       if (Number.isFinite(nextTime) && Math.abs(nextTime - smoothTimeRef.current) >= 0.005) {
-        smoothTimeRef.current = nextTime;
-        setSmoothCurrentTime(nextTime);
+        const nextLineIndex = lyrics?.lines
+          ? activeLine(lyrics.lines, nextTime * 1000)
+          : -1;
+        if (nextLineIndex !== previousLineIndex || timestamp - lastUiUpdate >= 100) {
+          smoothTimeRef.current = nextTime;
+          setSmoothCurrentTime(nextTime);
+          previousLineIndex = nextLineIndex;
+          lastUiUpdate = timestamp;
+        }
       }
       frame = requestAnimationFrame(update);
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [audioElement, isPlaying]);
+  }, [audioElement, isPlaying, lyrics?.lines]);
 
   const lyricCurrentTime = scrubbingTime ??
     (audioElement && isPlaying ? smoothCurrentTime : currentTime);

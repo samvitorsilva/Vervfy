@@ -156,6 +156,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     await nowPlayingButton.click();
     const player = page.getByRole("dialog", { name: "Now playing" });
     await expect(player).toBeVisible();
+    await expect(player.getByRole("button", { name: "Close player" })).toBeFocused();
     await expect(player.locator(".mobile-player-art img, .mobile-player-art .generated-aura")).toBeVisible();
     await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
     const playerMenuButton = player.getByRole("button", { name: "More options for responsive-player" });
@@ -165,10 +166,11 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     await expect(playerMenu.getByRole("menuitem", { name: "Edit track details" })).toBeVisible();
     await playerMenuButton.click();
     await expect(playerMenu).toHaveCount(0);
-    for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {
+    await expect(playerMenuButton).toBeFocused();
+    for (const label of ["Previous track", "Next track", "Shuffle", "Repeat: off", "Lyrics", "Queue"]) {
       await expect(player.getByRole("button", { name: label, exact: true })).toBeVisible();
     }
-    await expect(player.getByRole("button", { name: "Close player" })).toBeFocused();
+    await expect(player.getByRole("button", { name: /^(Play|Pause)$/ })).toBeVisible();
     await player.getByRole("button", { name: "Close player" }).click();
     await expect(player).toHaveCount(0);
     await expect(nowPlayingButton).toBeFocused();
@@ -190,7 +192,10 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   }
 
   await nowPlayingButton.click();
-  await page.getByRole("button", { name: "More options for responsive-player" }).click();
+  await page
+    .getByRole("dialog", { name: "Now playing" })
+    .getByRole("button", { name: "More options for responsive-player" })
+    .click();
   await page.getByRole("menuitem", { name: "Edit track details" }).click();
   const trackDetails = page.getByRole("dialog", { name: "Track details" });
   await expect(trackDetails).toBeVisible();
@@ -240,11 +245,6 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     "href",
     "https://creativecommons.org/licenses/by-sa/4.0/",
   );
-  await expect(page.getByText(/Artist image URLs and IDs are supplied by TheAudioDB/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "TheAudioDB" })).toHaveAttribute(
-    "href",
-    "https://www.theaudiodb.com/",
-  );
   await expect(page.locator(".artist-source")).toContainText("Shortened or adapted");
 
   await page.getByRole("button", { name: "Artists" }).click();
@@ -274,6 +274,11 @@ test("public credits page keeps the nonce CSP and lists attribution", async ({ p
   await expect(page.getByRole("link", { name: "LRCLIB" })).toHaveAttribute(
     "href",
     "https://lrclib.net/",
+  );
+  await expect(page.getByText(/Artist image URLs and IDs are supplied by TheAudioDB/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "TheAudioDB" }).first()).toHaveAttribute(
+    "href",
+    "https://www.theaudiodb.com/",
   );
 });
 

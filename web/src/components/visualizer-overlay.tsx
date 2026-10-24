@@ -48,7 +48,13 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
 
     if (graph.context.state === "suspended") void graph.context.resume();
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const draw = () => {
+    let lastDraw = 0;
+    const draw = (timestamp: number) => {
+      if (!reducedMotion.matches && timestamp - lastDraw < 1000 / 30) {
+        frameRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastDraw = timestamp;
       const ctx = canvas.getContext("2d");
       const data = frequenciesRef.current;
       if (!ctx || !data) return;

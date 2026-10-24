@@ -17,6 +17,7 @@ EXCLUDED_PARTS = {
     "docs",
     "node_modules",
     "tests",
+    "test-results",
 }
 SOURCE_SUFFIXES = {
     ".css",

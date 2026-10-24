@@ -24,7 +24,7 @@ export default function LogoutButton({
       const response = await apiFetch(
         "/logout",
         { method: "POST", redirect: "follow" },
-        { csrf: true },
+        { csrf: true, retryCsrfOnForbidden: true },
       );
       await expectOk(response);
       window.location.assign("/login");

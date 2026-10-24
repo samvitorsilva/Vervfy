@@ -489,7 +489,7 @@ class Library:
                 ).delete(synchronize_session=False)
             s.commit()
         audio_store.delete_quietly(storage_path)
-        audio_store.delete_quietly(cover_path)
+        self._delete_unreferenced_cover(cover_path)
         return True
 
     def cover_storage_path(self, track_id: str) -> str | None:

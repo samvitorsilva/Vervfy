@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from io import BytesIO
 import json
 import asyncio
@@ -79,6 +80,15 @@ def _load_or_create_secret_key() -> str:
     return key
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await run_in_threadpool(startup)
+    try:
+        yield
+    finally:
+        close_audio_store()
+
+
 _enable_docs = os.environ.get("VERVFY_ENABLE_DOCS") == "1"
 app = FastAPI(
     title="Vervfy",
@@ -86,10 +96,10 @@ app = FastAPI(
     docs_url="/docs" if _enable_docs else None,
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
+    lifespan=lifespan,
 )
 
 
-@app.on_event("shutdown")
 def close_audio_store() -> None:
     audio_store.close_client()
 
@@ -966,7 +976,6 @@ def _track_payload(track) -> dict:
     }
 
 
-@app.on_event("startup")
 def startup() -> None:
     if is_production:
         if not audio_store.enabled():
@@ -1156,14 +1165,10 @@ def register_submit(
 @app.post("/logout")
 def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
     submitted_token = csrf_token or request.headers.get("x-csrf-token", "")
-    # Logging out is safe to repeat.  A stale page may submit an old token
-    # after another login/logout cycle; avoid surfacing a CSRF error when the
-    # desired outcome is simply to end the current session.
-    try:
+    # Allow idempotent logout after the session is already gone, but require
+    # CSRF protection before revoking any active session.
+    if request.session.get("sid"):
         auth.verify_csrf(request, submitted_token)
-    except HTTPException as exc:
-        if exc.status_code != 403:
-            raise
     session_id = request.session.get("sid")
     if isinstance(session_id, str) and session_id:
         try:
@@ -1467,15 +1472,28 @@ def delete_account(
             )
         ).all())
         storage_paths.extend(session.scalars(
+            select(TrackRecord.cover_path).where(
+                TrackRecord.user_id == user["id"],
+                TrackRecord.cover_path.is_not(None),
+            )
+        ).all())
+        storage_paths.extend(session.scalars(
+            select(ArtistPhoto.storage_path).where(
+                ArtistPhoto.user_id == user["id"],
+                ArtistPhoto.storage_path.is_not(None),
+            )
+        ).all())
+        storage_paths.extend(session.scalars(
             select(UploadJob.storage_path).where(UploadJob.user_id == user["id"])
         ).all())
+        storage_paths = list(dict.fromkeys(path for path in storage_paths if path))
         try:
             audio_store.delete_many(storage_paths)
         except audio_store.StorageError as exc:
             log.exception("could not delete account Storage objects")
             raise HTTPException(
                 status_code=502,
-                detail="Account audio could not be deleted; please retry",
+                detail="Account files could not be deleted; please retry",
             ) from exc
 
         playlist_ids = select(Playlist.id).where(Playlist.user_id == user["id"])
