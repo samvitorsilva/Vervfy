@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 export type RepeatMode = "off" | "all" | "one";
+export type PlaybackStatus = "playing" | "buffering" | "paused" | "failed";
 export type LibraryView =
   | "library"
   | "offline"
@@ -63,6 +64,7 @@ interface PlayerStore {
   repeat: RepeatMode;
   shuffle: boolean;
   isPlaying: boolean;
+  playbackStatus: PlaybackStatus;
   setAudioElement: (audioElement: HTMLAudioElement | null) => void;
   setTracks: (tracks: TrackRecord[]) => void;
   setLibraryMeta: (favorites: string[], playlists: PlaylistRecord[]) => void;
@@ -73,6 +75,7 @@ interface PlayerStore {
   setRepeat: (repeat: RepeatMode) => void;
   setShuffle: (shuffle: boolean) => void;
   setPlaying: (isPlaying: boolean) => void;
+  setPlaybackStatus: (playbackStatus: PlaybackStatus) => void;
   toggleFavorite: (trackId: string) => void;
   setPlaylists: (playlists: PlaylistRecord[]) => void;
   setTrackLyrics: (trackId: string, lyrics: string) => void;
@@ -91,6 +94,7 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   repeat: "off",
   shuffle: false,
   isPlaying: false,
+  playbackStatus: "paused",
   setAudioElement: (audioElement) => set({ audioElement }),
   setTracks: (tracks) => set({ tracks }),
   setLibraryMeta: (favorites, playlists) => {
@@ -115,6 +119,7 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   setRepeat: (repeat) => set({ repeat }),
   setShuffle: (shuffle) => set({ shuffle }),
   setPlaying: (isPlaying) => set({ isPlaying }),
+  setPlaybackStatus: (playbackStatus) => set({ playbackStatus }),
   toggleFavorite: (trackId) =>
     set((state) => ({
       tracks: state.tracks.map((track) =>

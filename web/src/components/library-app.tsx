@@ -83,12 +83,24 @@ function hashCoverSeed(seed: string): number {
 
 interface PlaybackAttempt {
   src: string;
+  retrySource: string | null;
   retryCount: number;
   retryTimer: number | null;
+  stallTimer: number | null;
+  restoreMetadataListener: (() => void) | null;
   requestId: number;
   loading: boolean;
   failed: boolean;
+  hasPlayed: boolean;
+  wantsPlayback: boolean;
+  recovering: boolean;
+  recoveryPosition: number | null;
+  signedUrlRefreshed: boolean;
 }
+
+const MAX_PLAYBACK_RETRIES = 3;
+const PLAYBACK_STALL_TIMEOUT_MS = 5_000;
+const PLAYBACK_START_TIMEOUT_MS = 15_000;
 
 function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknown): void {
   const errorName =
@@ -97,15 +109,8 @@ function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknow
       : error && typeof error === "object" && "name" in error && typeof error.name === "string"
         ? error.name
         : "UnknownError";
-  const errorMessage =
-    error instanceof Error
-      ? error.message
-      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
-        ? error.message
-        : String(error);
   console.warn(`[audio] ${context}`, {
     name: errorName,
-    message: errorMessage,
     code: audio.error?.code ?? null,
     networkState: audio.networkState,
     readyState: audio.readyState,
@@ -745,6 +750,7 @@ export default function LibraryApp() {
   const repeat = usePlayerStore((state) => state.repeat);
   const shuffle = usePlayerStore((state) => state.shuffle);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
+  const playbackStatus = usePlayerStore((state) => state.playbackStatus);
   const setTracks = usePlayerStore((state) => state.setTracks);
   const setLibraryMeta = usePlayerStore((state) => state.setLibraryMeta);
   const setQueue = usePlayerStore((state) => state.setQueue);
@@ -754,6 +760,7 @@ export default function LibraryApp() {
   const setRepeat = usePlayerStore((state) => state.setRepeat);
   const setShuffle = usePlayerStore((state) => state.setShuffle);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
+  const setPlaybackStatus = usePlayerStore((state) => state.setPlaybackStatus);
   const lyricsByTrack = usePlayerStore((state) => state.lyricsByTrack);
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const toggleFavorite = usePlayerStore((state) => state.toggleFavorite);
@@ -1444,12 +1451,13 @@ export default function LibraryApp() {
       audio: HTMLAudioElement,
       error: unknown,
       message: string,
-      refreshSignedUrl = false,
+      failureKind: "media" | "stalled" = "media",
     ) => {
       if (
         playbackAttemptRef.current !== attempt ||
         attempt.failed ||
-        attempt.retryTimer !== null
+        attempt.retryTimer !== null ||
+        !attempt.wantsPlayback
       ) {
         return;
       }
@@ -1459,32 +1467,79 @@ export default function LibraryApp() {
         error && typeof error === "object" && "name" in error && typeof error.name === "string"
           ? error.name
           : "";
-      if (errorName === "AbortError") {
-        return;
-      }
-      if (
-        errorName !== "NotAllowedError" &&
-        attempt.retryCount === 0 &&
-        (refreshSignedUrl ||
-          errorName === "NetworkError" ||
-          audio.error?.code === MediaError.MEDIA_ERR_ABORTED ||
-          audio.error?.code === MediaError.MEDIA_ERR_NETWORK)
-      ) {
-        attempt.retryCount += 1;
-        attempt.retryTimer = window.setTimeout(() => {
+      const mediaErrorCode = audio.error?.code;
+      const retryableNetworkError =
+        failureKind === "stalled" ||
+        errorName === "NetworkError" ||
+        mediaErrorCode === MediaError.MEDIA_ERR_ABORTED ||
+        mediaErrorCode === MediaError.MEDIA_ERR_NETWORK;
+      const unsupportedMediaError =
+        errorName === "NotSupportedError" ||
+        mediaErrorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
+      const retryable =
+        retryableNetworkError ||
+        (unsupportedMediaError && !attempt.signedUrlRefreshed);
+
+      if (!retryable || attempt.retryCount >= MAX_PLAYBACK_RETRIES) {
+        attempt.failed = true;
+        attempt.wantsPlayback = false;
+        attempt.recovering = false;
+        if (attempt.retryTimer !== null) {
+          window.clearTimeout(attempt.retryTimer);
           attempt.retryTimer = null;
-          if (playbackAttemptRef.current === attempt && audio.src === attempt.src) {
-            runPlaybackAttemptRef.current(attempt);
-          }
-        }, 300);
+        }
+        if (attempt.restoreMetadataListener) {
+          audio.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
+          attempt.restoreMetadataListener = null;
+        }
+        if (attempt.stallTimer !== null) {
+          window.clearTimeout(attempt.stallTimer);
+          attempt.stallTimer = null;
+        }
+        audio.pause();
+        setPlaying(false);
+        setPlaybackStatus("failed");
+        notify(errorName === "NotAllowedError" ? "Press play to start." : message);
         return;
       }
 
-      attempt.failed = true;
-      setPlaying(false);
-      notify(errorName === "NotAllowedError" ? "Press play to start." : message);
+      if (attempt.restoreMetadataListener) {
+        audio.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
+        attempt.restoreMetadataListener = null;
+      }
+      attempt.recoveryPosition = Number.isFinite(audio.currentTime)
+        ? audio.currentTime
+        : null;
+      attempt.recovering = true;
+      const reusableSignedSource =
+        [audio.currentSrc, attempt.retrySource].find(
+          (source) => source && source !== attempt.src,
+        ) ?? null;
+      const refreshSignedUrl =
+        !attempt.signedUrlRefreshed &&
+        (attempt.retryCount > 0 || reusableSignedSource === null);
+      if (refreshSignedUrl) attempt.signedUrlRefreshed = true;
+      attempt.retrySource = refreshSignedUrl
+        ? null
+        : reusableSignedSource;
+      attempt.retryCount += 1;
+      setPlaybackStatus("buffering");
+      logAudioFailure("retrying playback", audio, error);
+
+      const delay = Math.min(500 * 2 ** (attempt.retryCount - 1), 4_000);
+      attempt.retryTimer = window.setTimeout(() => {
+        attempt.retryTimer = null;
+        if (
+          playbackAttemptRef.current !== attempt ||
+          !attempt.wantsPlayback
+        ) {
+          return;
+        }
+        audio.pause();
+        runPlaybackAttemptRef.current(attempt);
+      }, delay);
     },
-    [notify, setPlaying],
+    [notify, setPlaybackStatus, setPlaying],
   );
 
   const runPlaybackAttempt = useCallback(
@@ -1492,51 +1547,90 @@ export default function LibraryApp() {
       const audio = usePlayerStore.getState().audioElement;
       if (!audio || playbackAttemptRef.current !== attempt) return;
       const requestId = ++attempt.requestId;
+      const source = attempt.retrySource ?? attempt.src;
       attempt.loading = true;
-      if (
-        audio.src !== attempt.src ||
+      const needsLoad =
+        audio.src !== source ||
         audio.error !== null ||
-        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
-      ) {
-        audio.src = attempt.src;
+        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
+      if (needsLoad) {
+        attempt.recovering = true;
+        audio.src = source;
         audio.load();
       }
       setPlaying(true);
-      void audio.play().then(
-        () => {
-          if (playbackAttemptRef.current === attempt && attempt.requestId === requestId) {
+      setPlaybackStatus("buffering");
+
+      const startPlayback = () => {
+        attempt.restoreMetadataListener = null;
+        if (
+          playbackAttemptRef.current !== attempt ||
+          attempt.requestId !== requestId ||
+          !attempt.wantsPlayback
+        ) {
+          return;
+        }
+        if (attempt.recoveryPosition !== null && attempt.recoveryPosition > 0) {
+          const position = attempt.recoveryPosition;
+          const duration = audio.duration;
+          audio.currentTime =
+            Number.isFinite(duration) && duration > 0
+              ? Math.min(position, duration)
+              : position;
+        }
+        attempt.recoveryPosition = null;
+        void audio.play().then(
+          () => {
+            if (playbackAttemptRef.current === attempt && attempt.requestId === requestId) {
+              attempt.loading = false;
+            }
+          },
+          (error: unknown) => {
+            if (
+              playbackAttemptRef.current !== attempt ||
+              attempt.requestId !== requestId
+            ) {
+              return;
+            }
             attempt.loading = false;
+            if (
+              error &&
+              typeof error === "object" &&
+              "name" in error &&
+              error.name === "AbortError" &&
+              !attempt.wantsPlayback
+            ) {
+              return;
+            }
+            logAudioFailure("play() rejected", audio, error);
+            handlePlaybackFailure(
+              attempt,
+              audio,
+              error,
+              "The track could not start. Please try again.",
+            );
+          },
+        );
+      };
+
+      if (
+        attempt.recoveryPosition !== null &&
+        attempt.recoveryPosition > 0 &&
+        audio.readyState < HTMLMediaElement.HAVE_METADATA
+      ) {
+        const onMetadata = () => {
+          if (attempt.restoreMetadataListener === onMetadata) {
+            attempt.restoreMetadataListener = null;
           }
-        },
-        (error: unknown) => {
-          if (
-            playbackAttemptRef.current !== attempt ||
-            attempt.requestId !== requestId ||
-            audio.src !== attempt.src
-          ) {
-            return;
-          }
-          attempt.loading = false;
-          if (
-            error &&
-            typeof error === "object" &&
-            "name" in error &&
-            error.name === "AbortError"
-          ) {
-            setPlaying(false);
-            return;
-          }
-          logAudioFailure("play() rejected", audio, error);
-          handlePlaybackFailure(
-            attempt,
-            audio,
-            error,
-            "The track could not start. Please try again.",
-          );
-        },
-      );
+          startPlayback();
+        };
+        attempt.restoreMetadataListener = onMetadata;
+        audio.addEventListener("loadedmetadata", onMetadata, { once: true });
+        return;
+      }
+      startPlayback();
     },
-    [handlePlaybackFailure, setPlaying],
+    [handlePlaybackFailure, setPlaybackStatus, setPlaying],
   );
   const startTrack = useCallback(
     (trackId: string) => {
@@ -1549,6 +1643,7 @@ export default function LibraryApp() {
       if (
         currentAttempt?.src === src &&
         !currentAttempt.failed &&
+        currentAttempt.wantsPlayback &&
         (currentAttempt.loading || !audio.paused)
       ) {
         return;
@@ -1558,13 +1653,30 @@ export default function LibraryApp() {
       if (previousAttempt?.retryTimer !== null && previousAttempt?.retryTimer !== undefined) {
         window.clearTimeout(previousAttempt.retryTimer);
       }
+      if (previousAttempt?.stallTimer !== null && previousAttempt?.stallTimer !== undefined) {
+        window.clearTimeout(previousAttempt.stallTimer);
+      }
+      if (previousAttempt?.restoreMetadataListener) {
+        audio.removeEventListener(
+          "loadedmetadata",
+          previousAttempt.restoreMetadataListener,
+        );
+      }
       const attempt: PlaybackAttempt = {
         src,
+        retrySource: null,
         retryCount: 0,
         retryTimer: null,
+        stallTimer: null,
+        restoreMetadataListener: null,
         requestId: 0,
         loading: false,
         failed: false,
+        hasPlayed: false,
+        wantsPlayback: true,
+        recovering: false,
+        recoveryPosition: null,
+        signedUrlRefreshed: false,
       };
       playbackAttemptRef.current = attempt;
       runPlaybackAttemptRef.current = runPlaybackAttempt;
@@ -1575,14 +1687,21 @@ export default function LibraryApp() {
 
   const handleAudioError = useCallback(
     (audio: HTMLAudioElement) => {
-      const error = new Error(audio.error?.message || "Audio element emitted an error");
-      error.name = "MediaError";
+      const error = new Error("Audio element emitted a media error");
+      error.name =
+        audio.error?.code === MediaError.MEDIA_ERR_NETWORK
+          ? "NetworkError"
+          : audio.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+            ? "NotSupportedError"
+            : "MediaError";
       logAudioFailure("audio error event", audio, error);
 
       const attempt = playbackAttemptRef.current;
       if (
         !attempt ||
-        audio.src !== attempt.src
+        (audio.src !== attempt.src && audio.src !== attempt.retrySource) ||
+        (attempt.recovering &&
+          audio.error?.code === MediaError.MEDIA_ERR_ABORTED)
       ) {
         return;
       }
@@ -1591,7 +1710,6 @@ export default function LibraryApp() {
         audio,
         error,
         "This track could not be played. Check the file format or your connection.",
-        true,
       );
     },
     [handlePlaybackFailure],
@@ -1711,22 +1829,37 @@ export default function LibraryApp() {
       if (visibleTracks[0]) playFromList(visibleTracks, visibleTracks[0].id);
       return;
     }
-    if (audioElement.paused) {
-      if (audioElement.getAttribute("src")) {
-        void audioElement.play().catch(() => startTrack(currentTrack.id));
-      } else {
-        startTrack(currentTrack.id);
-      }
-    } else {
+    if (isPlaying) {
       const attempt = playbackAttemptRef.current;
-      if (attempt?.retryTimer !== null && attempt?.retryTimer !== undefined) {
-        window.clearTimeout(attempt.retryTimer);
-        attempt.retryTimer = null;
+      if (attempt) {
+        attempt.wantsPlayback = false;
+        attempt.recovering = false;
+        attempt.requestId += 1;
+        if (attempt.retryTimer !== null) {
+          window.clearTimeout(attempt.retryTimer);
+          attempt.retryTimer = null;
+        }
+        if (attempt.stallTimer !== null) {
+          window.clearTimeout(attempt.stallTimer);
+          attempt.stallTimer = null;
+        }
       }
-      if (attempt) attempt.requestId += 1;
       audioElement.pause();
+      setPlaying(false);
+      setPlaybackStatus("paused");
+    } else {
+      startTrack(currentTrack.id);
     }
-  }, [audioElement, currentTrack, playFromList, startTrack, visibleTracks]);
+  }, [
+    audioElement,
+    currentTrack,
+    isPlaying,
+    playFromList,
+    setPlaybackStatus,
+    setPlaying,
+    startTrack,
+    visibleTracks,
+  ]);
 
   const toggleCurrentFavorite = useCallback(() => {
     const state = usePlayerStore.getState();
@@ -2027,21 +2160,108 @@ export default function LibraryApp() {
       setCurrentTime(audioElement.currentTime || 0);
       updatePlayback();
     };
+    let lastPlaybackTime = audioElement.currentTime;
+    const clearStallTimer = (attempt: PlaybackAttempt | null) => {
+      if (attempt?.stallTimer !== null && attempt?.stallTimer !== undefined) {
+        window.clearTimeout(attempt.stallTimer);
+        attempt.stallTimer = null;
+      }
+    };
+    const onPlaybackProgress = () => {
+      const currentTime = audioElement.currentTime;
+      const madeProgress = currentTime > lastPlaybackTime + 0.05;
+      lastPlaybackTime = currentTime;
+      if (!madeProgress) return;
+      const attempt = playbackAttemptRef.current;
+      clearStallTimer(attempt);
+      if (
+        attempt?.wantsPlayback &&
+        !audioElement.paused &&
+        audioElement.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+      ) {
+        setPlaybackStatus("playing");
+      }
+    };
+    const onLoadedMetadata = () => {
+      lastPlaybackTime = audioElement.currentTime;
+      updatePlaybackPosition();
+    };
+    const onSeeked = () => {
+      lastPlaybackTime = audioElement.currentTime;
+      updatePlaybackPosition();
+    };
+    const onPlaying = () => {
+      const attempt = playbackAttemptRef.current;
+      if (attempt) {
+        attempt.hasPlayed = true;
+        attempt.recovering = false;
+        attempt.retryCount = 0;
+        attempt.signedUrlRefreshed = false;
+        attempt.retrySource = audioElement.currentSrc || attempt.retrySource;
+      }
+      clearStallTimer(attempt);
+      setPlaying(true);
+      setPlaybackStatus("playing");
+      if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing";
+    };
+    const onBuffering = () => {
+      const attempt = playbackAttemptRef.current;
+      if (!attempt?.wantsPlayback || audioElement.paused) return;
+      setPlaybackStatus("buffering");
+      if (attempt.stallTimer !== null) return;
+
+      const stalledAt = audioElement.currentTime;
+      attempt.stallTimer = window.setTimeout(() => {
+        attempt.stallTimer = null;
+        if (
+          playbackAttemptRef.current === attempt &&
+          attempt.wantsPlayback &&
+          !audioElement.paused &&
+          !audioElement.ended &&
+          audioElement.currentTime <= stalledAt + 0.1
+        ) {
+          handlePlaybackFailure(
+            attempt,
+            audioElement,
+            new Error("Playback made no progress after a buffer event"),
+            "Playback stopped while buffering. Check your connection and try again.",
+            "stalled",
+          );
+        }
+      }, attempt.hasPlayed ? PLAYBACK_STALL_TIMEOUT_MS : PLAYBACK_START_TIMEOUT_MS);
+    };
     const onPlay = () => {
       setPlaying(true);
+      setPlaybackStatus("buffering");
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing";
     };
     const onPause = () => {
+      const attempt = playbackAttemptRef.current;
+      if (
+        attempt?.recovering ||
+        (attempt?.wantsPlayback &&
+          audioElement.error !== null &&
+          audioElement.error !== undefined)
+      ) {
+        return;
+      }
+      clearStallTimer(attempt);
+      if (attempt) attempt.wantsPlayback = false;
       updatePlaybackPosition();
       setPlaying(false);
+      setPlaybackStatus(attempt?.failed ? "failed" : "paused");
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "paused";
     };
     const onEnded = () => nextRef.current(true);
     const onError = () => handleAudioError(audioElement);
     audioElement.addEventListener("timeupdate", updatePlayback);
-    audioElement.addEventListener("loadedmetadata", updatePlaybackPosition);
+    audioElement.addEventListener("timeupdate", onPlaybackProgress);
+    audioElement.addEventListener("loadedmetadata", onLoadedMetadata);
     audioElement.addEventListener("durationchange", updatePlaybackPosition);
-    audioElement.addEventListener("seeked", updatePlaybackPosition);
+    audioElement.addEventListener("seeked", onSeeked);
+    audioElement.addEventListener("playing", onPlaying);
+    audioElement.addEventListener("waiting", onBuffering);
+    audioElement.addEventListener("stalled", onBuffering);
     audioElement.addEventListener("play", onPlay);
     audioElement.addEventListener("pause", onPause);
     audioElement.addEventListener("ended", onEnded);
@@ -2049,15 +2269,35 @@ export default function LibraryApp() {
     updatePlaybackPosition();
     return () => {
       audioElement.removeEventListener("timeupdate", updatePlayback);
-      audioElement.removeEventListener("loadedmetadata", updatePlaybackPosition);
+      audioElement.removeEventListener("timeupdate", onPlaybackProgress);
+      audioElement.removeEventListener("loadedmetadata", onLoadedMetadata);
       audioElement.removeEventListener("durationchange", updatePlaybackPosition);
-      audioElement.removeEventListener("seeked", updatePlaybackPosition);
+      audioElement.removeEventListener("seeked", onSeeked);
+      audioElement.removeEventListener("playing", onPlaying);
+      audioElement.removeEventListener("waiting", onBuffering);
+      audioElement.removeEventListener("stalled", onBuffering);
       audioElement.removeEventListener("play", onPlay);
       audioElement.removeEventListener("pause", onPause);
       audioElement.removeEventListener("ended", onEnded);
       audioElement.removeEventListener("error", onError);
+      const attempt = playbackAttemptRef.current;
+      clearStallTimer(attempt);
+      if (attempt?.retryTimer !== null && attempt?.retryTimer !== undefined) {
+        window.clearTimeout(attempt.retryTimer);
+        attempt.retryTimer = null;
+      }
+      if (attempt?.restoreMetadataListener) {
+        audioElement.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
+        attempt.restoreMetadataListener = null;
+      }
     };
-  }, [audioElement, handleAudioError, setPlaying]);
+  }, [
+    audioElement,
+    handleAudioError,
+    handlePlaybackFailure,
+    setPlaybackStatus,
+    setPlaying,
+  ]);
 
   useEffect(() => {
     const audio = usePlayerStore.getState().audioElement;
@@ -2231,6 +2471,27 @@ export default function LibraryApp() {
         setQueue(nextQueue, nextIndex);
         startTrack(nextQueue[nextIndex]);
       } else {
+        const attempt = playbackAttemptRef.current;
+        if (attempt) {
+          attempt.wantsPlayback = false;
+          attempt.recovering = false;
+          attempt.requestId += 1;
+          if (attempt.retryTimer !== null) {
+            window.clearTimeout(attempt.retryTimer);
+            attempt.retryTimer = null;
+          }
+          if (attempt.stallTimer !== null) {
+            window.clearTimeout(attempt.stallTimer);
+            attempt.stallTimer = null;
+          }
+          if (attempt.restoreMetadataListener && audioElement) {
+            audioElement.removeEventListener(
+              "loadedmetadata",
+              attempt.restoreMetadataListener,
+            );
+            attempt.restoreMetadataListener = null;
+          }
+        }
         audioElement?.pause();
         if (audioElement) {
           audioElement.removeAttribute("src");
@@ -2238,6 +2499,7 @@ export default function LibraryApp() {
         }
         setQueue([], -1);
         setPlaying(false);
+        setPlaybackStatus("paused");
       }
     } else {
       setQueue(nextQueue, activeId ? nextQueue.indexOf(activeId) : -1);
@@ -2641,6 +2903,7 @@ export default function LibraryApp() {
     ? createPortal(
         <div
           className="mobile-player open"
+          data-playback-status={playbackStatus}
           role="dialog"
           aria-modal="true"
           aria-label={t("Now playing")}
@@ -2729,7 +2992,14 @@ export default function LibraryApp() {
                 <button className="mobile-control" type="button" aria-label={t("Previous track")} onClick={playPrevious}>
                   <Icon name="prev" />
                 </button>
-                <button className="mobile-play" type="button" aria-label={t(isPlaying ? "Pause" : "Play")} onClick={togglePlayback}>
+                <button
+                  className="mobile-play"
+                  type="button"
+                  aria-label={t(isPlaying ? "Pause" : "Play")}
+                  aria-busy={playbackStatus === "buffering"}
+                  title={playbackStatus === "failed" ? t("Playback failed. Press play to retry.") : undefined}
+                  onClick={togglePlayback}
+                >
                   <Icon name={isPlaying ? "pause" : "play"} />
                 </button>
                 <button className="mobile-control" type="button" aria-label={t("Next track")} onClick={() => playNext(false)}>
@@ -3002,7 +3272,7 @@ export default function LibraryApp() {
         </div>
       </div>
 
-      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen || expandedPlayerOpen} inert={!currentTrack || lyricsOpen || expandedPlayerOpen}
+      <div id="nowbar" className={`nowbar${currentTrack ? "" : " hidden"}${lyricsOpen ? " lyrics-open" : ""}`} data-playback-status={playbackStatus} role="region" aria-label={t("Now playing")} aria-hidden={!currentTrack || lyricsOpen || expandedPlayerOpen} inert={!currentTrack || lyricsOpen || expandedPlayerOpen}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest("button, .seek")) return;
           if (window.matchMedia("(max-width: 900px)").matches) {
@@ -3044,7 +3314,14 @@ export default function LibraryApp() {
           <div className="transport-btns">
             <button className={`tbtn${shuffle ? " on" : ""}`} type="button" title={t("Shuffle")} aria-label={t("Shuffle")} aria-pressed={shuffle} onClick={toggleShuffle}><Icon name="shuffle" /></button>
             <button className="tbtn" type="button" title={t("Previous track")} aria-label={t("Previous track")} onClick={playPrevious}><Icon name="prev" /></button>
-            <button className="tbtn tbtn-play" type="button" title={t("Play or pause")} aria-label={t(isPlaying ? "Pause" : "Play")} onClick={togglePlayback}><Icon name={isPlaying ? "pause" : "play"} /></button>
+            <button
+              className="tbtn tbtn-play"
+              type="button"
+              title={playbackStatus === "failed" ? t("Playback failed. Press play to retry.") : t("Play or pause")}
+              aria-label={t(isPlaying ? "Pause" : "Play")}
+              aria-busy={playbackStatus === "buffering"}
+              onClick={togglePlayback}
+            ><Icon name={isPlaying ? "pause" : "play"} /></button>
             <button className="tbtn" type="button" title={t("Next track")} aria-label={t("Next track")} onClick={() => playNext(false)}><Icon name="next" /></button>
             <button className={`tbtn${repeat !== "off" ? " on" : ""}`} type="button" title={t(`Repeat: ${repeat}`)} aria-label={t(`Repeat: ${repeat}`)} aria-pressed={repeat !== "off"} onClick={toggleRepeat}><Icon name="repeat" />{repeat === "one" ? <small>1</small> : null}</button>
           </div>

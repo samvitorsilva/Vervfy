@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const username = process.env.PLAYWRIGHT_USERNAME;
 const password = process.env.PLAYWRIGHT_PASSWORD;
@@ -31,6 +31,38 @@ function makeWav(): Buffer {
     wav.writeInt16LE(Math.round(sample * 32_767), 44 + index * 2);
   }
   return wav;
+}
+
+async function loadMockPlaybackTrack(
+  page: Page,
+  title: string,
+  trackNumber: number,
+): Promise<Locator> {
+  const id = `playwright-track-${trackNumber}`;
+  await page.route("**/api/tracks", (route) =>
+    route.fulfill({
+      json: {
+        tracks: [
+          {
+            id,
+            title,
+            artist: "Vervfy Test Artist",
+            album: "Playwright Test Album",
+            duration: 30,
+            has_cover: false,
+            cover_source: "placeholder",
+            cover_url: `/api/tracks/${id}/cover`,
+            stream_url: `/api/tracks/${id}/stream`,
+            custom_lyrics: null,
+          },
+        ],
+      },
+    }),
+  );
+  await page.reload();
+  const trackCard = page.locator(".card").filter({ hasText: title });
+  await expect(trackCard).toBeVisible();
+  return trackCard;
 }
 
 test("login page loads its CSRF token from the JSON API", async ({ page }) => {
@@ -793,13 +825,7 @@ test("playback refreshes an expired signed Storage URL once", async ({ page }) =
   await expect(page).toHaveURL(/\/$/);
 
   await page.request.post("http://127.0.0.1:8100/__test/expire-next-media");
-  await page.locator(".hidden-input").first().setInputFiles({
-    name: "expired-url.wav",
-    mimeType: "audio/wav",
-    buffer: makeWav(),
-  });
-  const trackCard = page.locator(".card").filter({ hasText: "expired-url" });
-  await expect(trackCard).toBeVisible();
+  const trackCard = await loadMockPlaybackTrack(page, "expired-url", 51);
 
   let expiredSignedUrlResponses = 0;
   let streamRedirects = 0;
@@ -824,6 +850,7 @@ test("playback refreshes an expired signed Storage URL once", async ({ page }) =
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(0);
+  await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "playing");
   if (!signedStorageUrl) {
     throw new Error("The stream endpoint did not return a signed Storage URL.");
   }
@@ -841,6 +868,142 @@ test("playback refreshes an expired signed Storage URL once", async ({ page }) =
   expect(rangedResponse.contentRange).toMatch(/^bytes 0-1\//);
   expect(expiredSignedUrlResponses).toBeGreaterThan(0);
   expect(streamRedirects).toBe(2);
+});
+
+test("playback recovers from a transient media request failure without changing tracks", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "transient-network", 52);
+  await page.request.post("http://127.0.0.1:8100/__test/fail-media", {
+    data: { count: 1 },
+  });
+
+  let failedRequests = 0;
+  let streamRedirects = 0;
+  page.on("response", (response) => {
+    if (
+      response.url().includes("/storage/v1/object/sign/songs/") &&
+      response.status() === 503
+    ) {
+      failedRequests += 1;
+    }
+    if (/\/api\/tracks\/playwright-track-\d+\/stream$/.test(response.url())) {
+      streamRedirects += 1;
+    }
+  });
+
+  await trackCard.click();
+  const audio = page.locator("audio");
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(0);
+  await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "playing");
+  await expect(page.locator(".now-title")).toHaveText("transient-network");
+  expect(failedRequests).toBe(1);
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(1);
+  const positionBeforeRetry = await audio.evaluate((element) => {
+    const audioElement = element as HTMLAudioElement;
+    const position = audioElement.currentTime;
+    Object.defineProperty(audioElement, "error", {
+      configurable: true,
+      value: { code: MediaError.MEDIA_ERR_NETWORK, message: "Injected network interruption" },
+    });
+    audioElement.dispatchEvent(new Event("error"));
+    Object.defineProperty(audioElement, "error", { configurable: true, value: null });
+    return position;
+  });
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(positionBeforeRetry);
+  await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "playing");
+  expect(streamRedirects).toBeLessThanOrEqual(2);
+});
+
+test("playback stops after bounded retries on a permanent media error", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "unsupported-audio", 53);
+
+  let streamRedirects = 0;
+  page.on("response", (response) => {
+    if (/\/api\/tracks\/playwright-track-\d+\/stream$/.test(response.url())) {
+      streamRedirects += 1;
+    }
+  });
+  await trackCard.click();
+  await expect
+    .poll(() => page.locator("audio").evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(0);
+  await page.locator("audio").evaluate((element) => {
+    const audio = element as HTMLAudioElement;
+    Object.defineProperty(audio, "error", {
+      configurable: true,
+      value: { code: MediaError.MEDIA_ERR_DECODE, message: "Injected decode failure" },
+    });
+    audio.dispatchEvent(new Event("error"));
+    Object.defineProperty(audio, "error", { configurable: true, value: null });
+    audio.pause();
+  });
+  await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "failed");
+  await expect(page.locator(".toasts .toast").last()).toContainText("could not be played");
+  expect(streamRedirects).toBe(1);
+  await expect(page.locator(".tbtn-play")).toHaveAttribute("aria-busy", "false");
+});
+
+test("playback gives up after its bounded network retries", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "unavailable-network", 54);
+  await page.request.post("http://127.0.0.1:8100/__test/fail-media", {
+    data: { count: 10 },
+  });
+
+  let mediaRequests = 0;
+  let streamRedirects = 0;
+  page.on("response", (response) => {
+    if (/\/api\/tracks\/playwright-track-\d+\/stream$/.test(response.url())) {
+      streamRedirects += 1;
+    }
+  });
+  page.on("response", (response) => {
+    if (
+      response.url().includes("/storage/v1/object/sign/songs/") &&
+      response.status() === 503
+    ) {
+      mediaRequests += 1;
+    }
+  });
+  await trackCard.click();
+  await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "failed");
+  await expect(page.locator(".toasts .toast").last()).toContainText("could not");
+  expect(mediaRequests).toBeGreaterThan(0);
+  expect(mediaRequests).toBeLessThanOrEqual(4);
+  expect(streamRedirects).toBeLessThanOrEqual(2);
 });
 
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({

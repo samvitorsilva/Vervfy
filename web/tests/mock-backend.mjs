@@ -31,6 +31,7 @@ let rateLimitedUploads = 1;
 let artistPhotoSource = "none";
 let signedAudioUrlVersion = 0;
 let expireNextMediaUrl = false;
+let mediaFailuresRemaining = 0;
 const expiredMediaTokens = new Set();
 const artistPhoto = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
@@ -85,6 +86,16 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/__test/fail-media" && request.method === "POST") {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    mediaFailuresRemaining =
+      Number.isInteger(payload.count) && payload.count > 0 ? payload.count : 1;
+    send(response, 204, "");
+    return;
+  }
+
   const signedAudio = url.pathname.match(
     /^\/storage\/v1\/object\/sign\/songs\/(playwright-track-\d+)\.wav$/,
   );
@@ -103,6 +114,14 @@ const server = createServer(async (request, response) => {
     };
     if (expiredMediaTokens.has(token)) {
       send(response, 403, "signed URL expired", corsHeaders);
+      return;
+    }
+    if (
+      request.headers["sec-fetch-dest"] === "audio" &&
+      mediaFailuresRemaining > 0
+    ) {
+      mediaFailuresRemaining -= 1;
+      send(response, 503, "temporary media failure", corsHeaders);
       return;
     }
     const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
@@ -156,6 +175,7 @@ const server = createServer(async (request, response) => {
     artistPhotoSource = "none";
     signedAudioUrlVersion = 0;
     expireNextMediaUrl = false;
+    mediaFailuresRemaining = 0;
     expiredMediaTokens.clear();
     send(response, 303, "", {
       Location: "/",
