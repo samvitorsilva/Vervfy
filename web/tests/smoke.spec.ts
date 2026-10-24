@@ -65,6 +65,37 @@ test("Brazilian Portuguese is detected and the language choice persists", async 
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 });
 
+test("French and Spanish are detected and can be selected", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "language", { configurable: true, value: "fr-FR" });
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["fr-FR", "en-US"] });
+  });
+  await page.goto("/login");
+
+  await expect(page.getByRole("heading", { name: "Bon retour" })).toBeVisible();
+  await expect(page.getByLabel("Nom d’utilisateur")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "fr");
+
+  await page.getByLabel("Langue").selectOption("es");
+  await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
+  await expect(page.getByLabel("Nombre de usuario")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "es");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
+});
+
+test("Spanish is detected from the browser language", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "language", { configurable: true, value: "es-MX" });
+    Object.defineProperty(navigator, "languages", { configurable: true, value: ["es-MX", "en-US"] });
+  });
+  await page.goto("/login");
+
+  await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
+  await expect(page.getByLabel("Nombre de usuario")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "es");
+});
+
 test("login displays JSON authentication errors", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("invalid-user");
