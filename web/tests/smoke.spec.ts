@@ -1006,6 +1006,32 @@ test("playback gives up after its bounded network retries", async ({ page }) => 
   expect(streamRedirects).toBeLessThanOrEqual(2);
 });
 
+test("artist About section stops loading after profile lookup failures", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic profile test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await loadMockPlaybackTrack(page, "artist-bio-unavailable", 55);
+  await page.route("**/api/artists/profile?*", (route) =>
+    route.fulfill({ status: 503, contentType: "application/json", body: "{}" }),
+  );
+
+  await page.getByRole("button", { name: "Artists" }).click();
+  await page.locator(".artist-card-open").filter({ hasText: "Vervfy Test Artist" }).click();
+
+  const about = page.locator(".artist-info");
+  await expect(about).toHaveAttribute("aria-busy", "false", { timeout: 15_000 });
+  await expect(about.locator(".artist-bio")).toHaveText(
+    "No artist information is available yet.",
+  );
+  await expect(about.locator(".artist-bio")).not.toContainText("Looking up");
+});
+
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({
   page,
 }) => {

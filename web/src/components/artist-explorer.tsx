@@ -394,6 +394,7 @@ export default function ArtistExplorer({
           retryTimer = setTimeout(() => void loadProfile(attempt + 1), 1_000 * (attempt + 1));
         } else {
           setProfileByArtist((current) => ({ ...current, [key]: null }));
+          setLoadedProfiles((current) => ({ ...current, [key]: true }));
         }
       } finally {
         clearTimeout(timeout);
