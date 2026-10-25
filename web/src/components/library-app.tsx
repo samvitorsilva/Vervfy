@@ -625,6 +625,7 @@ interface TrackMenuPortalProps {
   onToggleOffline: () => void;
   onToggleFavorite: () => void;
   onViewArtist: (name: string) => void;
+  onOpenSleepTimer: () => void;
   onShare: () => void;
   onRemoveFromPlaylist?: () => void;
   onAddOrChangeCover: () => void;
@@ -647,6 +648,7 @@ function TrackMenuPortal({
   onToggleOffline,
   onToggleFavorite,
   onViewArtist,
+  onOpenSleepTimer,
   onShare,
   onRemoveFromPlaylist,
   onAddOrChangeCover,
@@ -742,6 +744,17 @@ function TrackMenuPortal({
           View artist: {name}
         </button>
       ))}
+      {expandedPlayerOpen ? (
+        <button
+          className="menu-item"
+          role="menuitem"
+          type="button"
+          aria-haspopup="dialog"
+          onClick={onOpenSleepTimer}
+        >
+          {t("Sleep timer")}
+        </button>
+      ) : null}
       <button className="menu-item" role="menuitem" type="button" onClick={onShare}>{t("Share song")}</button>
       {inPlaylist && playlist ? (
         <button className="menu-item" role="menuitem" type="button" onClick={onRemoveFromPlaylist}>
@@ -959,14 +972,28 @@ export default function LibraryApp() {
   const previewNextLineIndex = previewLineIndex < 0 ? 1 : previewCurrentLineIndex + 1;
 
   useEffect(() => {
-    if (!expandedPlayerOpen || !currentTrack || cachedLyrics || currentTrack.customLyrics) return;
+    if (
+      !expandedPlayerOpen ||
+      !currentTrack ||
+      (cachedLyrics && cachedLyrics.source !== "online-plain") ||
+      currentTrack.customLyrics
+    ) return;
 
     let cancelled = false;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
-    void lookupLyrics(currentTrack, controller.signal)
+    void lookupLyrics(currentTrack, controller.signal, {
+      forceRefresh: cachedLyrics?.source === "online-plain",
+    })
       .then((lyrics) => {
-        if (!cancelled) setCachedLyrics(currentTrack.id, lyrics);
+        if (
+          !cancelled &&
+          lyrics.source !== "none" &&
+          lyrics.source !== "disabled" &&
+          !(lyrics.source === "online-plain" && cachedLyrics?.source === "online-plain")
+        ) {
+          setCachedLyrics(currentTrack.id, lyrics);
+        }
       })
       .catch(() => {
         if (!cancelled) setLyricsLookupFailedTrackId(currentTrack.id);
@@ -3468,60 +3495,79 @@ export default function LibraryApp() {
             </button>
             {sleepTimerOpen
               ? createPortal(
-                  <section
-                    id="sleep-timer-options"
-                    ref={sleepTimerPopoverRef}
-                    className="sleep-timer-popover"
-                    role="dialog"
-                    aria-label={t("Sleep timer")}
+                  <div
+                    className={expandedPlayerOpen ? "sleep-timer-overlay open player-sheet" : ""}
+                    onClick={(event) => {
+                      if (event.target === event.currentTarget) setSleepTimerOpen(false);
+                    }}
                   >
-                    <h3>{t("Sleep timer")}</h3>
-                    <p className="sleep-timer-status" aria-live="polite">
-                      {sleepTimerEndTrackId
-                        ? t("At end of track")
-                        : sleepTimerEndsAt
-                          ? `${t("Time remaining")}: ${formatTime(sleepTimerRemaining)}`
-                          : t("No timer set")}
-                    </p>
-                    <div className="sleep-timer-options">
-                      {[5, 10, 15, 30, 45, 60].map((minutes) => (
+                    <section
+                      id="sleep-timer-options"
+                      ref={sleepTimerPopoverRef}
+                      className={expandedPlayerOpen ? "sleep-timer-card" : "sleep-timer-popover"}
+                      role="dialog"
+                      aria-modal={expandedPlayerOpen || undefined}
+                      aria-label={t("Sleep timer")}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="sleep-timer-heading">
+                        <h3>{t("Sleep timer")}</h3>
+                        <button
+                          className="icon-btn"
+                          type="button"
+                          aria-label={t("Close")}
+                          onClick={() => setSleepTimerOpen(false)}
+                        >
+                          <Icon name="close" />
+                        </button>
+                      </div>
+                      <p className="sleep-timer-status" aria-live="polite">
+                        {sleepTimerEndTrackId
+                          ? t("At end of track")
+                          : sleepTimerEndsAt
+                            ? `${t("Time remaining")}: ${formatTime(sleepTimerRemaining)}`
+                            : t("No timer set")}
+                      </p>
+                      <div className="sleep-timer-options">
+                        {[5, 10, 15, 30, 45, 60].map((minutes) => (
+                          <button
+                            type="button"
+                            className="sleep-timer-option"
+                            key={minutes}
+                            onClick={() => {
+                              setSleepTimerRemaining(minutes * 60);
+                              setSleepTimer(Date.now() + minutes * 60_000, null);
+                              setSleepTimerOpen(false);
+                            }}
+                          >
+                            {t(`${minutes} minutes`)}
+                          </button>
+                        ))}
                         <button
                           type="button"
                           className="sleep-timer-option"
-                          key={minutes}
                           onClick={() => {
-                            setSleepTimerRemaining(minutes * 60);
-                            setSleepTimer(Date.now() + minutes * 60_000, null);
+                            if (currentTrack) setSleepTimer(null, currentTrack.id);
                             setSleepTimerOpen(false);
                           }}
                         >
-                          {t(`${minutes} minutes`)}
+                          {t("At end of track")}
                         </button>
-                      ))}
-                      <button
-                        type="button"
-                        className="sleep-timer-option"
-                        onClick={() => {
-                          if (currentTrack) setSleepTimer(null, currentTrack.id);
-                          setSleepTimerOpen(false);
-                        }}
-                      >
-                        {t("At end of track")}
-                      </button>
-                    </div>
-                    {sleepTimerEndsAt || sleepTimerEndTrackId ? (
-                      <button
-                        className="sleep-timer-cancel"
-                        type="button"
-                        onClick={() => {
-                          setSleepTimer(null, null);
-                          setSleepTimerOpen(false);
-                        }}
-                      >
-                        {t("Turn off timer")}
-                      </button>
-                    ) : null}
-                  </section>,
+                      </div>
+                      {sleepTimerEndsAt || sleepTimerEndTrackId ? (
+                        <button
+                          className="sleep-timer-cancel"
+                          type="button"
+                          onClick={() => {
+                            setSleepTimer(null, null);
+                            setSleepTimerOpen(false);
+                          }}
+                        >
+                          {t("Turn off timer")}
+                        </button>
+                      ) : null}
+                    </section>
+                  </div>,
                   document.body,
                 )
               : null}
@@ -3636,6 +3682,10 @@ export default function LibraryApp() {
             setTrackMenu(null);
           }}
           onViewArtist={openArtist}
+          onOpenSleepTimer={() => {
+            setTrackMenu(null);
+            setSleepTimerOpen(true);
+          }}
           onShare={() => {
             setTrackMenu(null);
             void shareTrack(trackMenuTrack);

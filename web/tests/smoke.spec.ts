@@ -170,6 +170,42 @@ test("sleep timer can be scheduled and cancelled from the player", async ({ page
   await expect(timerButton).toHaveAttribute("aria-pressed", "false");
 });
 
+test("sleep timer is available from the mobile and tablet player menu", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic timer test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "mobile-sleep-timer", 60);
+  await trackCard.click();
+
+  for (const width of [768, 360]) {
+    await page.setViewportSize({ width, height: width === 768 ? 1024 : 812 });
+    await page.locator(".now-track-open").click();
+    const player = page.getByRole("dialog", { name: "Now playing" });
+    await player.getByRole("button", { name: "More options for mobile-sleep-timer" }).click();
+    const menu = page.getByRole("menu", { name: "Options for mobile-sleep-timer" });
+    await menu.getByRole("menuitem", { name: "Sleep timer" }).click();
+
+    const timer = page.getByRole("dialog", { name: "Sleep timer" });
+    await expect(timer).toBeVisible();
+    await expect(timer).toHaveAttribute("aria-modal", "true");
+    await timer.getByRole("button", { name: "10 minutes" }).click();
+    await expect(timer).toHaveCount(0);
+
+    await player.getByRole("button", { name: "More options for mobile-sleep-timer" }).click();
+    await page.getByRole("menuitem", { name: "Sleep timer" }).click();
+    await expect(timer.getByText(/Time remaining:/)).toBeVisible();
+    await timer.getByRole("button", { name: "Turn off timer" }).click();
+    await expect(timer).toHaveCount(0);
+    await player.getByRole("button", { name: "Close player" }).click();
+  }
+});
+
 test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   const response = await page.goto("/login");
   const csp = response?.headers()["content-security-policy"] ?? "";
@@ -483,6 +519,70 @@ test("disabled LRCLIB lookup makes no external lyrics request", async ({ page })
   expect(lrclibRequests).toBe(0);
 });
 
+test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "Fast lyrics", 59, "AJ Vitanza");
+
+  let releaseEmbeddedRequest: () => void = () => {};
+  const embeddedRequestDelay = new Promise<void>((resolve) => {
+    releaseEmbeddedRequest = resolve;
+  });
+  let embeddedRequestFinished = false;
+  let resolveEmbeddedRequestStarted: () => void = () => {};
+  const embeddedRequestStarted = new Promise<void>((resolve) => {
+    resolveEmbeddedRequestStarted = resolve;
+  });
+  await page.route("**/api/tracks/playwright-track-59/stream", async (route) => {
+    if (route.request().headers().range !== "bytes=0-262143") {
+      await route.continue();
+      return;
+    }
+    resolveEmbeddedRequestStarted();
+    await embeddedRequestDelay;
+    embeddedRequestFinished = true;
+    try {
+      await route.fulfill({
+        status: 206,
+        headers: { "Content-Range": "bytes 0-9/10", "Accept-Ranges": "bytes" },
+        body: Buffer.alloc(10),
+      });
+    } catch (error) {
+      if (!route.request().failure()) throw error;
+    }
+  });
+  await page.route("https://lrclib.net/api/**", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/api/get")) {
+      return route.fulfill({
+        json: {
+          trackName: "Fast lyrics",
+          artistName: "AJ Vitanza",
+          duration: 30,
+          syncedLyrics: "[00:00.00]Immediate lyric line",
+        },
+      });
+    }
+    return route.fulfill({ json: [] });
+  });
+
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+  const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+  await embeddedRequestStarted;
+  await expect(lyrics.locator(".lyrics-line")).toHaveText("Immediate lyric line", {
+    timeout: 2_000,
+  });
+  expect(embeddedRequestFinished).toBe(false);
+  releaseEmbeddedRequest();
+});
+
 test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
@@ -524,7 +624,7 @@ test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page 
   await expect(lyrics.locator(".lyrics-line")).toHaveText("Recovered lyric line");
 });
 
-test("retrying plain lyrics looks for an automatically synced copy", async ({ page }) => {
+test("cached plain lyrics upgrade to an automatically synced copy", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
     "This deterministic lyrics test uses the local mock backend.",
@@ -571,8 +671,6 @@ test("retrying plain lyrics looks for an automatically synced copy", async ({ pa
   await trackCard.click();
   await page.locator(".player-control-lyrics").click();
   const lyrics = page.getByRole("dialog", { name: "Lyrics" });
-  await expect(lyrics.locator(".lyrics-plain")).toContainText("Plain lyric line");
-  await lyrics.getByRole("button", { name: "Retry lyrics" }).click();
   await expect(lyrics.locator(".lyrics-line")).toHaveText("Automatically synced line");
 });
 

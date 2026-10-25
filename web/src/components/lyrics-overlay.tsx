@@ -341,13 +341,75 @@ export async function lookupLyrics(
   if (cached) return cached;
   if (!(await isLrclibEnabled())) return { source: "disabled" };
 
-  let embedded: LyricsData | null = null;
-  try {
-    embedded = await readEmbeddedLyrics(track.id, signal);
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
+  const embeddedController = new AbortController();
+  const onlineController = new AbortController();
+  const abortLookups = () => {
+    embeddedController.abort();
+    onlineController.abort();
+  };
+  if (signal.aborted) {
+    abortLookups();
+  } else {
+    signal.addEventListener("abort", abortLookups, { once: true });
   }
-  if (embedded) return embedded;
+
+  type LookupResult =
+    | { source: "embedded"; lyrics: LyricsData | null }
+    | { source: "online"; lyrics: LyricsData }
+    | { source: "embedded-error" | "online-error"; error: unknown };
+  const embeddedLookup: Promise<LookupResult> = readEmbeddedLyrics(
+    track.id,
+    embeddedController.signal,
+  ).then(
+    (lyrics) => ({ source: "embedded", lyrics }),
+    (error: unknown) => ({ source: "embedded-error", error }),
+  );
+  const onlineLookup: Promise<LookupResult> = lookupOnlineLyrics(
+    track,
+    onlineController.signal,
+  ).then(
+    (lyrics) => ({ source: "online", lyrics }),
+    (error: unknown) => ({ source: "online-error", error }),
+  );
+
+  const hasLyrics = (result: LookupResult): result is
+    | { source: "embedded"; lyrics: LyricsData }
+    | { source: "online"; lyrics: LyricsData } =>
+    (result.source === "embedded" && result.lyrics !== null) ||
+    (result.source === "online" && result.lyrics.source !== "none");
+
+  try {
+    const first = await Promise.race([embeddedLookup, onlineLookup]);
+    if (signal.aborted) throw new DOMException("Lyrics lookup aborted.", "AbortError");
+    if (hasLyrics(first)) {
+      if (first.source === "embedded") onlineController.abort();
+      else embeddedController.abort();
+      return first.lyrics;
+    }
+
+    const second = first.source === "embedded" || first.source === "embedded-error"
+      ? await onlineLookup
+      : await embeddedLookup;
+    if (signal.aborted) throw new DOMException("Lyrics lookup aborted.", "AbortError");
+    if (hasLyrics(second)) return second.lyrics;
+
+    const onlineError = first.source === "online-error"
+      ? first.error
+      : second.source === "online-error"
+        ? second.error
+        : null;
+    if (onlineError !== null) throw onlineError;
+    return { source: "none" };
+  } finally {
+    signal.removeEventListener("abort", abortLookups);
+    abortLookups();
+  }
+}
+
+async function lookupOnlineLyrics(
+  track: TrackRecord,
+  signal: AbortSignal,
+): Promise<LyricsData> {
 
   const leadArtist = track.artist.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim();
   const title = cleanTitle(track.title);
@@ -369,7 +431,8 @@ export async function lookupLyrics(
       : Number.POSITIVE_INFINITY;
   const within = (entry: LrclibEntry, tolerance: number) => !track.duration || durationDelta(entry) <= tolerance;
   const hasSynced = (entry: LrclibEntry) =>
-    typeof entry.syncedLyrics === "string" && parseLrc(entry.syncedLyrics).length > 0;
+    typeof entry.syncedLyrics === "string" &&
+    parseLrc(entry.syncedLyrics).length > 0;
   const hasPlain = (entry: LrclibEntry) =>
     typeof entry.plainLyrics === "string" && entry.plainLyrics.trim().length > 0;
   const closest = (entries: LrclibEntry[]) =>
@@ -453,6 +516,10 @@ export async function lookupLyrics(
   return result;
 }
 
+function startsNewVerse(lines: TimedLine[], index: number): boolean {
+  return index > 0 && lines[index].time - lines[index - 1].time >= 6_000;
+}
+
 function formatTime(value: number): string {
   const seconds = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -507,13 +574,14 @@ export default function LyricsOverlay({
   const clearCachedLyrics = usePlayerStore((state) => state.clearCachedLyrics);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const audioElement = usePlayerStore((state) => state.audioElement);
+  const cachedLyrics = usePlayerStore((state) => state.lyricsByTrack[track.id]);
   const [lyrics, setLyrics] = useState<LyricsData | null>(() =>
     track.customLyrics
       ? parseLyricsText(track.customLyrics, "custom")
-      : usePlayerStore.getState().lyricsByTrack[track.id] ?? null,
+      : cachedLyrics ?? null,
   );
   const [loading, setLoading] = useState<boolean>(
-    () => !track.customLyrics && !usePlayerStore.getState().lyricsByTrack[track.id],
+    () => !track.customLyrics && !cachedLyrics,
   );
   const [lookupFailed, setLookupFailed] = useState(false);
   const [lookupAttempt, setLookupAttempt] = useState(0);
@@ -564,7 +632,11 @@ export default function LyricsOverlay({
 
   useEffect(() => {
     const currentTrack = track;
-    if (currentTrack.customLyrics || usePlayerStore.getState().lyricsByTrack[currentTrack.id]) return;
+    const cached = cachedLyrics;
+    if (
+      currentTrack.customLyrics ||
+      (cached && cached.source !== "online-plain")
+    ) return;
 
     let cancelled = false;
     const controller = new AbortController();
@@ -579,13 +651,23 @@ export default function LyricsOverlay({
       setLoading(true);
       setLookupFailed(false);
       try {
-        storeLyrics(await lookupLyrics(currentTrack, controller.signal, {
-          forceRefresh: lookupAttempt > 0,
-        }));
+        const found = await lookupLyrics(currentTrack, controller.signal, {
+          forceRefresh: lookupAttempt > 0 || cached?.source === "online-plain",
+        });
+        if (
+          found.source === "online-plain" &&
+          cached?.source === "online-plain"
+        ) {
+          setLyrics(cached);
+        } else if (found.source !== "none" && found.source !== "disabled") {
+          storeLyrics(found);
+        } else if (!cached) {
+          storeLyrics(found);
+        }
       } catch {
         if (!cancelled) {
           console.warn("Lyrics lookup failed; retry is available.");
-          setLyrics({ source: "none" });
+          if (!cached) setLyrics({ source: "none" });
           setLookupFailed(true);
         }
       } finally {
@@ -599,7 +681,7 @@ export default function LyricsOverlay({
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [lookupAttempt, track, setCachedLyrics]);
+  }, [cachedLyrics, lookupAttempt, track, setCachedLyrics]);
 
   const lineIndex = useMemo(
     () => (lyrics?.lines ? activeLine(lyrics.lines, lyricCurrentTime * 1000) : -1),
@@ -832,11 +914,11 @@ export default function LyricsOverlay({
               <textarea className="lyrics-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("Paste plain lyrics or timestamped LRC lyrics here…")} />
               <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setEditorOpen(false)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit" disabled={savePending}>{savePending ? t("Saving…") : t("Save lyrics")}</button></div>
             </form>
-          ) : loading ? (
+          ) : loading && !lyrics?.lines?.length && !lyrics?.text ? (
             <div className="lyrics-empty"><div className="empty-orb lyrics-loading-orb" /><h3>{t("Searching for lyrics…")}</h3><p>{t("Checking LRCLIB for a match.")}</p></div>
           ) : lyrics?.lines?.length ? (
             <div className="lyrics-track" ref={lyricsTrackRef}>
-              {lyrics.lines.map((line, index) => <button className={`lyrics-line${index === lineIndex ? " active" : ""}${index < lineIndex ? " past" : ""}`} type="button" key={`${line.time}-${index}`} onClick={() => {
+              {lyrics.lines.map((line, index) => <button className={`lyrics-line${index === lineIndex ? " active" : ""}${index < lineIndex ? " past" : ""}${startsNewVerse(lyrics.lines ?? [], index) ? " verse-start" : ""}`} type="button" key={`${line.time}-${index}`} onClick={() => {
                 const audio = usePlayerStore.getState().audioElement;
                 if (audio) audio.currentTime = line.time / 1000;
               }}>{line.text || "\u00a0"}</button>)}
