@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from io import BytesIO
 from contextlib import nullcontext
 import os
 import unittest
@@ -8,6 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 from fastapi import HTTPException
+from starlette.responses import Response
+from starlette.requests import Request
+from PIL import Image
 
 import audio_store
 from auth import SessionStore
@@ -119,6 +124,50 @@ class StorageRangeTests(unittest.TestCase):
                 audio_store.read_range("user/track.mp3", 100_000, 100_099),
                 body[100_000:100_100],
             )
+
+
+class ApiResponseCacheTests(unittest.TestCase):
+    def test_api_get_responses_are_not_cached_between_account_sessions(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/account/photo",
+                "query_string": b"",
+                "headers": [],
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("127.0.0.1", 12345),
+                "http_version": "1.1",
+            }
+        )
+
+        async def call_next(_request):
+            return Response(headers={"Cache-Control": "private, max-age=86400"})
+
+        response = asyncio.run(server.add_security_headers(request, call_next))
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+
+
+class HealthCheckTests(unittest.TestCase):
+    def test_public_health_check_is_available_without_database_access(self) -> None:
+        response = server.healthz()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b"ok")
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+
+class ProfilePhotoValidationTests(unittest.TestCase):
+    def test_rejects_images_exceeding_pixel_limit(self) -> None:
+        output = BytesIO()
+        Image.new("RGB", (3600, 3600)).save(output, format="JPEG")
+
+        with self.assertRaises(HTTPException) as raised:
+            server._validate_profile_photo(output.getvalue())
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("dimensions", raised.exception.detail)
 
 
 if __name__ == "__main__":

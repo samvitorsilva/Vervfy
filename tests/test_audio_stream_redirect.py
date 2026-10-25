@@ -116,11 +116,11 @@ class TrackAudioRedirectTests(unittest.TestCase):
         response = self.client.get("/api/tracks/track-id/stream")
         self.assertEqual(response.status_code, 401)
 
-    def test_track_list_does_not_serialize_audio_and_is_private_cached(self) -> None:
+    def test_track_list_does_not_serialize_audio_and_is_not_cached(self) -> None:
         response = self.client.get("/api/tracks")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["cache-control"], "private, max-age=60")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
         self.assertNotIn("audio_data", response.text)
         self.assertNotIn("must not be serialized", response.text)
 

@@ -116,7 +116,7 @@ class ArtistPhotoApiTests(unittest.TestCase):
             response.headers["location"],
             "https://project.supabase.co/storage/v1/object/sign/songs/photo.jpg?token=x",
         )
-        self.assertEqual(response.headers["cache-control"], "private, max-age=86400")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
         create_signed_url.assert_called_once_with(
             "artist-photos/artist-user-a/vervfytestartist.jpg",
             expires_in=7 * 24 * 60 * 60,

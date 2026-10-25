@@ -562,7 +562,7 @@ function getMetaFromStore(): LibraryMeta {
   };
 }
 
-type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "info" | "drag";
+type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "info" | "drag" | "timer";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -594,6 +594,7 @@ function Icon({ name }: { name: IconName }) {
     visualizer: <><path d="M5 14v5M5 5v5M12 10v9M12 5v2M19 15v4M19 5v7"/><path d="M3 10h4M10 7h4M17 12h4"/></>,
     info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></>,
     drag: <><circle cx="9" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="19" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="19" r="1" fill="currentColor" stroke="none"/></>,
+    timer: <><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5M9 2h6M12 5V2"/></>,
   };
 
   return (
@@ -788,6 +789,8 @@ export default function LibraryApp() {
   const shuffle = usePlayerStore((state) => state.shuffle);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const playbackStatus = usePlayerStore((state) => state.playbackStatus);
+  const sleepTimerEndsAt = usePlayerStore((state) => state.sleepTimerEndsAt);
+  const sleepTimerEndTrackId = usePlayerStore((state) => state.sleepTimerEndTrackId);
   const setTracks = usePlayerStore((state) => state.setTracks);
   const setLibraryMeta = usePlayerStore((state) => state.setLibraryMeta);
   const setQueue = usePlayerStore((state) => state.setQueue);
@@ -798,6 +801,7 @@ export default function LibraryApp() {
   const setShuffle = usePlayerStore((state) => state.setShuffle);
   const setPlaying = usePlayerStore((state) => state.setPlaying);
   const setPlaybackStatus = usePlayerStore((state) => state.setPlaybackStatus);
+  const setSleepTimer = usePlayerStore((state) => state.setSleepTimer);
   const lyricsByTrack = usePlayerStore((state) => state.lyricsByTrack);
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const toggleFavorite = usePlayerStore((state) => state.toggleFavorite);
@@ -808,6 +812,8 @@ export default function LibraryApp() {
   const coverInfoPopoverRef = useRef<HTMLElement>(null);
   const coverInfoReturnFocusRef = useRef<HTMLElement | null>(null);
   const mobilePlayerMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const sleepTimerControlRef = useRef<HTMLDivElement>(null);
+  const sleepTimerPopoverRef = useRef<HTMLElement>(null);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -818,6 +824,8 @@ export default function LibraryApp() {
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [coverInfoTrackId, setCoverInfoTrackId] = useState<string | null>(null);
   const [visualizerOpen, setVisualizerOpen] = useState(false);
+  const [sleepTimerOpen, setSleepTimerOpen] = useState(false);
+  const [sleepTimerRemaining, setSleepTimerRemaining] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [queuePickerOpen, setQueuePickerOpen] = useState(false);
   const [queueSearch, setQueueSearch] = useState("");
@@ -1830,6 +1838,49 @@ export default function LibraryApp() {
   }, [queueOpen]);
 
   useEffect(() => {
+    if (!sleepTimerEndsAt) return;
+    let completed = false;
+    const updateRemaining = () => {
+      const remaining = Math.ceil((sleepTimerEndsAt - Date.now()) / 1000);
+      if (remaining <= 0) {
+        if (completed) return;
+        completed = true;
+        usePlayerStore.getState().audioElement?.pause();
+        setSleepTimer(null, null);
+        setPlaying(false);
+        setPlaybackStatus("paused");
+        setSleepTimerRemaining(0);
+        return;
+      }
+      setSleepTimerRemaining(remaining);
+    };
+    const interval = window.setInterval(updateRemaining, 1000);
+    return () => window.clearInterval(interval);
+  }, [setPlaybackStatus, setPlaying, setSleepTimer, sleepTimerEndsAt]);
+
+  useEffect(() => {
+    if (!sleepTimerOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !sleepTimerControlRef.current?.contains(event.target) &&
+        !sleepTimerPopoverRef.current?.contains(event.target)
+      ) {
+        setSleepTimerOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSleepTimerOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [sleepTimerOpen]);
+
+  useEffect(() => {
     if (!trackMenu) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!(event.target instanceof Element)) return;
@@ -2289,7 +2340,19 @@ export default function LibraryApp() {
       setPlaybackStatus(attempt?.failed ? "failed" : "paused");
       if (navigator.mediaSession) navigator.mediaSession.playbackState = "paused";
     };
-    const onEnded = () => nextRef.current(true);
+    const onEnded = () => {
+      const state = usePlayerStore.getState();
+      if (
+        state.sleepTimerEndTrackId &&
+        state.sleepTimerEndTrackId === state.queue[state.queueIndex]
+      ) {
+        state.setSleepTimer(null, null);
+        state.setPlaying(false);
+        state.setPlaybackStatus("paused");
+        return;
+      }
+      nextRef.current(true);
+    };
     const onError = () => handleAudioError(audioElement);
     audioElement.addEventListener("timeupdate", updatePlayback);
     audioElement.addEventListener("timeupdate", onPlaybackProgress);
@@ -3388,6 +3451,81 @@ export default function LibraryApp() {
           <button className={`icon-btn player-control-lyrics${lyricsOpen ? " on" : ""}`} type="button" title={t("Lyrics (L)")} aria-label={t("Lyrics")} aria-pressed={lyricsOpen} onClick={() => setLyricsOpen(true)}><Icon name="lyrics" /></button>
           <button className={`icon-btn player-control-visualizer${visualizerOpen ? " on" : ""}`} type="button" title={t("Visualizer (V)")} aria-label={t("Visualizer")} aria-pressed={visualizerOpen} onClick={() => setVisualizerOpen(true)}><Icon name="visualizer" /></button>
           <button className={`icon-btn player-control-queue${queueOpen ? " on" : ""}`} type="button" title={t("Queue")} aria-label={t("Queue")} aria-pressed={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><Icon name="queue" /></button>
+          <div className="sleep-timer-control" ref={sleepTimerControlRef}>
+            <button
+              className={`icon-btn player-control-sleep-timer${sleepTimerEndsAt || sleepTimerEndTrackId ? " on" : ""}`}
+              type="button"
+              title={t("Sleep timer")}
+              aria-label={t("Sleep timer")}
+              aria-haspopup="dialog"
+              aria-expanded={sleepTimerOpen}
+              aria-controls="sleep-timer-options"
+              aria-pressed={Boolean(sleepTimerEndsAt || sleepTimerEndTrackId)}
+              disabled={!currentTrack}
+              onClick={() => setSleepTimerOpen((open) => !open)}
+            >
+              <Icon name="timer" />
+            </button>
+            {sleepTimerOpen
+              ? createPortal(
+                  <section
+                    id="sleep-timer-options"
+                    ref={sleepTimerPopoverRef}
+                    className="sleep-timer-popover"
+                    role="dialog"
+                    aria-label={t("Sleep timer")}
+                  >
+                    <h3>{t("Sleep timer")}</h3>
+                    <p className="sleep-timer-status" aria-live="polite">
+                      {sleepTimerEndTrackId
+                        ? t("At end of track")
+                        : sleepTimerEndsAt
+                          ? `${t("Time remaining")}: ${formatTime(sleepTimerRemaining)}`
+                          : t("No timer set")}
+                    </p>
+                    <div className="sleep-timer-options">
+                      {[5, 10, 15, 30, 45, 60].map((minutes) => (
+                        <button
+                          type="button"
+                          className="sleep-timer-option"
+                          key={minutes}
+                          onClick={() => {
+                            setSleepTimerRemaining(minutes * 60);
+                            setSleepTimer(Date.now() + minutes * 60_000, null);
+                            setSleepTimerOpen(false);
+                          }}
+                        >
+                          {t(`${minutes} minutes`)}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="sleep-timer-option"
+                        onClick={() => {
+                          if (currentTrack) setSleepTimer(null, currentTrack.id);
+                          setSleepTimerOpen(false);
+                        }}
+                      >
+                        {t("At end of track")}
+                      </button>
+                    </div>
+                    {sleepTimerEndsAt || sleepTimerEndTrackId ? (
+                      <button
+                        className="sleep-timer-cancel"
+                        type="button"
+                        onClick={() => {
+                          setSleepTimer(null, null);
+                          setSleepTimerOpen(false);
+                        }}
+                      >
+                        {t("Turn off timer")}
+                      </button>
+                    ) : null}
+                  </section>,
+                  document.body,
+                )
+              : null}
+          </div>
           <button
             className={`icon-btn player-control-offline${currentTrack?.offlineUrl ? " on" : ""}`}
             type="button"

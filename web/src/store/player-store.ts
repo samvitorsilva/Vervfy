@@ -65,6 +65,8 @@ interface PlayerStore {
   shuffle: boolean;
   isPlaying: boolean;
   playbackStatus: PlaybackStatus;
+  sleepTimerEndsAt: number | null;
+  sleepTimerEndTrackId: string | null;
   setAudioElement: (audioElement: HTMLAudioElement | null) => void;
   setTracks: (tracks: TrackRecord[]) => void;
   setLibraryMeta: (favorites: string[], playlists: PlaylistRecord[]) => void;
@@ -76,6 +78,7 @@ interface PlayerStore {
   setShuffle: (shuffle: boolean) => void;
   setPlaying: (isPlaying: boolean) => void;
   setPlaybackStatus: (playbackStatus: PlaybackStatus) => void;
+  setSleepTimer: (endsAt: number | null, endTrackId: string | null) => void;
   toggleFavorite: (trackId: string) => void;
   setPlaylists: (playlists: PlaylistRecord[]) => void;
   setTrackLyrics: (trackId: string, lyrics: string) => void;
@@ -96,6 +99,8 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   shuffle: false,
   isPlaying: false,
   playbackStatus: "paused",
+  sleepTimerEndsAt: null,
+  sleepTimerEndTrackId: null,
   setAudioElement: (audioElement) => set({ audioElement }),
   setTracks: (tracks) => set({ tracks }),
   setLibraryMeta: (favorites, playlists) => {
@@ -121,6 +126,8 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   setShuffle: (shuffle) => set({ shuffle }),
   setPlaying: (isPlaying) => set({ isPlaying }),
   setPlaybackStatus: (playbackStatus) => set({ playbackStatus }),
+  setSleepTimer: (sleepTimerEndsAt, sleepTimerEndTrackId) =>
+    set({ sleepTimerEndsAt, sleepTimerEndTrackId }),
   toggleFavorite: (trackId) =>
     set((state) => ({
       tracks: state.tracks.map((track) =>

@@ -56,6 +56,53 @@ class WikipediaArtistProfileLanguageTests(unittest.TestCase):
                 self.assertEqual(profile["bio"], extract)
                 self.assertEqual(requests[0].url.host, host)
 
+    def test_english_profile_is_used_when_requested_language_has_no_entry(self) -> None:
+        for language, localized_host in (
+            ("pt-BR", "pt.wikipedia.org"),
+            ("fr", "fr.wikipedia.org"),
+            ("es", "es.wikipedia.org"),
+        ):
+            with self.subTest(language=language):
+                requests: list[httpx.Request] = []
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    requests.append(request)
+                    if request.url.host == localized_host:
+                        return httpx.Response(404)
+                    return httpx.Response(
+                        200,
+                        json={
+                            "type": "standard",
+                            "title": "Example Artist",
+                            "description": "American singer",
+                            "extract": (
+                                "Example Artist is an American singer and songwriter."
+                            ),
+                            "content_urls": {
+                                "desktop": {
+                                    "page": "https://en.wikipedia.org/wiki/Example_Artist"
+                                }
+                            },
+                        },
+                    )
+
+                with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+                    profile = server._fetch_wikipedia_artist_profile(
+                        client, "Example Artist", language
+                    )
+
+                self.assertIsNotNone(profile)
+                assert profile is not None
+                self.assertEqual(
+                    profile["bio"],
+                    "Example Artist is an American singer and songwriter.",
+                )
+                self.assertEqual(profile["source"], "Wikipedia")
+                self.assertEqual(
+                    [request.url.host for request in requests],
+                    [localized_host, localized_host, "en.wikipedia.org"],
+                )
+
 
 class VerifiedArtistProfileLanguageTests(unittest.TestCase):
     def test_all_verified_profile_copy_is_available_in_each_app_language(self) -> None:

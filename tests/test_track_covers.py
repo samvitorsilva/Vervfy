@@ -232,9 +232,7 @@ class TrackCoverApiTests(unittest.TestCase):
         create_signed_url.assert_called_once_with(
             "covers/user-a/owned-track.jpg", expires_in=7 * 24 * 60 * 60
         )
-        self.assertEqual(
-            response.headers["cache-control"], "private, max-age=86400"
-        )
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
 
     def test_cover_lookup_returns_saved_remote_url(self) -> None:
         self.library.get("owned-track").cover_source = "musicbrainz"

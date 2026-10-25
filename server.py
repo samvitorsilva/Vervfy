@@ -210,21 +210,8 @@ async def add_security_headers(request: Request, call_next):
         "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
     )
     response.headers.setdefault("Content-Security-Policy-Report-Only", CSP_REPORT_ONLY)
-    if (
-        request.method == "GET"
-        and request.url.path.startswith("/api/")
-        and response.status_code < 400
-        and "cache-control" not in response.headers
-    ):
-        path = request.url.path
-        is_image = (
-            path == "/api/account/photo"
-            or path == "/api/artists/photo"
-            or (path.startswith("/api/tracks/") and path.endswith("/cover"))
-        )
-        response.headers["Cache-Control"] = (
-            "private, max-age=86400" if is_image else "private, max-age=60"
-        )
+    if request.method == "GET" and request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store"
     if https_only:
         response.headers.setdefault("Strict-Transport-Security", "max-age=15552000")
     return response
@@ -253,6 +240,8 @@ USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
 MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
+MAX_PROFILE_PHOTO_DIMENSION = 8192
+MAX_PROFILE_PHOTO_PIXELS = 12_000_000
 MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
 MAX_TRACK_COVER_DIMENSION = 8192
 MAX_TRACK_COVER_PIXELS = 12_000_000
@@ -950,51 +939,64 @@ def _fetch_wikipedia_artist_profile(
     name: str,
     language: ArtistProfileLanguage = "en",
 ) -> dict[str, str] | None:
-    """Direct summary first, then a title-constrained Wikipedia search."""
-    wiki_language = {"en": "en", "pt-BR": "pt", "fr": "fr", "es": "es"}[language]
-    wiki_root = f"https://{wiki_language}.wikipedia.org"
-    try:
-        response = client.get(
-            f"{wiki_root}/api/rest_v1/page/summary/{quote(name, safe='')}"
-        )
-        if response.status_code == 200:
-            profile = _wikipedia_summary_to_profile(response.json(), name, language)
-            if profile:
-                return profile
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-        log.warning("Wikipedia summary lookup failed for %r: %s", name, exc)
-
-    try:
-        search = client.get(
-            f"{wiki_root}/w/api.php",
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": name,
-                "srlimit": 5,
-                "format": "json",
-            },
-        )
-        search.raise_for_status()
-        hits = search.json().get("query", {}).get("search", [])
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-        log.warning("Wikipedia search failed for %r: %s", name, exc)
-        return None
-
-    for hit in hits:
-        title = str(hit.get("title", "")).strip()
-        if not title or not _wiki_title_matches(title, name):
-            continue
+    """Prefer the requested Wikipedia, then fall back to English."""
+    languages: tuple[ArtistProfileLanguage, ...] = (
+        (language, "en") if language != "en" else ("en",)
+    )
+    for profile_language in languages:
+        wiki_language = {
+            "en": "en",
+            "pt-BR": "pt",
+            "fr": "fr",
+            "es": "es",
+        }[profile_language]
+        wiki_root = f"https://{wiki_language}.wikipedia.org"
         try:
             response = client.get(
-                f"{wiki_root}/api/rest_v1/page/summary/{quote(title, safe='')}"
+                f"{wiki_root}/api/rest_v1/page/summary/{quote(name, safe='')}"
             )
-            response.raise_for_status()
-            profile = _wikipedia_summary_to_profile(response.json(), name, language)
-            if profile:
-                return profile
+            if response.status_code == 200:
+                profile = _wikipedia_summary_to_profile(
+                    response.json(), name, profile_language
+                )
+                if profile:
+                    return profile
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            log.warning("Wikipedia search-hit summary failed for %r: %s", title, exc)
+            log.warning("Wikipedia summary lookup failed for %r: %s", name, exc)
+
+        try:
+            search = client.get(
+                f"{wiki_root}/w/api.php",
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": name,
+                    "srlimit": 5,
+                    "format": "json",
+                },
+            )
+            search.raise_for_status()
+            hits = search.json().get("query", {}).get("search", [])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            log.warning("Wikipedia search failed for %r: %s", name, exc)
+            continue
+
+        for hit in hits:
+            title = str(hit.get("title", "")).strip()
+            if not title or not _wiki_title_matches(title, name):
+                continue
+            try:
+                response = client.get(
+                    f"{wiki_root}/api/rest_v1/page/summary/{quote(title, safe='')}"
+                )
+                response.raise_for_status()
+                profile = _wikipedia_summary_to_profile(
+                    response.json(), name, profile_language
+                )
+                if profile:
+                    return profile
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+                log.warning("Wikipedia search-hit summary failed for %r: %s", title, exc)
     return None
 
 
@@ -1483,6 +1485,18 @@ async def upload_account_photo(
 def _validate_profile_photo(photo_data: bytes) -> str:
     try:
         with Image.open(BytesIO(photo_data)) as image:
+            width, height = image.size
+            if (
+                width <= 0
+                or height <= 0
+                or width > MAX_PROFILE_PHOTO_DIMENSION
+                or height > MAX_PROFILE_PHOTO_DIMENSION
+                or width * height > MAX_PROFILE_PHOTO_PIXELS
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Profile photo dimensions exceed the configured limit",
+                )
             image.verify()
             image_format = (image.format or "").upper()
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError):

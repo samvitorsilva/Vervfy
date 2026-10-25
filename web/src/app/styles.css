@@ -1005,6 +1005,27 @@ span.artist-photo{
 .now-extra .icon-btn:hover{ color:#fff; background:rgba(255,255,255,.2); }
 .now-extra .icon-btn.on{ color:var(--cyan); background:rgba(84,232,212,.16); }
 .now-extra .icon-btn svg{ width:18px; height:18px; }
+.sleep-timer-control{ position:relative; flex:0 0 auto; }
+.sleep-timer-popover{
+  position:fixed; z-index:120; right:24px; bottom:calc(var(--player-height) + 34px);
+  width:min(260px, calc(100vw - 24px)); padding:16px;
+  border:1px solid var(--border); border-radius:16px;
+  color:var(--text); background:rgba(20,22,32,.98);
+  box-shadow:0 16px 44px rgba(0,0,0,.48), inset 0 1px 0 rgba(255,255,255,.08);
+  backdrop-filter:blur(20px);
+}
+.sleep-timer-popover h3{ margin:0; font-size:14px; }
+.sleep-timer-status{ margin:6px 0 12px; color:var(--text-dim); font-size:12px; }
+.sleep-timer-options{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:6px; }
+.sleep-timer-option,.sleep-timer-cancel{
+  min-height:34px; border:1px solid var(--border); border-radius:9px;
+  color:var(--text-mid); background:rgba(255,255,255,.045);
+  font:600 11px/1.2 var(--font-body); cursor:pointer;
+}
+.sleep-timer-option:hover,.sleep-timer-cancel:hover{
+  color:var(--cyan); border-color:rgba(84,232,212,.42); background:rgba(84,232,212,.09);
+}
+.sleep-timer-cancel{ width:100%; margin-top:9px; }
 .vol-wrap{ display:flex; align-items:center; gap:6px; width:110px; }
 .vol-track{ position:relative; flex:1; height:5px; border-radius:99px; background:rgba(255,255,255,0.1); cursor:pointer; }
 .vol-fill{ position:absolute; left:0; top:0; bottom:0; border-radius:99px; background:var(--text-mid); }
@@ -1542,6 +1563,7 @@ span.artist-photo{
     /* Dock, player gap, safe area, and breathing room. */
     --mobile-player-clear:calc(var(--rail-h) + var(--rail-inset) + var(--nowbar-gap) + var(--player-height) + var(--safe-bottom) + 16px);
   }
+  .sleep-timer-popover{ right:12px; bottom:calc(var(--mobile-player-clear) + 12px); }
   body{ overflow:hidden; }
   .shell{ display:block; }
   .rail{
@@ -1685,11 +1707,11 @@ span.artist-photo{
   .time{ width:32px; font-size:10px; }
   .now-extra{ flex:0 0 auto; gap:0; width:auto; }
   .now-artist{ display:none; }
-  /* Keep lyrics, queue, offline download, and mute reachable; hide viz to save width.
+  /* Keep lyrics, queue, sleep timer, offline download, and mute reachable; hide viz to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
-  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-offline):not(.player-control-mute){ display:none; }
+  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-sleep-timer):not(.player-control-offline):not(.player-control-mute){ display:none; }
   .now-extra .player-control-offline{ display:flex; width:28px; height:28px; }
   .now-extra .player-control-mute{ display:flex; width:28px; height:28px; }
   .player-control-mute svg{ width:17px; height:17px; }
@@ -1782,8 +1804,8 @@ span.artist-photo{
   body:has(#nowbar:not(.hidden)) .side-panel{ padding-bottom:var(--mobile-player-clear); }
 }
 @media (max-width:480px){
-  /* Keep lyrics, offline download, cover info, and mute available on narrow phones; hide queue to save width. */
-  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-offline):not(.player-control-mute){ display:none; }
+  /* Keep lyrics, sleep timer, offline download, cover info, and mute available on narrow phones; hide queue to save width. */
+  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-sleep-timer):not(.player-control-offline):not(.player-control-mute){ display:none; }
   .now-track{ width:min(44%, 150px); }
   .view-count{ display:none; }
   .artist-info, .artist-hero{ padding-inline:16px; }

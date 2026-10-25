@@ -136,6 +136,40 @@ test("track three-dots menu stays within the viewport", async ({ page }) => {
   await expect(menu.getByRole("menuitem", { name: "Remove from library" })).toBeVisible();
 });
 
+test("sleep timer can be scheduled and cancelled from the player", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic timer test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "sleep-timer", 59);
+  await trackCard.click();
+
+  const timerButton = page.getByRole("button", { name: "Sleep timer" });
+  await expect(timerButton).toBeEnabled();
+  await timerButton.click();
+  const timerDialog = page.getByRole("dialog", { name: "Sleep timer" });
+  await timerDialog.getByRole("button", { name: "10 minutes" }).click();
+  await expect(timerButton).toHaveAttribute("aria-pressed", "true");
+
+  await timerButton.click();
+  await expect(timerDialog.getByText(/Time remaining:/)).toBeVisible();
+  await timerDialog.getByRole("button", { name: "Turn off timer" }).click();
+  await expect(timerButton).toHaveAttribute("aria-pressed", "false");
+
+  await timerButton.click();
+  await timerDialog.getByRole("button", { name: "At end of track" }).click();
+  await expect(timerButton).toHaveAttribute("aria-pressed", "true");
+  await page.locator("audio").evaluate((element) => {
+    element.dispatchEvent(new Event("ended"));
+  });
+  await expect(timerButton).toHaveAttribute("aria-pressed", "false");
+});
+
 test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   const response = await page.goto("/login");
   const csp = response?.headers()["content-security-policy"] ?? "";
@@ -1051,28 +1085,26 @@ test("playback recovers from a transient media request failure without changing 
     data: { count: 1 },
   });
 
-  let failedRequests = 0;
   let streamRedirects = 0;
   page.on("response", (response) => {
-    if (
-      response.url().includes("/storage/v1/object/sign/songs/") &&
-      response.status() === 503
-    ) {
-      failedRequests += 1;
-    }
     if (/\/api\/tracks\/playwright-track-\d+\/stream$/.test(response.url())) {
       streamRedirects += 1;
     }
   });
 
+  const failedMediaResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes("/storage/v1/object/sign/songs/") &&
+      response.status() === 503,
+  );
   await trackCard.click();
+  expect((await failedMediaResponse).status()).toBe(503);
   const audio = page.locator("audio");
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(0);
   await expect(page.locator("#nowbar")).toHaveAttribute("data-playback-status", "playing");
   await expect(page.locator(".now-title")).toHaveText("transient-network");
-  expect(failedRequests).toBe(1);
   await expect
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
     .toBeGreaterThan(1);
