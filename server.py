@@ -605,6 +605,227 @@ _VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
     },
 }
 
+_VERIFIED_ARTIST_PROFILE_TRANSLATIONS: dict[
+    str, dict[str, dict[str, str]]
+] = {
+    "pt-BR": {
+        "tatemcrae": {
+            "highlights": "Cantora, compositora e dançarina canadense.",
+        },
+        "morada": {
+            "highlights": "Formada em Fernandópolis (SP), em 2009.",
+        },
+        "tommybueno": {
+            "highlights": "Entre seus lançamentos estão “Visionario” e “Atmósfera”.",
+        },
+        "kallysmashupcast": {
+            "highlights": "Grupo responsável pelas músicas da série “KALLY'S Mashup”, da Nickelodeon.",
+        },
+        "viclucas": {
+            "genre": "Afrobeat",
+            "highlights": "Mistura influências da Nigéria, da África do Sul e dos Estados Unidos.",
+        },
+        "kaimalachi": {
+            "highlights": "Projeto criado, produzido e dirigido por Tim Vishnevskiy.",
+        },
+        "ajvitanza": {
+            "genre": "Pop",
+            "highlights": "Lançou o EP de estreia “Plastic Heart”, com nove faixas.",
+        },
+        "mielsanmarcos": {
+            "highlights": "Formada em 2000 pelos irmãos Josh, Luis e Samy Morales.",
+        },
+        "gio": {
+            "highlights": "Traz influências do gospel e da poesia para um som moderno de pop cristão e hip-hop.",
+        },
+        "thekidlaroi": {
+            "highlights": "Cantor, rapper e compositor australiano conhecido mundialmente por “Stay”.",
+        },
+        "shawnmendes": {
+            "highlights": "Ganhou público compartilhando versões de músicas na internet antes de lançar seu primeiro EP em 2014.",
+        },
+        "maroon5": {
+            "highlights": "A banda se chamava Kara’s Flowers antes de adotar o nome Maroon 5.",
+        },
+        "theneighborhood": {
+            "highlights": "Banda conhecida por músicas como “Sweater Weather” e “Daddy Issues”.",
+        },
+        "theneighbourhood": {
+            "highlights": "Banda conhecida por músicas como “Sweater Weather” e “Daddy Issues”.",
+        },
+    },
+    "fr": {
+        "tatemcrae": {
+            "bio": "Tate McRae est une chanteuse, compositrice et danseuse canadienne. Elle s’est d’abord fait connaître comme danseuse avant de lancer sa carrière musicale.",
+            "genre": "Pop",
+            "highlights": "Chanteuse, compositrice et danseuse canadienne.",
+        },
+        "morada": {
+            "bio": "MORADA est un groupe chrétien contemporain brésilien formé en 2009 à Fernandópolis, dans l’État de São Paulo.",
+            "genre": "Musique chrétienne contemporaine",
+            "highlights": "Formé à Fernandópolis, dans l’État de São Paulo, en 2009.",
+        },
+        "tommybueno": {
+            "bio": "Tommy Bueno est un artiste basé à Buenos Aires, dont le catalogue comprend les sorties Visionario et Atmósfera.",
+            "highlights": "Son catalogue comprend les sorties Visionario et Atmósfera.",
+        },
+        "obros": {
+            "bio": "O'Bros est un duo allemand de hip-hop chrétien originaire de Munich. Leur musique associe le hip-hop à la foi chrétienne.",
+            "genre": "Hip-hop chrétien",
+            "highlights": "Duo munichois connu pour associer le hip-hop à la foi chrétienne.",
+        },
+        "kallysmashupcast": {
+            "bio": "KALLY'S Mashup Cast est l’ensemble crédité pour la musique de la série télévisée KALLY'S Mashup de Nickelodeon.",
+            "highlights": "Ensemble crédité pour la musique de la série télévisée KALLY'S Mashup de Nickelodeon.",
+        },
+        "viclucas": {
+            "bio": "Vic Lucas est un artiste d’afrobeat dont la musique puise dans les influences nigérianes, sud-africaines et américaines, avec la foi et la gratitude au cœur de son œuvre.",
+            "genre": "Afrobeat",
+            "highlights": "Sa musique mêle des influences nigérianes, sud-africaines et américaines.",
+        },
+        "kaimalachi": {
+            "bio": "Kai Malachi est un projet de gospel cinématographique, de soul et de R&B alternatif créé, produit et dirigé par Tim Vishnevskiy.",
+            "genre": "Gospel cinématographique, soul et R&B alternatif",
+            "highlights": "Projet créé, produit et dirigé par Tim Vishnevskiy.",
+        },
+        "ajvitanza": {
+            "bio": "AJ Vitanza est un artiste pop. Son premier EP, Plastic Heart, comporte neuf titres.",
+            "genre": "Pop",
+            "highlights": "A sorti le premier EP de neuf titres Plastic Heart.",
+        },
+        "mielsanmarcos": {
+            "bio": "Miel San Marcos est un groupe chrétien guatémaltèque fondé en 2000 par les frères Josh, Luis et Samy Morales.",
+            "genre": "Musique chrétienne contemporaine",
+            "highlights": "Fondé en 2000 par les frères Josh, Luis et Samy Morales.",
+        },
+        "josephobrien": {
+            "bio": "Joseph O'Brien est un auteur-compositeur-interprète basé à Nashville et signé chez Gotee Records. Sa musique cherche à encourager la foi de son public.",
+            "genre": "Musique chrétienne",
+            "highlights": "Auteur-compositeur-interprète basé à Nashville et artiste de Gotee Records.",
+        },
+        "stringsheart": {
+            "bio": "Strings & Heart est un groupe chrétien indépendant composé de trois frères : Angelo, Michael et Eric Espinosa.",
+            "genre": "Indie chrétien",
+            "highlights": "Groupe composé des frères Angelo, Michael et Eric Espinosa.",
+        },
+        "gio": {
+            "bio": "gio. est un artiste de pop chrétienne et de hip-hop de la région de Boston. Marqué dès son plus jeune âge par le gospel et la poésie, il souhaite apporter une approche moderne et créative à la musique chrétienne.",
+            "genre": "Pop chrétienne, hip-hop",
+            "highlights": "Associe les influences du gospel et de la poésie à un son moderne de pop chrétienne et de hip-hop.",
+        },
+        "thekidlaroi": {
+            "bio": "The Kid LAROI (Charlton Howard) est un chanteur, rappeur et auteur-compositeur australien. Son single Stay a connu un succès international.",
+            "genre": "Pop, hip-hop",
+            "highlights": "Chanteur, rappeur et auteur-compositeur australien connu dans le monde entier pour Stay.",
+        },
+        "shawnmendes": {
+            "bio": "Shawn Mendes est un chanteur et auteur-compositeur canadien qui s’est d’abord fait connaître en partageant des reprises en ligne, avant de sortir son premier EP en 2014.",
+            "genre": "Pop",
+            "highlights": "S’est fait connaître en partageant des reprises en ligne avant de sortir son premier EP en 2014.",
+        },
+        "maroon5": {
+            "bio": "Maroon 5 est un groupe de pop-rock américain formé à Los Angeles. Le groupe s’appelait Kara’s Flowers avant d’adopter le nom Maroon 5 et de connaître le succès avec Songs About Jane.",
+            "genre": "Pop-rock",
+            "highlights": "Le groupe s’appelait Kara’s Flowers avant d’adopter le nom Maroon 5.",
+        },
+        "theneighborhood": {
+            "bio": "The Neighbourhood est un groupe de rock alternatif américain formé en Californie en 2011. Il est notamment connu pour les chansons Sweater Weather et Daddy Issues.",
+            "genre": "Rock alternatif",
+            "highlights": "Groupe connu notamment pour Sweater Weather et Daddy Issues.",
+        },
+        "theneighbourhood": {
+            "bio": "The Neighbourhood est un groupe de rock alternatif américain formé en Californie en 2011. Il est notamment connu pour les chansons Sweater Weather et Daddy Issues.",
+            "genre": "Rock alternatif",
+            "highlights": "Groupe connu notamment pour Sweater Weather et Daddy Issues.",
+        },
+    },
+    "es": {
+        "tatemcrae": {
+            "bio": "Tate McRae es una cantante, compositora y bailarina canadiense. Primero se dio a conocer como bailarina antes de iniciar su carrera musical.",
+            "genre": "Pop",
+            "highlights": "Cantante, compositora y bailarina canadiense.",
+        },
+        "morada": {
+            "bio": "MORADA es una banda brasileña de música cristiana contemporánea, formada en 2009 en Fernandópolis, estado de São Paulo.",
+            "genre": "Música cristiana contemporánea",
+            "highlights": "Se formó en Fernandópolis, estado de São Paulo, en 2009.",
+        },
+        "tommybueno": {
+            "bio": "Tommy Bueno es un artista radicado en Buenos Aires cuyo catálogo incluye los lanzamientos Visionario y Atmósfera.",
+            "highlights": "Su catálogo incluye los lanzamientos Visionario y Atmósfera.",
+        },
+        "obros": {
+            "bio": "O'Bros es un dúo alemán de hip-hop cristiano de Múnich. Su música combina el hip-hop con la fe cristiana.",
+            "genre": "Hip-hop cristiano",
+            "highlights": "Dúo de Múnich conocido por combinar el hip-hop con la fe cristiana.",
+        },
+        "kallysmashupcast": {
+            "bio": "KALLY'S Mashup Cast es el conjunto acreditado por la música de la serie de televisión KALLY'S Mashup de Nickelodeon.",
+            "highlights": "Conjunto acreditado por la música de la serie de televisión KALLY'S Mashup de Nickelodeon.",
+        },
+        "viclucas": {
+            "bio": "Vic Lucas es un artista de afrobeat cuya música combina influencias de Nigeria, Sudáfrica y Estados Unidos, con la fe y la gratitud como pilares.",
+            "genre": "Afrobeat",
+            "highlights": "Su música combina influencias de Nigeria, Sudáfrica y Estados Unidos.",
+        },
+        "kaimalachi": {
+            "bio": "Kai Malachi es un proyecto de gospel cinematográfico, soul y R&B alternativo creado, producido y dirigido por Tim Vishnevskiy.",
+            "genre": "Gospel cinematográfico, soul y R&B alternativo",
+            "highlights": "Proyecto creado, producido y dirigido por Tim Vishnevskiy.",
+        },
+        "ajvitanza": {
+            "bio": "AJ Vitanza es un artista pop. Su EP debut, Plastic Heart, contiene nueve canciones.",
+            "genre": "Pop",
+            "highlights": "Publicó el EP debut de nueve canciones Plastic Heart.",
+        },
+        "mielsanmarcos": {
+            "bio": "Miel San Marcos es una banda cristiana guatemalteca fundada en 2000 por los hermanos Josh, Luis y Samy Morales.",
+            "genre": "Música cristiana contemporánea",
+            "highlights": "Fundada en 2000 por los hermanos Josh, Luis y Samy Morales.",
+        },
+        "josephobrien": {
+            "bio": "Joseph O'Brien es un cantante y compositor radicado en Nashville y artista de Gotee Records. Su música busca animar a quienes la escuchan en su fe.",
+            "genre": "Música cristiana",
+            "highlights": "Cantante y compositor radicado en Nashville y artista de Gotee Records.",
+        },
+        "stringsheart": {
+            "bio": "Strings & Heart es una banda cristiana independiente formada por tres hermanos: Angelo, Michael y Eric Espinosa.",
+            "genre": "Indie cristiano",
+            "highlights": "Banda formada por los hermanos Angelo, Michael y Eric Espinosa.",
+        },
+        "gio": {
+            "bio": "gio. es un artista de pop cristiano y hip-hop de las afueras de Boston. Influido desde pequeño por el gospel y la poesía, busca aportar un enfoque moderno y creativo a la música cristiana.",
+            "genre": "Pop cristiano, hip-hop",
+            "highlights": "Combina influencias del gospel y la poesía con un sonido moderno de pop cristiano y hip-hop.",
+        },
+        "thekidlaroi": {
+            "bio": "The Kid LAROI (Charlton Howard) es un cantante, rapero y compositor australiano. Su sencillo Stay alcanzó el éxito internacional.",
+            "genre": "Pop, hip-hop",
+            "highlights": "Cantante, rapero y compositor australiano conocido internacionalmente por Stay.",
+        },
+        "shawnmendes": {
+            "bio": "Shawn Mendes es un cantante y compositor canadiense que primero reunió seguidores al compartir versiones de canciones en internet, antes de publicar su EP debut en 2014.",
+            "genre": "Pop",
+            "highlights": "Se dio a conocer al compartir versiones en internet antes de publicar su primer EP en 2014.",
+        },
+        "maroon5": {
+            "bio": "Maroon 5 es una banda estadounidense de pop rock formada en Los Ángeles. Antes de adoptar el nombre Maroon 5 y triunfar con Songs About Jane, el grupo se llamaba Kara’s Flowers.",
+            "genre": "Pop rock",
+            "highlights": "El grupo se llamaba Kara’s Flowers antes de adoptar el nombre Maroon 5.",
+        },
+        "theneighborhood": {
+            "bio": "The Neighbourhood es una banda estadounidense de rock alternativo formada en California en 2011. Entre sus canciones más conocidas están Sweater Weather y Daddy Issues.",
+            "genre": "Rock alternativo",
+            "highlights": "Banda conocida por canciones como Sweater Weather y Daddy Issues.",
+        },
+        "theneighbourhood": {
+            "bio": "The Neighbourhood es una banda estadounidense de rock alternativo formada en California en 2011. Entre sus canciones más conocidas están Sweater Weather y Daddy Issues.",
+            "genre": "Rock alternativo",
+            "highlights": "Banda conocida por canciones como Sweater Weather y Daddy Issues.",
+        },
+    },
+}
+
 
 def _verified_artist_profile(
     name: str, language: ArtistProfileLanguage = "en"
@@ -623,6 +844,11 @@ def _verified_artist_profile(
                 result.update(_VERIFIED_ARTIST_PROFILES_PT.get(profile_key, {}))
                 if result.get("source") == "Wikipedia":
                     result["source"] = "Wikipédia"
+            result.update(
+                _VERIFIED_ARTIST_PROFILE_TRANSLATIONS.get(language, {}).get(
+                    profile_key, {}
+                )
+            )
             if candidate != name.strip():
                 result["lookup_name"] = candidate
             return result
