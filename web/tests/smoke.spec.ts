@@ -185,6 +185,7 @@ test("sleep timer is available from the mobile and tablet player menu", async ({
 
   for (const width of [768, 360]) {
     await page.setViewportSize({ width, height: width === 768 ? 1024 : 812 });
+    await expect(page.locator("#nowbar .player-control-sleep-timer")).toBeHidden();
     await page.locator(".now-track-open").click();
     const player = page.getByRole("dialog", { name: "Now playing" });
     await player.getByRole("button", { name: "More options for mobile-sleep-timer" }).click();

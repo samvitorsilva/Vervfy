@@ -1489,6 +1489,7 @@ span.artist-photo{
   input:not([type="range"]):not([type="file"]):not([type="checkbox"]):not([type="radio"]){ font-size:16px; }
   textarea.lyrics-input{ font-size:16px; }
   .now-extra{ width:auto; flex:0 0 auto; }
+  .nowbar .player-control-sleep-timer{ display:none; }
   .vol-wrap{ display:none; }
   /* 150px was too tight for art + title + like; keep the heart beside the meta */
   .now-track{ width:200px; flex:0 1 200px; gap:10px; }
@@ -1713,11 +1714,11 @@ span.artist-photo{
   .time{ width:32px; font-size:10px; }
   .now-extra{ flex:0 0 auto; gap:0; width:auto; }
   .now-artist{ display:none; }
-  /* Keep lyrics, queue, sleep timer, offline download, and mute reachable; hide viz to save width.
+  /* Keep lyrics, queue, offline download, and mute reachable; hide viz and sleep timer to save width.
      Mute lives inside .vol-wrap, which tablet styles hide entirely — restore a mute-only control. */
   .vol-wrap{ display:flex; width:auto; gap:0; }
   .vol-wrap .vol-track{ display:none; }
-  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-sleep-timer):not(.player-control-offline):not(.player-control-mute){ display:none; }
+  .now-extra .icon-btn:not(.player-control-lyrics):not(.player-control-queue):not(.player-control-offline):not(.player-control-mute){ display:none; }
   .now-extra .player-control-offline{ display:flex; width:28px; height:28px; }
   .now-extra .player-control-mute{ display:flex; width:28px; height:28px; }
   .player-control-mute svg{ width:17px; height:17px; }
@@ -1810,8 +1811,8 @@ span.artist-photo{
   body:has(#nowbar:not(.hidden)) .side-panel{ padding-bottom:var(--mobile-player-clear); }
 }
 @media (max-width:480px){
-  /* Keep lyrics, sleep timer, offline download, cover info, and mute available on narrow phones; hide queue to save width. */
-  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-sleep-timer):not(.player-control-offline):not(.player-control-mute){ display:none; }
+  /* Keep lyrics, offline download, cover info, and mute available on narrow phones; hide queue and sleep timer to save width. */
+  .now-extra .icon-btn:not(.player-control-cover-info):not(.player-control-lyrics):not(.player-control-offline):not(.player-control-mute){ display:none; }
   .now-track{ width:min(44%, 150px); }
   .view-count{ display:none; }
   .artist-info, .artist-hero{ padding-inline:16px; }
