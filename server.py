@@ -48,6 +48,8 @@ from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, Sess
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_file
 import upload_queue
 
+ArtistProfileLanguage = Literal["en", "pt-BR", "fr", "es"]
+
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 SECRET_KEY_PATH = DATA_DIR / ".secret_key"
@@ -605,7 +607,7 @@ _VERIFIED_ARTIST_PROFILES_PT: dict[str, dict[str, str]] = {
 
 
 def _verified_artist_profile(
-    name: str, language: Literal["en", "pt-BR"] = "en"
+    name: str, language: ArtistProfileLanguage = "en"
 ) -> dict[str, str] | None:
     """Return an identity-checked profile for an artist credit, if available."""
     for candidate in _artist_name_candidates(name):
@@ -650,6 +652,20 @@ _MUSIC_PERSON_HINT_PT = re.compile(
     r"gospel|afrobeat|cantautores?)\b",
     re.I,
 )
+_MUSIC_PERSON_HINT_FR = re.compile(
+    r"\b(?:musicien(?:ne|s)?|chanteu(?:r|se|rs|ses)|compositeur(?:ice|s)?|"
+    r"rappeur(?:se|s|ses)?|groupe(?:s)?|guitariste(?:s)?|artiste(?:s)?|"
+    r"producteur(?:rice|s|rices)?|orchestre(?:s)?|ensemble(?:s)?|"
+    r"hip[\s-]?hop|r&b|rock|pop)\b",
+    re.I,
+)
+_MUSIC_PERSON_HINT_ES = re.compile(
+    r"\b(?:m[uú]sico(?:s)?|cantant(?:e|es)|compositor(?:a|es)?|"
+    r"rapero(?:a|s|as)?|banda(?:s)?|grupo(?:s)?|vocalista(?:s)?|"
+    r"productor(?:a|es)?|artista(?:s)?|orquesta(?:s)?|"
+    r"hip[\s-]?hop|r&b|rock|pop)\b",
+    re.I,
+)
 
 
 def _wiki_title_matches(title: str, name: str) -> bool:
@@ -665,7 +681,7 @@ def _first_sentences(value: object, limit: int = 3) -> str:
 
 
 def _wikipedia_summary_to_profile(
-    summary: dict, name: str, language: Literal["en", "pt-BR"] = "en"
+    summary: dict, name: str, language: ArtistProfileLanguage = "en"
 ) -> dict[str, str] | None:
     if summary.get("type") != "standard":
         return None
@@ -673,15 +689,26 @@ def _wikipedia_summary_to_profile(
         return None
     description = str(summary.get("description", ""))
     extract = str(summary.get("extract", ""))
-    music_hint = _MUSIC_PERSON_HINT_PT if language == "pt-BR" else _MUSIC_PERSON_HINT
+    music_hint = {
+        "en": _MUSIC_PERSON_HINT,
+        "pt-BR": _MUSIC_PERSON_HINT_PT,
+        "fr": _MUSIC_PERSON_HINT_FR,
+        "es": _MUSIC_PERSON_HINT_ES,
+    }[language]
     if not music_hint.search(f"{description} {extract}"):
         return None
     bio = _first_sentences(extract)
     if not bio:
         return None
+    source_label = {
+        "en": "Wikipedia",
+        "pt-BR": "Wikipédia",
+        "fr": "Wikipédia",
+        "es": "Wikipedia",
+    }[language]
     profile = {
         "bio": bio,
-        "source": "Wikipédia" if language == "pt-BR" else "Wikipedia",
+        "source": source_label,
         "source_modified": "true",
         "source_url": (
             summary.get("content_urls", {})
@@ -695,10 +722,10 @@ def _wikipedia_summary_to_profile(
 def _fetch_wikipedia_artist_profile(
     client: httpx.Client,
     name: str,
-    language: Literal["en", "pt-BR"] = "en",
+    language: ArtistProfileLanguage = "en",
 ) -> dict[str, str] | None:
     """Direct summary first, then a title-constrained Wikipedia search."""
-    wiki_language = "pt" if language == "pt-BR" else "en"
+    wiki_language = {"en": "en", "pt-BR": "pt", "fr": "fr", "es": "es"}[language]
     wiki_root = f"https://{wiki_language}.wikipedia.org"
     try:
         response = client.get(
@@ -746,7 +773,7 @@ def _fetch_wikipedia_artist_profile(
 
 
 def _lookup_artist_profile(
-    name: str, language: Literal["en", "pt-BR"] = "en"
+    name: str, language: ArtistProfileLanguage = "en"
 ) -> dict[str, str] | None:
     """Return a manually maintained profile or an attributed Wikipedia summary."""
     manual = _verified_artist_profile(name, language)
@@ -1623,7 +1650,7 @@ def _throttle_artist_lookup(user_id: str) -> None:
 @app.get("/api/artists/profile")
 def artist_profile(
     name: str = Query(min_length=1, max_length=200),
-    language: Literal["en", "pt-BR"] = "en",
+    language: ArtistProfileLanguage = "en",
     user=Depends(require_api_user),
 ) -> dict:
     """Return public artist metadata for the detail page, when available."""

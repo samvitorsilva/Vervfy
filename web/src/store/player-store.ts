@@ -80,6 +80,7 @@ interface PlayerStore {
   setPlaylists: (playlists: PlaylistRecord[]) => void;
   setTrackLyrics: (trackId: string, lyrics: string) => void;
   setCachedLyrics: (trackId: string, lyrics: CachedLyrics) => void;
+  clearCachedLyrics: (trackId: string) => void;
 }
 
 export const usePlayerStore = create<PlayerStore>((set) => ({
@@ -137,4 +138,10 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
     set((state) => ({
       lyricsByTrack: { ...state.lyricsByTrack, [trackId]: lyrics },
     })),
+  clearCachedLyrics: (trackId) =>
+    set((state) => {
+      const lyricsByTrack = { ...state.lyricsByTrack };
+      delete lyricsByTrack[trackId];
+      return { lyricsByTrack };
+    }),
 }));

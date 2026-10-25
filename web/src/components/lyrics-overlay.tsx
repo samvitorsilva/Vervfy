@@ -375,6 +375,7 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
     headers: { "Lrclib-Client": "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy)" },
   };
   const response = await fetch(`https://lrclib.net/api/get?${query}`, requestOptions);
+  let providerUnavailable = response.status === 429 || response.status >= 500;
   let exact: LrclibEntry | null = response.ok ? ((await response.json()) as LrclibEntry) : null;
   if (exact && !(sameSong(exact) && within(exact, durationTolerance))) exact = null;
   if (exact?.instrumental === true) return { source: "none" };
@@ -406,8 +407,13 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
         fetch(`https://lrclib.net/api/search?${search}`, requestOptions),
       ),
     );
+    let searchSucceeded = false;
     for (const searchResponse of searchResponses) {
-      if (!searchResponse.ok) continue;
+      if (!searchResponse.ok) {
+        providerUnavailable ||= searchResponse.status === 429 || searchResponse.status >= 500;
+        continue;
+      }
+      searchSucceeded = true;
       const results: unknown = await searchResponse.json();
       if (Array.isArray(results)) {
         for (const entry of results as LrclibEntry[]) {
@@ -416,6 +422,9 @@ export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Pro
           pool.push(entry);
         }
       }
+    }
+    if (!searchSucceeded && providerUnavailable) {
+      throw new Error("Lyrics provider is temporarily unavailable.");
     }
   }
 
@@ -483,6 +492,7 @@ export default function LyricsOverlay({
   const { t } = useLanguage();
   const setTrackLyrics = usePlayerStore((state) => state.setTrackLyrics);
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
+  const clearCachedLyrics = usePlayerStore((state) => state.clearCachedLyrics);
   const isPlaying = usePlayerStore((state) => state.isPlaying);
   const audioElement = usePlayerStore((state) => state.audioElement);
   const [lyrics, setLyrics] = useState<LyricsData | null>(() =>
@@ -493,6 +503,8 @@ export default function LyricsOverlay({
   const [loading, setLoading] = useState<boolean>(
     () => !track.customLyrics && !usePlayerStore.getState().lyricsByTrack[track.id],
   );
+  const [lookupFailed, setLookupFailed] = useState(false);
+  const [lookupAttempt, setLookupAttempt] = useState(0);
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [savePending, setSavePending] = useState(false);
@@ -549,14 +561,18 @@ export default function LyricsOverlay({
       if (cancelled) return;
       setCachedLyrics(currentTrack.id, value);
       setLyrics(value);
+      setLookupFailed(false);
     };
     async function lookup() {
       setLoading(true);
+      setLookupFailed(false);
       try {
         storeLyrics(await lookupLyrics(currentTrack, controller.signal));
-      } catch (error) {
-        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
+      } catch {
+        if (!cancelled) {
+          console.warn("Lyrics lookup failed; retry is available.");
           setLyrics({ source: "none" });
+          setLookupFailed(true);
         }
       } finally {
         clearTimeout(timeout);
@@ -569,7 +585,7 @@ export default function LyricsOverlay({
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [track, setCachedLyrics]);
+  }, [lookupAttempt, track, setCachedLyrics]);
 
   const lineIndex = useMemo(
     () => (lyrics?.lines ? activeLine(lyrics.lines, lyricCurrentTime * 1000) : -1),
@@ -637,6 +653,14 @@ export default function LyricsOverlay({
     if (offset === undefined) return;
     event.preventDefault();
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + offset));
+  }
+
+  function retryLyricsLookup() {
+    clearCachedLyrics(activeTrack.id);
+    setLyrics(null);
+    setLookupFailed(false);
+    setLoading(true);
+    setLookupAttempt((attempt) => attempt + 1);
   }
 
   async function saveLyrics(event: FormEvent<HTMLFormElement>) {
@@ -805,7 +829,7 @@ export default function LyricsOverlay({
           ) : lyrics?.text ? (
             <div className="lyrics-plain"><p>{lyrics.text}</p><button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>{t("Sync to audio")}</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>{t("Edit lyrics")}</button></div>
           ) : (
-            <div className="lyrics-empty"><div className="empty-orb" /><h3>{t(lrclibDisabled ? "Lyrics lookup is disabled." : "No lyrics available")}</h3><p>{t(lrclibDisabled ? "Only your own pasted lyrics are shown." : "Vervfy could not find lyrics for this track. Add your own below.")}</p><button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
+            <div className="lyrics-empty"><div className="empty-orb" /><h3>{lookupFailed ? t("Couldn't load lyrics. Tap to retry.") : t(lrclibDisabled ? "Lyrics lookup is disabled." : "No lyrics available")}</h3><p>{t(lrclibDisabled ? "Only your own pasted lyrics are shown." : "Vervfy could not find lyrics for this track. Add your own below.")}</p>{!lrclibDisabled ? <button className="btn lyrics-paste-btn" type="button" onClick={retryLyricsLookup}>{t("Retry lyrics")}</button> : null}<button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -613,7 +613,7 @@ function Icon({ name }: { name: IconName }) {
 
 interface TrackMenuPortalProps {
   track: TrackRecord;
-  position: { top: number; left: number };
+  anchor: HTMLButtonElement;
   view: LibraryView;
   playlists: PlaylistRecord[];
   offlinePendingId: string | null;
@@ -635,7 +635,7 @@ interface TrackMenuPortalProps {
 
 function TrackMenuPortal({
   track,
-  position,
+  anchor,
   view,
   playlists,
   offlinePendingId,
@@ -655,17 +655,54 @@ function TrackMenuPortal({
   onRemove,
 }: TrackMenuPortalProps) {
   const { t } = useLanguage();
+  const menuRef = useRef<HTMLDivElement>(null);
   const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
   const playlist = playlists.find((item) => item.id === playlistId);
   const inPlaylist = playlist?.trackIds.includes(track.id) ?? false;
   const hasPlaceholderCover = ["placeholder", "unknown", "generated"].includes(track.coverSource ?? "unknown");
 
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const reposition = () => {
+      if (!anchor.isConnected) return;
+      const anchorRect = anchor.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const menuWidth = menu.offsetWidth;
+      const menuHeight = menu.offsetHeight;
+      const below = anchorRect.bottom + 6;
+      const above = anchorRect.top - menuHeight - 6;
+      const top =
+        below + menuHeight <= viewportHeight - 8
+          ? below
+          : above >= 8
+            ? above
+            : Math.max(8, Math.min(below, viewportHeight - menuHeight - 8));
+      const left = Math.max(
+        8,
+        Math.min(anchorRect.right - menuWidth, viewportWidth - menuWidth - 8),
+      );
+      menu.style.top = `${top}px`;
+      menu.style.left = `${left}px`;
+      menu.style.maxHeight = `${Math.max(120, viewportHeight - 16)}px`;
+    };
+    reposition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [anchor]);
+
   return createPortal(
     <div
+      ref={menuRef}
       className="menu track-context-menu"
       role="menu"
       aria-label={`${t("Options for")} ${track.title}`}
-      style={{ top: position.top, left: position.left }}
+      style={{ top: 8, left: 8 }}
       onClick={(event) => event.stopPropagation()}
     >
       <button className="menu-item" role="menuitem" type="button" onClick={onPlayNext}>{t("Play next")}</button>
@@ -785,10 +822,10 @@ export default function LibraryApp() {
   const [queuePickerOpen, setQueuePickerOpen] = useState(false);
   const [queueSearch, setQueueSearch] = useState("");
   const [playlistAddTarget, setPlaylistAddTarget] = useState<string | null>(null);
+  const [playlistAddSearch, setPlaylistAddSearch] = useState("");
   const [trackMenu, setTrackMenu] = useState<{
     trackId: string;
-    top: number;
-    left: number;
+    anchor: HTMLButtonElement;
   } | null>(null);
   const [offlinePendingId, setOfflinePendingId] = useState<string | null>(null);
   const [queueDragIndex, setQueueDragIndex] = useState<number | null>(null);
@@ -2686,28 +2723,24 @@ export default function LibraryApp() {
   const tracksAvailableToAdd = playlistTarget
     ? tracks.filter((track) => !playlistTarget.trackIds.includes(track.id))
     : [];
+  const filteredTracksAvailableToAdd = tracksAvailableToAdd.filter((track) =>
+    `${track.title} ${track.artist} ${track.album}`
+      .toLocaleLowerCase()
+      .includes(playlistAddSearch.trim().toLocaleLowerCase()),
+  );
+
+  function openPlaylistAdd(playlistId: string) {
+    setPlaylistAddSearch("");
+    setPlaylistAddTarget(playlistId);
+  }
 
   function toggleTrackMenu(track: TrackRecord, event: ReactMouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const playlistId = view.startsWith("playlist:") ? view.slice("playlist:".length) : null;
-    const inPlaylist = playlists.find((playlist) => playlist.id === playlistId)?.trackIds.includes(track.id);
-    const itemCount =
-      9 +
-      artistNames(track).length +
-      (inPlaylist ? 1 : 0) +
-      (expandedPlayerOpen && track.coverSource === "musicbrainz" ? 1 : 0);
-    const menuHeight = Math.min(16 + itemCount * 38, window.innerHeight - 16);
-    const top = Math.max(
-      8,
-      Math.min(
-        rect.bottom + 6,
-        window.innerHeight - menuHeight - 8,
-      ),
-    );
-    const left = Math.max(8, Math.min(rect.right - 204, window.innerWidth - 212));
+    const anchor = event.currentTarget;
     setTrackMenu((current) =>
-      current?.trackId === track.id ? null : { trackId: track.id, top, left },
+      current?.trackId === track.id
+        ? null
+        : { trackId: track.id, anchor },
     );
   }
 
@@ -2851,7 +2884,7 @@ export default function LibraryApp() {
           <h3>{t("This playlist is empty")}</h3>
           <p>{tracks.length ? t("Add songs from your library to start building it.") : t("Add music to your library, then come back to build this playlist.")}</p>
           {tracks.length ? (
-            <button className="btn btn-primary" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}>{t("Add from library")}</button>
+            <button className="btn btn-primary" type="button" onClick={() => openPlaylistAdd(playlistForView.id)}>{t("Add from library")}</button>
           ) : (
             <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>{t("Add music")}</button>
           )}
@@ -3233,7 +3266,7 @@ export default function LibraryApp() {
                             const firstTrack = visibleTracks[0];
                             if (firstTrack) playFromList(visibleTracks, firstTrack.id);
                           }}><Icon name="play" /> {t("Play")}</button>
-                          <button className="btn" type="button" onClick={() => setPlaylistAddTarget(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
+                          <button className="btn" type="button" onClick={() => openPlaylistAdd(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
                           <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
                           <button className="btn btn-danger" type="button" onClick={() => {
                             if (!window.confirm(`Delete “${playlistForView.name}”?`)) return;
@@ -3441,7 +3474,7 @@ export default function LibraryApp() {
       {trackMenu && trackMenuTrack ? (
         <TrackMenuPortal
           track={trackMenuTrack}
-          position={{ top: trackMenu.top, left: trackMenu.left }}
+          anchor={trackMenu.anchor}
           view={view}
           playlists={playlists}
           offlinePendingId={offlinePendingId}
@@ -3607,11 +3640,21 @@ export default function LibraryApp() {
       <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
         <div className="queue-picker-card">
           <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
+          <label className="queue-picker-search">
+            <Icon name="search" />
+            <input
+              type="search"
+              value={playlistAddSearch}
+              onChange={(event) => setPlaylistAddSearch(event.target.value)}
+              placeholder={t("Search songs, artists, or albums")}
+              aria-label={t("Search songs, artists, or albums")}
+            />
+          </label>
           <div className="queue-picker-list">
-            {tracksAvailableToAdd.length ? tracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
+            {filteredTracksAvailableToAdd.length ? filteredTracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
               if (playlistAddTarget) addTrackToPlaylist(playlistAddTarget, track.id);
               notify(`Added “${track.title}” to the playlist.`);
-            }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
+            }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracksAvailableToAdd.length ? t("No tracks match your search.") : tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
 const username = process.env.PLAYWRIGHT_USERNAME;
 const password = process.env.PLAYWRIGHT_PASSWORD;
@@ -37,6 +37,7 @@ async function loadMockPlaybackTrack(
   page: Page,
   title: string,
   trackNumber: number,
+  artist = "Vervfy Test Artist",
 ): Promise<Locator> {
   const id = `playwright-track-${trackNumber}`;
   await page.route("**/api/tracks", (route) =>
@@ -46,7 +47,7 @@ async function loadMockPlaybackTrack(
           {
             id,
             title,
-            artist: "Vervfy Test Artist",
+            artist,
             album: "Playwright Test Album",
             duration: 30,
             has_cover: false,
@@ -64,6 +65,76 @@ async function loadMockPlaybackTrack(
   await expect(trackCard).toBeVisible();
   return trackCard;
 }
+
+test("playlist add-songs dialog searches and filters the library", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playlist test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await loadMockPlaybackTrack(page, "Miles & Miles", 57, "AJ Vitanza");
+
+  await page.getByRole("button", { name: "Playlists" }).click();
+  await page.getByRole("button", { name: "New playlist" }).first().click();
+  await page.getByLabel("Playlist name").fill("Searchable playlist");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByRole("button", { name: "Add songs" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Add tracks to playlist" });
+  const search = dialog.getByRole("searchbox", { name: "Search songs, artists, or albums" });
+  await expect(search).toBeVisible();
+  await search.fill("AJ Vitanza");
+  const trackRow = dialog.locator(".qp-row");
+  await expect(trackRow).toHaveCount(1);
+  await expect(trackRow).toContainText("Miles & Miles");
+  await search.fill("nothing matches this");
+  await expect(dialog.getByText("No tracks match your search.")).toBeVisible();
+  await search.fill("Playwright Test Album");
+  await expect(trackRow).toHaveCount(1);
+  await trackRow.click();
+  await expect(trackRow).toHaveCount(0);
+  await expect(page.locator(".toasts .toast").last()).toContainText(
+    "Added “Miles & Miles” to the playlist.",
+  );
+});
+
+test("track three-dots menu stays within the viewport", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic menu test uses the local mock backend.",
+  );
+  await page.setViewportSize({ width: 390, height: 640 });
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const trackCard = await loadMockPlaybackTrack(page, "menu-position", 58);
+  await trackCard.getByRole("button", { name: "More options for menu-position" }).click();
+
+  const menu = page.getByRole("menu", { name: "Options for menu-position" });
+  await expect(menu).toBeVisible();
+  const bounds = await menu.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
+  await expect(menu.getByRole("menuitem", { name: "Remove from library" })).toBeVisible();
+});
 
 test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   const response = await page.goto("/login");
@@ -376,6 +447,47 @@ test("disabled LRCLIB lookup makes no external lyrics request", async ({ page })
   const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
   await expect(lyricsDialog.getByRole("heading", { name: "Lyrics lookup is disabled." })).toBeVisible();
   expect(lrclibRequests).toBe(0);
+});
+
+test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await page.evaluate(() => localStorage.setItem("vervfy:language", "fr"));
+  const trackCard = await loadMockPlaybackTrack(page, "Miles & Miles", 56, "AJ Vitanza");
+
+  const unavailableRoute = (route: Route) =>
+    route.fulfill({ status: 503, body: "temporarily unavailable" });
+  await page.route("https://lrclib.net/api/**", unavailableRoute);
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+
+  const lyrics = page.getByRole("dialog", { name: "Paroles" });
+  await expect(
+    lyrics.getByRole("heading", { name: "Impossible de charger les paroles. Touchez pour réessayer." }),
+  ).toBeVisible();
+  await page.unroute("https://lrclib.net/api/**", unavailableRoute);
+  await page.route("https://lrclib.net/api/**", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/api/get")) {
+      return route.fulfill({
+        json: {
+          trackName: "Miles & Miles",
+          artistName: "AJ Vitanza",
+          duration: 30,
+          syncedLyrics: "[00:00.00]Recovered lyric line",
+        },
+      });
+    }
+    return route.fulfill({ json: [] });
+  });
+  await lyrics.getByRole("button", { name: "Réessayer" }).click();
+  await expect(lyrics.locator(".lyrics-line")).toHaveText("Recovered lyric line");
 });
 
 test("track cover can be changed and reverted in the library", async ({ page }) => {
