@@ -241,6 +241,14 @@ function readBrowserLyricsCache(trackId: string): LyricsData | null {
   }
 }
 
+function clearBrowserLyricsCache(trackId: string): void {
+  try {
+    window.localStorage.removeItem(`${LYRICS_CACHE_PREFIX}${trackId}`);
+  } catch (error) {
+    console.warn("Could not clear the browser lyrics cache.", error);
+  }
+}
+
 function writeBrowserLyricsCache(trackId: string, lyrics: LyricsData): void {
   if (!["online-synced", "online-plain"].includes(lyrics.source)) return;
   try {
@@ -323,9 +331,13 @@ export function parseLyricsText(value: string, source: string): LyricsData {
   return lines.length ? { source, lines } : { source, text: value };
 }
 
-export async function lookupLyrics(track: TrackRecord, signal: AbortSignal): Promise<LyricsData> {
+export async function lookupLyrics(
+  track: TrackRecord,
+  signal: AbortSignal,
+  options: { forceRefresh?: boolean } = {},
+): Promise<LyricsData> {
   if (track.customLyrics?.trim()) return parseLyricsText(track.customLyrics, "custom");
-  const cached = readBrowserLyricsCache(track.id);
+  const cached = options.forceRefresh ? null : readBrowserLyricsCache(track.id);
   if (cached) return cached;
   if (!(await isLrclibEnabled())) return { source: "disabled" };
 
@@ -567,7 +579,9 @@ export default function LyricsOverlay({
       setLoading(true);
       setLookupFailed(false);
       try {
-        storeLyrics(await lookupLyrics(currentTrack, controller.signal));
+        storeLyrics(await lookupLyrics(currentTrack, controller.signal, {
+          forceRefresh: lookupAttempt > 0,
+        }));
       } catch {
         if (!cancelled) {
           console.warn("Lyrics lookup failed; retry is available.");
@@ -657,6 +671,7 @@ export default function LyricsOverlay({
 
   function retryLyricsLookup() {
     clearCachedLyrics(activeTrack.id);
+    clearBrowserLyricsCache(activeTrack.id);
     setLyrics(null);
     setLookupFailed(false);
     setLoading(true);
@@ -827,7 +842,7 @@ export default function LyricsOverlay({
               }}>{line.text || "\u00a0"}</button>)}
             </div>
           ) : lyrics?.text ? (
-            <div className="lyrics-plain"><p>{lyrics.text}</p><button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>{t("Sync to audio")}</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>{t("Edit lyrics")}</button></div>
+            <div className="lyrics-plain"><p>{lyrics.text}</p>{lyrics.source === "online-plain" ? <button className="btn lyrics-sync-btn" type="button" onClick={retryLyricsLookup}>{t("Retry lyrics")}</button> : null}<button className="btn btn-primary lyrics-sync-btn" type="button" onClick={beginSync}>{t("Sync to audio")}</button><button className="btn lyrics-sync-btn" type="button" onClick={() => setEditorOpen(true)}>{t("Edit lyrics")}</button></div>
           ) : (
             <div className="lyrics-empty"><div className="empty-orb" /><h3>{lookupFailed ? t("Couldn't load lyrics. Tap to retry.") : t(lrclibDisabled ? "Lyrics lookup is disabled." : "No lyrics available")}</h3><p>{t(lrclibDisabled ? "Only your own pasted lyrics are shown." : "Vervfy could not find lyrics for this track. Add your own below.")}</p>{!lrclibDisabled ? <button className="btn lyrics-paste-btn" type="button" onClick={retryLyricsLookup}>{t("Retry lyrics")}</button> : null}<button className="btn btn-primary lyrics-paste-btn" type="button" onClick={() => { setDraft(activeTrack.customLyrics ?? ""); setEditorOpen(true); }}>{t("Paste lyrics")}</button></div>
           )}

@@ -490,6 +490,58 @@ test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page 
   await expect(lyrics.locator(".lyrics-line")).toHaveText("Recovered lyric line");
 });
 
+test("retrying plain lyrics looks for an automatically synced copy", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const title = "Miles & Miles";
+  const artist = "AJ Vitanza";
+  const trackCard = await loadMockPlaybackTrack(page, title, 58, artist);
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "vervfy:lrclib:v1:playwright-track-58",
+      JSON.stringify({
+        savedAt: Date.now(),
+        lyrics: { source: "online-plain", text: "Plain lyric line" },
+      }),
+    );
+  });
+  await page.route("https://lrclib.net/api/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/api/get")) {
+      return route.fulfill({
+        json: {
+          trackName: title,
+          artistName: artist,
+          duration: 30,
+          plainLyrics: "Plain lyric line",
+        },
+      });
+    }
+    return route.fulfill({
+      json: [{
+        trackName: title,
+        artistName: artist,
+        duration: 30,
+        syncedLyrics: "[00:00.00]Automatically synced line",
+      }],
+    });
+  });
+
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+  const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyrics.locator(".lyrics-plain")).toContainText("Plain lyric line");
+  await lyrics.getByRole("button", { name: "Retry lyrics" }).click();
+  await expect(lyrics.locator(".lyrics-line")).toHaveText("Automatically synced line");
+});
+
 test("track cover can be changed and reverted in the library", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
