@@ -34,7 +34,8 @@ _shared_client_key: tuple[str, str, str, int] | None = None
 _signed_url_cache: OrderedDict[tuple[str, int], tuple[str, float]] = OrderedDict()
 _signed_url_cache_lock = threading.Lock()
 _SIGNED_URL_CACHE_MAX_SIZE = 512
-_SIGNED_URL_EXPIRY_MARGIN_SECONDS = 24 * 60 * 60
+_SIGNED_URL_EXPIRY_MARGIN_SECONDS = 60
+_STORAGE_CACHE_CONTROL = "max-age=31536000"
 
 
 class StorageError(RuntimeError):
@@ -167,7 +168,11 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
     resp = client.post(
         _object_url(path),
         content=bytes(data),  # httpx would iterate a bytearray as ints
-        headers={"Content-Type": content_type, "x-upsert": "true"},
+        headers={
+            "Content-Type": content_type,
+            "Cache-Control": _STORAGE_CACHE_CONTROL,
+            "x-upsert": "true",
+        },
     )
     if resp.status_code >= 300:
         raise StorageError(f"upload failed ({resp.status_code}): {resp.text[:200]}")
@@ -192,6 +197,7 @@ def upload_file(path: str, file_path: str, content_type: str = "audio/mpeg") -> 
         content=FileChunks(),
         headers={
             "Content-Type": content_type,
+            "Cache-Control": _STORAGE_CACHE_CONTROL,
             "Content-Length": str(os.path.getsize(file_path)),
             "x-upsert": "true",
         },

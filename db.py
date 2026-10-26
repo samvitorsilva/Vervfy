@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
+    Index,
     LargeBinary,
     String,
     Text,
@@ -226,6 +227,25 @@ class PlaylistTrack(Base):
     playlist_id: Mapped[str] = mapped_column(ForeignKey("playlists.id", ondelete="CASCADE"), primary_key=True)
     track_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class TrackListen(Base):
+    __tablename__ = "track_listens"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "track_id"],
+            ["tracks.user_id", "tracks.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_track_listens_user_played", "user_id", "played_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    track_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    played_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class UploadJob(Base):

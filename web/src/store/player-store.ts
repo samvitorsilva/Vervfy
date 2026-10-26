@@ -9,6 +9,7 @@ export type LibraryView =
   | "offline"
   | "favorites"
   | "playlists"
+  | "recap"
   | "artists"
   | "account"
   | `playlist:${string}`

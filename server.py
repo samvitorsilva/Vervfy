@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from io import BytesIO
 import json
 import asyncio
@@ -44,7 +45,7 @@ from artist_images import (
     is_stale as artist_image_is_stale,
     normalize_artist_name,
 )
-from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackRecord, UploadJob, User, tenant_session
+from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackListen, TrackRecord, UploadJob, User, tenant_session
 from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_file
 import upload_queue
 
@@ -1568,6 +1569,10 @@ class LibraryStateRequest(BaseModel):
     playlists: list[PlaylistState] = Field(default_factory=list, max_length=1_000)
 
 
+class TrackListenRequest(BaseModel):
+    track_id: SafeId = Field(alias="trackId")
+
+
 def _queue_staged_upload(
     job_id: str,
     user_id: str,
@@ -1635,6 +1640,63 @@ def _library_state_from_session(user_id: str, session) -> dict:
 def _library_state(user_id: str) -> dict:
     with tenant_session(user_id) as session:
         return _library_state_from_session(user_id, session)
+
+
+def _listening_period_summary(session, user_id: str, start: float) -> dict:
+    rows = session.execute(
+        select(
+            TrackListen.track_id,
+            TrackRecord.artist,
+            func.count(TrackListen.id),
+        )
+        .join(
+            TrackRecord,
+            (TrackRecord.id == TrackListen.track_id)
+            & (TrackRecord.user_id == TrackListen.user_id),
+        )
+        .where(TrackListen.user_id == user_id, TrackListen.played_at >= start)
+        .group_by(TrackListen.track_id, TrackRecord.artist)
+        .order_by(func.count(TrackListen.id).desc())
+    ).all()
+    artist_counts: dict[str, dict[str, object]] = {}
+    for _, artist, count in rows:
+        key = artist.strip().casefold()
+        entry = artist_counts.setdefault(key, {"artist": artist.strip(), "playCount": 0})
+        entry["playCount"] = int(entry["playCount"]) + count
+    return {
+        "playCount": sum(count for _, _, count in rows),
+        "topTracks": [
+            {"trackId": track_id, "playCount": count}
+            for track_id, _, count in rows[:5]
+        ],
+        "topArtists": sorted(
+            artist_counts.values(),
+            key=lambda item: int(item["playCount"]),
+            reverse=True,
+        )[:5],
+    }
+
+
+def _listening_summary(user_id: str) -> dict:
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    with tenant_session(user_id) as session:
+        last_played = session.execute(
+            select(TrackListen.track_id, func.max(TrackListen.played_at))
+            .where(TrackListen.user_id == user_id)
+            .group_by(TrackListen.track_id)
+        ).all()
+        return {
+            "lastPlayedAt": {track_id: played_at for track_id, played_at in last_played},
+            "month": _listening_period_summary(
+                session, user_id, month_start.timestamp()
+            ),
+            "year": _listening_period_summary(session, user_id, year_start.timestamp()),
+            "monthLabel": month_start.strftime("%B %Y"),
+            "yearLabel": str(now.year),
+            "asOf": now.timestamp(),
+        }
 
 
 def _library_state_etag(state: dict) -> str:
@@ -1806,6 +1868,39 @@ def get_library_state(response: Response, user=Depends(require_api_user)) -> dic
     state = _library_state(user["id"])
     response.headers["ETag"] = _library_state_etag(state)
     return state
+
+
+@app.get("/api/library/listening")
+def get_listening_summary(user=Depends(require_api_user)) -> dict:
+    return _listening_summary(user["id"])
+
+
+@app.post("/api/library/listening")
+def record_track_listen(
+    payload: TrackListenRequest,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    with tenant_session(user["id"]) as session:
+        track_exists = session.scalar(
+            select(TrackRecord.id).where(
+                TrackRecord.user_id == user["id"],
+                TrackRecord.id == payload.track_id,
+            )
+        )
+        if track_exists is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        played_at = time.time()
+        session.add(
+            TrackListen(
+                id=uuid.uuid4().hex,
+                user_id=user["id"],
+                track_id=payload.track_id,
+                played_at=played_at,
+            )
+        )
+        session.commit()
+    return {"trackId": payload.track_id, "playedAt": played_at}
 
 
 @app.get("/api/library/usage")

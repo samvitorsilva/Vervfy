@@ -82,6 +82,7 @@ function hashCoverSeed(seed: string): number {
 }
 
 interface PlaybackAttempt {
+  trackId: string;
   src: string;
   retrySource: string | null;
   retryCount: number;
@@ -96,11 +97,30 @@ interface PlaybackAttempt {
   recovering: boolean;
   recoveryPosition: number | null;
   signedUrlRefreshed: boolean;
+  listenedSeconds: number;
+  lastListenPosition: number | null;
+  listenRecorded: boolean;
+}
+
+interface ListeningPeriodSummary {
+  playCount: number;
+  topTracks: Array<{ trackId: string; playCount: number }>;
+  topArtists: Array<{ artist: string; playCount: number }>;
+}
+
+interface ListeningSummary {
+  lastPlayedAt: Record<string, number>;
+  month: ListeningPeriodSummary;
+  year: ListeningPeriodSummary;
+  monthLabel: string;
+  yearLabel: string;
+  asOf: number;
 }
 
 const MAX_PLAYBACK_RETRIES = 3;
 const PLAYBACK_STALL_TIMEOUT_MS = 5_000;
 const PLAYBACK_START_TIMEOUT_MS = 15_000;
+const SKIP_DEBOUNCE_MS = 400;
 
 function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknown): void {
   const errorName =
@@ -156,6 +176,17 @@ function GeneratedAura({ seed, className = "" }: { seed: string; className?: str
 
 const FALLBACK_ART = generateAura("Unknown song");
 
+function trackThumbnailUrl(src: string, size: number): string {
+  try {
+    const url = new URL(src, "https://vervfy.invalid");
+    if (!/^\/api\/tracks\/[^/]+\/cover$/.test(url.pathname)) return src;
+    url.searchParams.set("size", String(size));
+    return src.startsWith("/") ? `${url.pathname}${url.search}` : url.href;
+  } catch {
+    return src;
+  }
+}
+
 function coverUrlForTrack(
   track: Pick<ServerTrack, "artist" | "album" | "title" | "cover_url" | "cover_source" | "has_cover">,
 ): string {
@@ -197,9 +228,11 @@ function activePreviewLine(lines: NonNullable<CachedLyrics["lines"]>, timeMs: nu
 const TrackImage = memo(function TrackImage({
   track,
   className = "",
+  thumbnail = false,
 }: {
   track: TrackRecord;
   className?: string;
+  thumbnail?: boolean;
 }) {
   if (
     !track.hasCover &&
@@ -213,9 +246,70 @@ const TrackImage = memo(function TrackImage({
     );
   }
   const fallback = generateAura(`${track.artist}|${track.album}|${track.title}`);
-  const src = track.coverUrl || fallback;
+  const coverUrl = track.coverUrl || fallback;
+  const src = thumbnail ? trackThumbnailUrl(coverUrl, 128) : coverUrl;
   return <ResilientImage key={`${track.id}:${src}`} src={src} fallbackSrc={fallback} className={className} />;
 });
+
+function ListeningRecapCard({
+  title,
+  period,
+  summary,
+  tracksById,
+  onPlay,
+}: {
+  title: string;
+  period: string;
+  summary: ListeningPeriodSummary;
+  tracksById: Map<string, TrackRecord>;
+  onPlay: (track: TrackRecord) => void;
+}) {
+  const { t } = useLanguage();
+  return (
+    <section className="recap-period">
+      <div className="recap-period-heading">
+        <div>
+          <span className="recap-period-label">{period}</span>
+          <h2>{title}</h2>
+        </div>
+        <strong>{summary.playCount} {t("plays")}</strong>
+      </div>
+      {summary.topTracks.length ? (
+        <div className="recap-top-tracks">
+          {summary.topTracks.map((item, index) => {
+            const track = tracksById.get(item.trackId);
+            if (!track) return null;
+            return (
+              <button
+                className="recap-track"
+                key={item.trackId}
+                type="button"
+                onClick={() => onPlay(track)}
+                aria-label={`${t("Play")} ${track.title}`}
+              >
+                <span className="recap-rank">{index + 1}</span>
+                <TrackImage track={track} className="recap-art" thumbnail />
+                <span className="recap-track-copy">
+                  <strong>{track.title}</strong>
+                  <small>{track.artist}</small>
+                </span>
+                <span className="recap-play-count">{item.playCount}×</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="recap-empty">{t("No qualifying listens in this period yet.")}</p>
+      )}
+      {summary.topArtists.length ? (
+        <div className="recap-artists">
+          <span>{t("Top artists")}</span>
+          <p>{summary.topArtists.map((artist) => artist.artist).join(" · ")}</p>
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function PlaybackSeek({
   audioElement,
@@ -545,6 +639,7 @@ function viewName(view: LibraryView, playlists: PlaylistRecord[]): string {
   if (view === "offline") return "Offline";
   if (view === "favorites") return "Favorites";
   if (view === "playlists") return "Playlists";
+  if (view === "recap") return "Recap";
   if (view === "artists") return "Artists";
   if (view === "account") return "Account";
   if (view.startsWith("artist:")) return decodeURIComponent(view.slice("artist:".length));
@@ -562,7 +657,7 @@ function getMetaFromStore(): LibraryMeta {
   };
 }
 
-type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "info" | "drag" | "timer";
+type IconName = "library" | "playlists" | "heart" | "logout" | "search" | "play" | "pause" | "prev" | "next" | "shuffle" | "repeat" | "queue" | "plus" | "close" | "list" | "grid" | "more" | "artist" | "offline" | "account" | "help" | "import" | "volume" | "volume-muted" | "lyrics" | "visualizer" | "info" | "drag" | "timer" | "clock";
 
 function Icon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -595,6 +690,7 @@ function Icon({ name }: { name: IconName }) {
     info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></>,
     drag: <><circle cx="9" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="19" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="19" r="1" fill="currentColor" stroke="none"/></>,
     timer: <><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5M9 2h6M12 5V2"/></>,
+    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
   };
 
   return (
@@ -821,6 +917,7 @@ export default function LibraryApp() {
   const setPlaylists = usePlayerStore((state) => state.setPlaylists);
   const playbackAttemptRef = useRef<PlaybackAttempt | null>(null);
   const runPlaybackAttemptRef = useRef<(attempt: PlaybackAttempt) => void>(() => {});
+  const skipStartTimerRef = useRef<number | null>(null);
   const coverInfoButtonRef = useRef<HTMLButtonElement>(null);
   const coverInfoPopoverRef = useRef<HTMLElement>(null);
   const coverInfoReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -832,6 +929,8 @@ export default function LibraryApp() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [profile, setProfile] = useState<Account | null>(null);
+  const [listeningSummary, setListeningSummary] = useState<ListeningSummary | null>(null);
+  const [listeningError, setListeningError] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
@@ -901,9 +1000,74 @@ export default function LibraryApp() {
   const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
 
+  useEffect(
+    () => () => {
+      if (skipStartTimerRef.current !== null) {
+        window.clearTimeout(skipStartTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
     setProfile((current) => current ? { ...current, photo_url: photoUrl } : current);
   }, []);
+
+  const loadListeningSummary = useCallback(async () => {
+    const response = await expectOk(
+      await fetchWithRetry("/api/library/listening", { cache: "no-store" }, 3),
+    );
+    setListeningSummary((await response.json()) as ListeningSummary);
+    setListeningError(null);
+  }, []);
+
+  const recordTrackListen = useCallback(
+    async (trackId: string) => {
+      try {
+        const response = await apiFetch(
+          "/api/library/listening",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ trackId }),
+          },
+          { csrf: true, retryCsrfOnForbidden: true },
+        );
+        await expectOk(response);
+        await loadListeningSummary();
+      } catch (error) {
+        console.error("Could not save listening history.", error);
+        setListeningError("Listening history could not be saved. Recaps may be out of date.");
+      }
+    },
+    [loadListeningSummary],
+  );
+
+  useEffect(() => {
+    if (!profile) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await expectOk(
+          await fetchWithRetry("/api/library/listening", { cache: "no-store" }, 3),
+        );
+        const summary = (await response.json()) as ListeningSummary;
+        if (!cancelled) {
+          setListeningSummary(summary);
+          setListeningError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Could not load listening history.", error);
+          setListeningError("Listening history could not be loaded.");
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [profile]);
 
   useEffect(() => {
     const shell = document.querySelector<HTMLElement>("#app > .shell");
@@ -1029,6 +1193,20 @@ export default function LibraryApp() {
     () => new Map(tracks.map((track) => [track.id, track])),
     [tracks],
   );
+  const rediscoveryTracks = useMemo(() => {
+    if (!listeningSummary) return [];
+    const cutoff = listeningSummary.asOf - 30 * 24 * 60 * 60;
+    return tracks
+      .filter((track) => {
+        const lastPlayedAt = listeningSummary.lastPlayedAt[track.id];
+        return lastPlayedAt === undefined || lastPlayedAt < cutoff;
+      })
+      .sort((first, second) => {
+        const firstPlayedAt = listeningSummary.lastPlayedAt[first.id] ?? 0;
+        const secondPlayedAt = listeningSummary.lastPlayedAt[second.id] ?? 0;
+        return firstPlayedAt - secondPlayedAt;
+      });
+  }, [listeningSummary, tracks]);
   const trackMenuTrack = trackMenu ? tracksById.get(trackMenu.trackId) ?? null : null;
   const title = t(viewName(view, playlists));
   const playlistForView = view.startsWith("playlist:")
@@ -1517,6 +1695,26 @@ export default function LibraryApp() {
     return saveQueueRef.current;
   }, [applyMeta, notify]);
 
+  const createRediscoveryPlaylist = useCallback(() => {
+    if (rediscoveryTracks.length === 0) return;
+    const state = usePlayerStore.getState();
+    const existing = state.playlists.find((playlist) => playlist.name === "Rediscover");
+    const playlist: PlaylistRecord = existing
+      ? { ...existing, trackIds: rediscoveryTracks.map((track) => track.id) }
+      : {
+          id: crypto.randomUUID().replaceAll("-", ""),
+          name: "Rediscover",
+          trackIds: rediscoveryTracks.map((track) => track.id),
+        };
+    setPlaylists(
+      existing
+        ? state.playlists.map((item) => (item.id === existing.id ? playlist : item))
+        : [...state.playlists, playlist],
+    );
+    void saveMeta();
+    notify(existing ? "Updated your Rediscover playlist." : "Created your Rediscover playlist.");
+  }, [notify, rediscoveryTracks, saveMeta, setPlaylists]);
+
   const handlePlaybackFailure = useCallback(
     (
       attempt: PlaybackAttempt,
@@ -1627,6 +1825,11 @@ export default function LibraryApp() {
         audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
       if (needsLoad) {
         attempt.recovering = true;
+        if (audio.src !== source) {
+          audio.pause();
+          audio.removeAttribute("src");
+          audio.load();
+        }
         audio.src = source;
         audio.load();
       }
@@ -1704,7 +1907,7 @@ export default function LibraryApp() {
     },
     [handlePlaybackFailure, setPlaybackStatus, setPlaying],
   );
-  const startTrack = useCallback(
+  const beginTrack = useCallback(
     (trackId: string) => {
       const track = usePlayerStore.getState().tracks.find((item) => item.id === trackId);
       const audio = usePlayerStore.getState().audioElement;
@@ -1735,6 +1938,7 @@ export default function LibraryApp() {
         );
       }
       const attempt: PlaybackAttempt = {
+        trackId,
         src,
         retrySource: null,
         retryCount: 0,
@@ -1749,12 +1953,58 @@ export default function LibraryApp() {
         recovering: false,
         recoveryPosition: null,
         signedUrlRefreshed: false,
+        listenedSeconds: 0,
+        lastListenPosition: null,
+        listenRecorded: false,
       };
       playbackAttemptRef.current = attempt;
       runPlaybackAttemptRef.current = runPlaybackAttempt;
       runPlaybackAttempt(attempt);
     },
     [runPlaybackAttempt],
+  );
+  const startTrack = useCallback(
+    (trackId: string, debounceSkip = false) => {
+      if (skipStartTimerRef.current !== null) {
+        window.clearTimeout(skipStartTimerRef.current);
+        skipStartTimerRef.current = null;
+      }
+
+      if (debounceSkip) {
+        const audio = usePlayerStore.getState().audioElement;
+        const previousAttempt = playbackAttemptRef.current;
+        if (previousAttempt) {
+          previousAttempt.wantsPlayback = false;
+          previousAttempt.requestId += 1;
+          if (previousAttempt.retryTimer !== null) {
+            window.clearTimeout(previousAttempt.retryTimer);
+          }
+          if (previousAttempt.stallTimer !== null) {
+            window.clearTimeout(previousAttempt.stallTimer);
+          }
+          if (previousAttempt.restoreMetadataListener && audio) {
+            audio.removeEventListener(
+              "loadedmetadata",
+              previousAttempt.restoreMetadataListener,
+            );
+          }
+          playbackAttemptRef.current = null;
+        }
+        if (audio) {
+          audio.pause();
+          audio.removeAttribute("src");
+          audio.load();
+        }
+        skipStartTimerRef.current = window.setTimeout(() => {
+          skipStartTimerRef.current = null;
+          beginTrack(trackId);
+        }, SKIP_DEBOUNCE_MS);
+        return;
+      }
+
+      beginTrack(trackId);
+    },
+    [beginTrack],
   );
 
   const handleAudioError = useCallback(
@@ -1801,12 +2051,12 @@ export default function LibraryApp() {
   );
 
   const playQueueIndex = useCallback(
-    (index: number) => {
+    (index: number, debounceSkip = false) => {
       const state = usePlayerStore.getState();
       const trackId = state.queue[index];
       if (!trackId) return;
       setQueueIndex(index);
-      startTrack(trackId);
+      startTrack(trackId, debounceSkip);
     },
     [setQueueIndex, startTrack],
   );
@@ -1848,7 +2098,7 @@ export default function LibraryApp() {
       } else if (nextIndex >= state.queue.length) {
         nextIndex = 0;
       }
-      playQueueIndex(nextIndex);
+      playQueueIndex(nextIndex, !automatic);
     },
     [notify, playQueueIndex],
   );
@@ -1935,7 +2185,7 @@ export default function LibraryApp() {
       audio.currentTime = 0;
       return;
     }
-    playQueueIndex(Math.max(0, state.queueIndex - 1));
+    playQueueIndex(Math.max(0, state.queueIndex - 1), true);
   }, [playQueueIndex]);
 
   const togglePlayback = useCallback(() => {
@@ -2288,6 +2538,24 @@ export default function LibraryApp() {
       lastPlaybackTime = currentTime;
       if (!madeProgress) return;
       const attempt = playbackAttemptRef.current;
+      if (attempt?.wantsPlayback && !audioElement.paused) {
+        const listenDelta =
+          attempt.lastListenPosition === null
+            ? 0
+            : currentTime - attempt.lastListenPosition;
+        if (listenDelta > 0 && listenDelta <= 5) {
+          attempt.listenedSeconds += listenDelta;
+        }
+        attempt.lastListenPosition = currentTime;
+        const listenThreshold =
+          audioElement.duration > 0
+            ? Math.min(30, audioElement.duration / 2)
+            : 30;
+        if (!attempt.listenRecorded && attempt.listenedSeconds >= listenThreshold) {
+          attempt.listenRecorded = true;
+          void recordTrackListen(attempt.trackId);
+        }
+      }
       clearStallTimer(attempt);
       if (
         attempt?.wantsPlayback &&
@@ -2303,12 +2571,15 @@ export default function LibraryApp() {
     };
     const onSeeked = () => {
       lastPlaybackTime = audioElement.currentTime;
+      const attempt = playbackAttemptRef.current;
+      if (attempt) attempt.lastListenPosition = audioElement.currentTime;
       updatePlaybackPosition();
     };
     const onPlaying = () => {
       const attempt = playbackAttemptRef.current;
       if (attempt) {
         attempt.hasPlayed = true;
+        attempt.lastListenPosition = audioElement.currentTime;
         attempt.recovering = false;
         attempt.retryCount = 0;
         attempt.signedUrlRefreshed = false;
@@ -2361,7 +2632,10 @@ export default function LibraryApp() {
         return;
       }
       clearStallTimer(attempt);
-      if (attempt) attempt.wantsPlayback = false;
+      if (attempt) {
+        attempt.wantsPlayback = false;
+        attempt.lastListenPosition = null;
+      }
       updatePlaybackPosition();
       setPlaying(false);
       setPlaybackStatus(attempt?.failed ? "failed" : "paused");
@@ -2422,6 +2696,7 @@ export default function LibraryApp() {
     audioElement,
     handleAudioError,
     handlePlaybackFailure,
+    recordTrackListen,
     setPlaybackStatus,
     setPlaying,
   ]);
@@ -2848,7 +3123,7 @@ export default function LibraryApp() {
           onClick={() => playFromList(playList, track.id)}
         >
           <button className="card-art" type="button" aria-label={`Play ${track.title}`} onClick={(event) => { event.stopPropagation(); playFromList(playList, track.id); }}>
-            <TrackImage track={track} />
+            <TrackImage track={track} thumbnail />
             <span className="card-play" aria-hidden="true"><Icon name="play" /></span>
           </button>
           <button
@@ -2922,7 +3197,7 @@ export default function LibraryApp() {
           <span className="bars"><span /><span /><span /></span>
         </div>
         <div className="row-title-wrap">
-          <TrackImage track={track} className="row-art" />
+          <TrackImage track={track} className="row-art" thumbnail />
           <span className="row-title-stack">
             <button className="row-title" type="button" onClick={() => playFromList(playList, track.id)}>{track.title}</button>
             <span className="row-meta"><span className="row-artist">
@@ -3228,6 +3503,7 @@ export default function LibraryApp() {
           <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
           <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
           <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
+          <button className={`rail-btn${view === "recap" ? " active" : ""}`} type="button" data-view="recap" data-tip={t("Recap")} aria-label={t("Recap")} aria-current={view === "recap" ? "page" : undefined} onClick={() => setView("recap")}><Icon name="clock" /></button>
           <button className={`rail-btn${view === "artists" || view.startsWith("artist:") ? " active" : ""}`} type="button" data-view="artists" data-tip={t("Artists")} aria-label={t("Artists")} aria-current={view === "artists" || view.startsWith("artist:") ? "page" : undefined} onClick={() => setView("artists")}><Icon name="artist" /></button>
           <button className={`rail-btn${view === "favorites" ? " active" : ""}`} type="button" data-view="favorites" data-tip={t("Favorites")} aria-label={t("Favorites")} aria-current={view === "favorites" ? "page" : undefined} onClick={() => setView("favorites")}><Icon name="heart" /></button>
           <button className={`rail-btn${view === "account" ? " active" : ""}`} type="button" data-view="account" data-tip={t("Account")} aria-label={t("Account")} aria-current={view === "account" ? "page" : undefined} onClick={() => setView("account")}><Icon name="account" /></button>
@@ -3246,15 +3522,15 @@ export default function LibraryApp() {
             </button>
             <div className="topbar-id">
               <span className="view-title">{title}</span>
-              <span className="view-count">{tracks.length || view === "playlists" || view === "offline" || playlistForView ? `· ${count}` : ""}</span>
+              <span className="view-count">{view !== "recap" && (tracks.length || view === "playlists" || view === "offline" || playlistForView) ? `· ${count}` : ""}</span>
             </div>
-            {view !== "account" ? (
+            {view !== "account" && view !== "recap" ? (
               <div className="view-toggle" role="group" aria-label={t("View mode")}>
                 <button type="button" className={listMode === "grid" ? "active" : ""} aria-pressed={listMode === "grid"} title={t("Grid view")} aria-label={t("Grid view")} onClick={() => setListMode("grid")}><Icon name="grid" /></button>
                 <button type="button" className={listMode === "list" ? "active" : ""} aria-pressed={listMode === "list"} title={t("List view")} aria-label={t("List view")} onClick={() => setListMode("list")}><Icon name="list" /></button>
               </div>
             ) : null}
-            {view !== "account" ? <label className="search-wrap">
+            {view !== "account" && view !== "recap" ? <label className="search-wrap">
               <Icon name="search" />
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("Search")} autoComplete="off" aria-label={t(view === "playlists" ? "Search playlists" : "Search library")} />
               <span className="kbd">/</span>
@@ -3263,7 +3539,7 @@ export default function LibraryApp() {
               <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}>
                 <Icon name="plus" /> {t("New playlist")}
               </button>
-            ) : view === "account" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
+            ) : view === "account" || view === "recap" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
               <button className="btn btn-primary" type="button" onClick={() => fileInputRef.current?.click()}>
                 <Icon name="import" /> {t("Add music")}
               </button>
@@ -3298,7 +3574,62 @@ export default function LibraryApp() {
                     }}
                   />
                 </div>
-                {view === "account" || view === "artists" || view.startsWith("artist:") ? null : view === "playlists" ? (
+                {view === "account" || view === "artists" || view.startsWith("artist:") ? null : view === "recap" ? (
+                  <div className="recap-page">
+                    {listeningError ? <p className="recap-notice" role="status">{t(listeningError)}</p> : null}
+                    {listeningSummary ? (
+                      <>
+                        <div className="recap-periods">
+                          <ListeningRecapCard
+                            title={listeningSummary.monthLabel}
+                            period={t("Monthly recap")}
+                            summary={listeningSummary.month}
+                            tracksById={tracksById}
+                            onPlay={(track) => playFromList(tracks, track.id)}
+                          />
+                          <ListeningRecapCard
+                            title={listeningSummary.yearLabel}
+                            period={t("Yearly recap")}
+                            summary={listeningSummary.year}
+                            tracksById={tracksById}
+                            onPlay={(track) => playFromList(tracks, track.id)}
+                          />
+                        </div>
+                        <section className="recap-rediscover">
+                          <div className="recap-rediscover-heading">
+                            <div>
+                              <h2>{t("Songs to rediscover")}</h2>
+                              <p>{t("Never played, or not played in the last 30 days.")}</p>
+                            </div>
+                            <button
+                              className="btn btn-primary"
+                              type="button"
+                              disabled={!rediscoveryTracks.length}
+                              onClick={createRediscoveryPlaylist}
+                            >
+                              <Icon name="plus" /> {t("Create playlist")}
+                            </button>
+                          </div>
+                          {rediscoveryTracks.length ? (
+                            <div className="grid recap-track-list">
+                              {rediscoveryTracks.slice(0, 12).map((track, index) =>
+                                renderTrack(track, index, rediscoveryTracks),
+                              )}
+                            </div>
+                          ) : (
+                            <p className="recap-empty">{t("Everything in your library has been played recently.")}</p>
+                          )}
+                        </section>
+                      </>
+                    ) : (
+                      <div className="recap-loading" aria-live="polite">
+                        {listeningError
+                          ? <p>{t("Your recap is unavailable right now.")}</p>
+                          : <p>{t("Loading your listening history…")}</p>}
+                      </div>
+                    )}
+                  </div>
+                ) : view === "playlists" ? (
               filteredPlaylists.length ? (
                 <div className={`pl-grid${listMode === "list" ? " list-mode" : ""}`}>
                   {filteredPlaylists.map((playlist) => {
@@ -3313,7 +3644,7 @@ export default function LibraryApp() {
                       >
                         <span className={`playlist-cover${coverTracks.length === 1 ? " single" : ""}${coverTracks.length ? "" : " is-empty"}`} aria-hidden="true">
                           {coverTracks.length
-                            ? coverTracks.map((track) => <TrackImage key={track.id} track={track} />)
+                            ? coverTracks.map((track) => <TrackImage key={track.id} track={track} thumbnail />)
                             : <Icon name="playlists" />}
                           <span className="playlist-cover-play"><Icon name="play" /></span>
                         </span>
@@ -3344,7 +3675,7 @@ export default function LibraryApp() {
                     <section className="playlist-hero">
                       <div className={`playlist-hero-cover${playlistViewCovers.length === 1 ? " single" : ""}${playlistViewCovers.length ? "" : " is-empty"}`} aria-hidden="true">
                         {playlistViewCovers.length
-                          ? playlistViewCovers.map((track) => <TrackImage key={track.id} track={track} />)
+                          ? playlistViewCovers.map((track) => <TrackImage key={track.id} track={track} thumbnail />)
                           : <Icon name="playlists" />}
                       </div>
                       <div className="playlist-hero-copy">
@@ -3783,7 +4114,7 @@ export default function LibraryApp() {
                 setQueueDragIndex(null);
                 setQueueDragOverIndex(null);
               }}
-            ><Icon name="drag" /></button><TrackImage track={track} /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title={t("Remove from queue")} aria-label={`${t("Remove from queue")}: ${track.title}`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
+            ><Icon name="drag" /></button><TrackImage track={track} thumbnail /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title={t("Remove from queue")} aria-label={`${t("Remove from queue")}: ${track.title}`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
           })}
         </div>
       </aside>
@@ -3796,7 +4127,7 @@ export default function LibraryApp() {
             event.stopPropagation();
             addToQueue(track);
             setQueuePickerOpen(true);
-          }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("No tracks match your search.") : t("Your library is empty")}</div>}</div>
+          }}><TrackImage track={track} thumbnail /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("No tracks match your search.") : t("Your library is empty")}</div>}</div>
         </div>
       </div>
 
@@ -3842,7 +4173,7 @@ export default function LibraryApp() {
             {filteredTracksAvailableToAdd.length ? filteredTracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
               if (playlistAddTarget) addTrackToPlaylist(playlistAddTarget, track.id);
               notify(`Added “${track.title}” to the playlist.`);
-            }}><TrackImage track={track} /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracksAvailableToAdd.length ? t("No tracks match your search.") : tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
+            }}><TrackImage track={track} thumbnail /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracksAvailableToAdd.length ? t("No tracks match your search.") : tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
           </div>
         </div>
       </div>
