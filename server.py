@@ -847,7 +847,8 @@ def _verified_artist_profile(
 
 _WIKI_TITLE_QUALIFIER = re.compile(
     r"\s*\((?:singer(?:-songwriter)?|rapper|band|musician|group|dj|composer|"
-    r"vocalist|music(?:al)?\s+group|recording\s+artist)\)\s*$",
+    r"vocalist|music(?:al)?\s+group|recording\s+artist|actor|actress|actriz|"
+    r"ator|atriz|acteur|actrice)\)\s*$",
     re.I,
 )
 _WIKIPEDIA_ARTIST_TITLE_ALIASES = {

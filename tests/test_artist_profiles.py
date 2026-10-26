@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from urllib.parse import quote
 
 import httpx
 
@@ -8,6 +9,76 @@ import server
 
 
 class WikipediaArtistProfileLanguageTests(unittest.TestCase):
+    def test_disambiguation_results_resolve_actor_qualified_artist_pages(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "en",
+                "Kevin Quinn (actor)",
+                "American actor and singer",
+                "Kevin Gerard Quinn is an American actor and musician.",
+                "en.wikipedia.org",
+            ),
+            (
+                "pt-BR",
+                "Kevin Quinn (ator)",
+                "ator americano",
+                "Kevin Quinn é um ator e cantor americano.",
+                "pt.wikipedia.org",
+            ),
+        )
+        for language, title, description, extract, host in cases:
+            with self.subTest(language=language):
+                artist_path = quote("Kevin Quinn", safe="")
+                wiki_path = quote(title, safe="")
+
+                def handler(request: httpx.Request) -> httpx.Response:
+                    if request.url.path.endswith(
+                        f"/api/rest_v1/page/summary/{artist_path}"
+                    ):
+                        return httpx.Response(
+                            200,
+                            json={"type": "disambiguation", "title": "Kevin Quinn"},
+                        )
+                    if request.url.path.endswith("/w/api.php"):
+                        return httpx.Response(
+                            200,
+                            json={"query": {"search": [{"title": title}]}},
+                        )
+                    if request.url.path.endswith(f"/page/summary/{title}"):
+                        return httpx.Response(
+                            200,
+                            json={
+                                "type": "standard",
+                                "title": title,
+                                "description": description,
+                                "extract": extract,
+                                "content_urls": {
+                                    "desktop": {
+                                        "page": (
+                                            f"https://{host}/wiki/"
+                                            f"{title.replace(' ', '_')}"
+                                        )
+                                    }
+                                },
+                            },
+                        )
+                    return httpx.Response(404)
+
+                with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+                    profile = server._fetch_wikipedia_artist_profile(
+                        client, "Kevin Quinn", language
+                    )
+
+                self.assertIsNotNone(profile)
+                assert profile is not None
+                self.assertEqual(profile["bio"], extract)
+                self.assertEqual(
+                    profile["source_url"],
+                    f"https://{host}/wiki/{title.replace(' ', '_')}",
+                )
+
     def test_french_and_spanish_profiles_use_the_matching_wikipedia(self) -> None:
         cases = (
             (
