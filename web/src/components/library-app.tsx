@@ -112,7 +112,7 @@ interface ListeningSummary {
   lastPlayedAt: Record<string, number>;
   month: ListeningPeriodSummary;
   year: ListeningPeriodSummary;
-  monthLabel: string;
+  monthStart: number;
   yearLabel: string;
   asOf: number;
 }
@@ -272,7 +272,10 @@ function ListeningRecapCard({
           <span className="recap-period-label">{period}</span>
           <h2>{title}</h2>
         </div>
-        <strong>{summary.playCount} {t("plays")}</strong>
+        <div className="recap-play-total">
+          <strong>{summary.playCount}</strong>
+          <span>{t("plays")}</span>
+        </div>
       </div>
       {summary.topTracks.length ? (
         <div className="recap-top-tracks">
@@ -886,7 +889,7 @@ function TrackMenuPortal({
 }
 
 export default function LibraryApp() {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const audioElement = usePlayerStore((state) => state.audioElement);
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
@@ -1199,7 +1202,7 @@ export default function LibraryApp() {
     return tracks
       .filter((track) => {
         const lastPlayedAt = listeningSummary.lastPlayedAt[track.id];
-        return lastPlayedAt === undefined || lastPlayedAt < cutoff;
+        return lastPlayedAt !== undefined && lastPlayedAt < cutoff;
       })
       .sort((first, second) => {
         const firstPlayedAt = listeningSummary.lastPlayedAt[first.id] ?? 0;
@@ -1207,6 +1210,12 @@ export default function LibraryApp() {
         return firstPlayedAt - secondPlayedAt;
       });
   }, [listeningSummary, tracks]);
+  const hasRediscoveryPlaylist = playlists.some((playlist) => playlist.name === "Rediscover");
+  const recapMonthLabel = listeningSummary
+    ? new Intl.DateTimeFormat(language, { month: "long", year: "numeric" }).format(
+        new Date(listeningSummary.monthStart * 1000),
+      )
+    : "";
   const trackMenuTrack = trackMenu ? tracksById.get(trackMenu.trackId) ?? null : null;
   const title = t(viewName(view, playlists));
   const playlistForView = view.startsWith("playlist:")
@@ -3576,12 +3585,19 @@ export default function LibraryApp() {
                 </div>
                 {view === "account" || view === "artists" || view.startsWith("artist:") ? null : view === "recap" ? (
                   <div className="recap-page">
+                    <section className="recap-intro">
+                      <span className="recap-intro-icon" aria-hidden="true"><Icon name="clock" /></span>
+                      <div>
+                        <h2>{t("Your listening, over time")}</h2>
+                        <p>{t("Recaps only include listens recorded since listening history was added. Earlier plays aren't available.")}</p>
+                      </div>
+                    </section>
                     {listeningError ? <p className="recap-notice" role="status">{t(listeningError)}</p> : null}
                     {listeningSummary ? (
                       <>
                         <div className="recap-periods">
                           <ListeningRecapCard
-                            title={listeningSummary.monthLabel}
+                            title={recapMonthLabel}
                             period={t("Monthly recap")}
                             summary={listeningSummary.month}
                             tracksById={tracksById}
@@ -3598,8 +3614,11 @@ export default function LibraryApp() {
                         <section className="recap-rediscover">
                           <div className="recap-rediscover-heading">
                             <div>
-                              <h2>{t("Songs to rediscover")}</h2>
-                              <p>{t("Never played, or not played in the last 30 days.")}</p>
+                              <h2>{t("Played before, not lately")}</h2>
+                              <p>{t("Songs with a recorded listen more than 30 days ago.")}</p>
+                              <span className="recap-rediscover-count">
+                                {rediscoveryTracks.length} {t("songs")}
+                              </span>
                             </div>
                             <button
                               className="btn btn-primary"
@@ -3607,17 +3626,40 @@ export default function LibraryApp() {
                               disabled={!rediscoveryTracks.length}
                               onClick={createRediscoveryPlaylist}
                             >
-                              <Icon name="plus" /> {t("Create playlist")}
+                              <Icon name="plus" />
+                              {t(hasRediscoveryPlaylist ? "Update Rediscover playlist" : "Create Rediscover playlist")}
                             </button>
                           </div>
                           {rediscoveryTracks.length ? (
-                            <div className="grid recap-track-list">
-                              {rediscoveryTracks.slice(0, 12).map((track, index) =>
-                                renderTrack(track, index, rediscoveryTracks),
-                              )}
+                            <div className="recap-top-tracks">
+                              {rediscoveryTracks.slice(0, 12).map((track, index) => (
+                                <button
+                                  className="recap-track"
+                                  key={track.id}
+                                  type="button"
+                                  onClick={() => playFromList(rediscoveryTracks, track.id)}
+                                  aria-label={`${t("Play")} ${track.title}`}
+                                >
+                                  <span className="recap-rank">{index + 1}</span>
+                                  <TrackImage track={track} className="recap-art" thumbnail />
+                                  <span className="recap-track-copy">
+                                    <strong>{track.title}</strong>
+                                    <small>{track.artist}</small>
+                                  </span>
+                                  <span className="recap-track-hint">{t("30+ days")}</span>
+                                </button>
+                              ))}
+                              {rediscoveryTracks.length > 12 ? (
+                                <p className="recap-more">
+                                  {t("{count} more songs are included in your playlist.").replace(
+                                    "{count}",
+                                    String(rediscoveryTracks.length - 12),
+                                  )}
+                                </p>
+                              ) : null}
                             </div>
                           ) : (
-                            <p className="recap-empty">{t("Everything in your library has been played recently.")}</p>
+                            <p className="recap-empty">{t("No songs have a recorded listen older than 30 days yet.")}</p>
                           )}
                         </section>
                       </>

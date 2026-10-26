@@ -75,6 +75,8 @@ class TrackListenTests(unittest.TestCase):
         with patch.object(server, "tenant_session", self.tenant_session):
             summary = server._listening_summary("test-user")
 
+        month_start = datetime.fromtimestamp(summary["monthStart"], timezone.utc)
+        self.assertEqual((month_start.day, month_start.hour, month_start.minute), (1, 0, 0))
         self.assertEqual(summary["month"]["playCount"], 1)
         year_start = datetime.now(timezone.utc).replace(
             month=1, day=1, hour=0, minute=0, second=0, microsecond=0

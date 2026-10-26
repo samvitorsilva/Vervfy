@@ -1694,7 +1694,7 @@ def _listening_summary(user_id: str) -> dict:
                 session, user_id, month_start.timestamp()
             ),
             "year": _listening_period_summary(session, user_id, year_start.timestamp()),
-            "monthLabel": month_start.strftime("%B %Y"),
+            "monthStart": month_start.timestamp(),
             "yearLabel": str(now.year),
             "asOf": now.timestamp(),
         }
