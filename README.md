@@ -88,48 +88,6 @@ PostgreSQL stores accounts, bcrypt password hashes, profile photos, artist
 photos, track metadata, cover art, custom lyrics, favorites, and playlists.
 New uploads use the private Supabase Storage bucket; audio is redirected to a
 one-hour signed URL, so the FastAPI service never relays the audio bytes.
-Tracks still in `tracks.audio_data` are copied lazily on first play or can be
-migrated in advance with `scripts/migrate_audio_to_storage.py`. Production
-startup fails if Storage credentials are absent.
-Use a dedicated PostgreSQL `app_runtime` role without `BYPASSRLS` for the
-application's `DATABASE_URL`. Apply every Alembic migration manually with the
-database owner connection (for example, `MIGRATION_DATABASE_URL`), before
-deploying the application; Render runs the app as the limited `app_runtime`
-role and must not apply migrations. A migration is not part of application
-startup.
-
-On Render, set `SUPABASE_URL` to the project URL,
-`SUPABASE_SERVICE_KEY` to the server-side service-role key, and
-`SUPABASE_BUCKET` to the private bucket name (`songs` by default). Keep
-`DATABASE_URL` on the `app_runtime` role; never put the service key or the
-database owner URL in frontend/Vercel variables. For the one-off audio
-migration, use a PostgreSQL admin/owner URL in `MIGRATION_DATABASE_URL` in a
-trusted local shell; do not configure that admin URL on the running web
-service. First preview the work with:
-
-```sh
-MIGRATION_DATABASE_URL='postgresql://<admin-connection>' \
-SUPABASE_URL='https://<project-ref>.supabase.co' \
-SUPABASE_SERVICE_KEY='<service-role-key>' \
-SUPABASE_BUCKET='songs' \
-python scripts/migrate_audio_to_storage.py --dry-run
-```
-
-Then run the same command without `--dry-run`. The migration processes one
-track at a time, retries Storage uploads, verifies each object, commits
-`storage_path`, and only then clears `audio_data`; failed uploads leave the
-database audio intact. `--dry-run` does not read audio blobs or modify either
-Storage or PostgreSQL.
-Profile photos are limited to 5 MB and can be JPEG, PNG, WebP, or GIF.
-
-Before applying an Alembic migration to a live database, create and verify a
-`pg_dump` backup. The cover-source migration labels existing covers `unknown`;
-after deploying it, `scripts/rebuild_covers.py` can recover embedded art from
-stored audio and replace other old covers with placeholders. It is a dry run by
-default; review its summary, then pass `--apply` to write changes. The script
-processes one track at a time and never overwrites a user-uploaded cover.
-
-The public `/credits` page lists external data sources and attribution.
 
 ---
 
