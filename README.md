@@ -15,7 +15,7 @@ audio streaming. Next.js is the only user-facing frontend.
 Here's roughly what's in there:
 
 **Library**
-Drag-and-drop uploads (whole folders, where the browser allows it), metadata and embedded artwork read only from your audio files, user-uploaded cover replacements, and generated placeholders when a file has no art. Uploads matching an existing track's normalized title, artist, and album and within two seconds of its duration are skipped. Track details come from the file tags, with filename parsing as a fallback. Supported formats include MP3, M4A/MP4, AAC, FLAC, OGG/OGA, Opus, WAV, and WebM audio.
+Drag-and-drop uploads (whole folders, where the browser allows it), metadata and embedded artwork read only from your audio files, user-uploaded cover replacements, and generated placeholders when a file has no art. Uploads matching an existing track's normalized title and artist and within two seconds of its duration are skipped, even when album tags differ. Track details come from the file tags, with filename parsing as a fallback. Supported formats include MP3, M4A/MP4, AAC, FLAC, OGG/OGA, Opus, WAV, and WebM audio.
 
 The interface supports English, Brazilian Portuguese, Spanish and French. It follows the browser language by default, and users can choose a language on the sign-in screen or in account settings.
 

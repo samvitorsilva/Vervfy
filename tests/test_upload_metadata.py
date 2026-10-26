@@ -76,7 +76,7 @@ class UploadMetadataTests(unittest.TestCase):
                         return_value=(
                             "beyonce song",
                             " strings & hearts ",
-                            "sunrise",
+                            "different compilation",
                             182,
                             make_placeholder_cover("duplicate"),
                             False,
@@ -115,16 +115,22 @@ class UploadMetadataTests(unittest.TestCase):
                 existing,
                 "beyonce song",
                 " strings & hearts ",
-                " sunrise ",
                 182,
+            )
+        )
+        self.assertTrue(
+            _same_recording_metadata(
+                existing,
+                "Beyoncé Song",
+                "Strings & Hearts",
+                180,
             )
         )
         self.assertFalse(
             _same_recording_metadata(
                 existing,
                 "Beyoncé Song",
-                "Strings & Hearts",
-                "Different Album",
+                "Different Artist",
                 180,
             )
         )
@@ -133,7 +139,6 @@ class UploadMetadataTests(unittest.TestCase):
                 existing,
                 "Beyoncé Song",
                 "Strings & Hearts",
-                "Sunrise",
                 183,
             )
         )

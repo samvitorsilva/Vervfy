@@ -47,7 +47,6 @@ def _same_recording_metadata(
     track: TrackRecord,
     title: str,
     artist: str,
-    album: str,
     duration: float,
 ) -> bool:
     return (
@@ -56,7 +55,6 @@ def _same_recording_metadata(
         and abs(track.duration - duration) <= 2
         and _normalized_track_metadata(track.title) == _normalized_track_metadata(title)
         and _normalized_track_metadata(track.artist) == _normalized_track_metadata(artist)
-        and _normalized_track_metadata(track.album) == _normalized_track_metadata(album)
     )
 
 
@@ -358,7 +356,7 @@ class Library:
         if not meta:return None
         title,artist,album,duration,cover,has_cover=meta
         with tenant_session(self.user_id) as s:
-            duplicate = self._find_duplicate_recording(s, title, artist, album, duration)
+            duplicate = self._find_duplicate_recording(s, title, artist, duration)
             if duplicate is not None:
                 return self._track(duplicate)
         try:
@@ -398,7 +396,7 @@ class Library:
                 if s.bind.dialect.name == "postgresql":
                     # Serialize quota checks for this account across workers.
                     s.get(User, self.user_id, with_for_update=True)
-                duplicate = self._find_duplicate_recording(s, title, artist, album, duration)
+                duplicate = self._find_duplicate_recording(s, title, artist, duration)
                 if duplicate is not None:
                     duplicate_track = self._track(duplicate)
                 else:
@@ -440,7 +438,7 @@ class Library:
             raise
 
     def _find_duplicate_recording(
-        self, session, title: str, artist: str, album: str, duration: float
+        self, session, title: str, artist: str, duration: float
     ) -> TrackRecord | None:
         candidates = session.scalars(
             select(TrackRecord)
@@ -464,7 +462,7 @@ class Library:
         matching = [
             track
             for track in candidates
-            if _same_recording_metadata(track, title, artist, album, duration)
+            if _same_recording_metadata(track, title, artist, duration)
         ]
         return min(
             matching,
