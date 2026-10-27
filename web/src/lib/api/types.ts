@@ -25,5 +25,6 @@ export interface LibraryState {
     id: string;
     name: string;
     trackIds: string[];
+    lastPlayedAt?: number | null;
   }>;
 }

@@ -205,6 +205,7 @@ function normalizeMeta(value: LibraryState): LibraryMeta {
       id: playlist.id,
       name: playlist.name,
       trackIds: [...new Set(playlist.trackIds)],
+      lastPlayedAt: typeof playlist.lastPlayedAt === "number" ? playlist.lastPlayedAt : null,
     })),
   };
 }
@@ -257,28 +258,36 @@ function ListeningRecapCard({
   summary,
   tracksById,
   onPlay,
+  showHeading = true,
 }: {
   title: string;
   period: string;
   summary: ListeningPeriodSummary;
   tracksById: Map<string, TrackRecord>;
   onPlay: (track: TrackRecord) => void;
+  showHeading?: boolean;
 }) {
   const { t } = useLanguage();
   return (
     <section className="recap-period">
-      <div className="recap-period-heading">
-        <div>
-          <span className="recap-period-label">{period}</span>
-          <h2>{title}</h2>
+      {showHeading ? (
+        <div className="recap-period-heading">
+          <div>
+            <span className="recap-period-label">{period}</span>
+            <h2>{title}</h2>
+          </div>
+          <p className="recap-period-total">
+            <strong>{summary.playCount}</strong> {t("plays")}
+          </p>
         </div>
-        <div className="recap-play-total">
-          <strong>{summary.playCount}</strong>
-          <span>{t("plays")}</span>
-        </div>
-      </div>
+      ) : (
+        <p className="recap-period-total yearly-recap-total">
+          <strong>{summary.playCount}</strong> {t("plays")}
+        </p>
+      )}
       {summary.topTracks.length ? (
         <div className="recap-top-tracks">
+          <span className="recap-track-label">{t("Top tracks")}</span>
           {summary.topTracks.map((item, index) => {
             const track = tracksById.get(item.trackId);
             if (!track) return null;
@@ -307,7 +316,7 @@ function ListeningRecapCard({
       {summary.topArtists.length ? (
         <div className="recap-artists">
           <span>{t("Top artists")}</span>
-          <p>{summary.topArtists.map((artist) => artist.artist).join(" · ")}</p>
+          <p>{summary.topArtists.slice(0, 3).map((artist) => artist.artist).join(" · ")}</p>
         </div>
       ) : null}
     </section>
@@ -924,9 +933,11 @@ export default function LibraryApp() {
   const coverInfoButtonRef = useRef<HTMLButtonElement>(null);
   const coverInfoPopoverRef = useRef<HTMLElement>(null);
   const coverInfoReturnFocusRef = useRef<HTMLElement | null>(null);
+  const yearlyRecapDialogRef = useRef<HTMLDialogElement>(null);
   const mobilePlayerMenuButtonRef = useRef<HTMLButtonElement>(null);
   const sleepTimerControlRef = useRef<HTMLDivElement>(null);
   const sleepTimerPopoverRef = useRef<HTMLElement>(null);
+  const playlistPlaybackRef = useRef<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -934,6 +945,7 @@ export default function LibraryApp() {
   const [profile, setProfile] = useState<Account | null>(null);
   const [listeningSummary, setListeningSummary] = useState<ListeningSummary | null>(null);
   const [listeningError, setListeningError] = useState<string | null>(null);
+  const [yearlyRecapOpen, setYearlyRecapOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
@@ -1216,6 +1228,18 @@ export default function LibraryApp() {
         new Date(listeningSummary.monthStart * 1000),
       )
     : "";
+  const recapTrackDateFormatter = useMemo(
+    () => new Intl.DateTimeFormat(language, { month: "short", day: "numeric", year: "numeric" }),
+    [language],
+  );
+  const canOpenYearlyRecap = listeningSummary
+    ? new Date(listeningSummary.asOf * 1000).getUTCMonth() === 11
+    : false;
+  useEffect(() => {
+    if (yearlyRecapOpen && yearlyRecapDialogRef.current && !yearlyRecapDialogRef.current.open) {
+      yearlyRecapDialogRef.current.showModal();
+    }
+  }, [yearlyRecapOpen]);
   const trackMenuTrack = trackMenu ? tracksById.get(trackMenu.trackId) ?? null : null;
   const title = t(viewName(view, playlists));
   const playlistForView = view.startsWith("playlist:")
@@ -1251,12 +1275,67 @@ export default function LibraryApp() {
         )
       : playlists;
   }, [playlists, search]);
+  const playlistRecommendations = useMemo(() => {
+    const cutoff = (listeningSummary?.asOf ?? 0) - 30 * 24 * 60 * 60;
+    return playlists
+      .map((playlist) => ({
+        playlist,
+        tracks: playlist.trackIds
+          .map((trackId) => tracksById.get(trackId))
+          .filter((track): track is TrackRecord => Boolean(track)),
+      }))
+      .filter(({ playlist, tracks }) =>
+        tracks.length > 0 &&
+        (playlist.lastPlayedAt == null || playlist.lastPlayedAt < cutoff),
+      )
+      .sort((first, second) =>
+        (first.playlist.lastPlayedAt ?? 0) - (second.playlist.lastPlayedAt ?? 0),
+      )
+      .slice(0, 3);
+  }, [listeningSummary?.asOf, playlists, tracksById]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     toastTimeoutRef.current = setTimeout(() => setToast(""), 2600);
   }, []);
+
+  const recordPlaylistListen = useCallback(
+    async (playlistId: string) => {
+      try {
+        const response = await expectOk(
+          await apiFetch(
+            `/api/library/playlists/${encodeURIComponent(playlistId)}/listening`,
+            { method: "POST" },
+            { csrf: true, retryCsrfOnForbidden: true },
+          ),
+        );
+        const result = (await response.json()) as {
+          playlistId?: unknown;
+          lastPlayedAt?: unknown;
+        };
+        const lastPlayedAt = result.lastPlayedAt;
+        if (
+          result.playlistId !== playlistId ||
+          typeof lastPlayedAt !== "number" ||
+          !Number.isFinite(lastPlayedAt)
+        ) {
+          throw new Error("The server returned invalid playlist listening data.");
+        }
+        setPlaylists(
+          usePlayerStore.getState().playlists.map((playlist) =>
+            playlist.id === playlistId
+              ? { ...playlist, lastPlayedAt }
+              : playlist,
+          ),
+        );
+      } catch (error) {
+        console.error("Could not save playlist listening history.", error);
+        notify("Playlist listening history could not be saved.");
+      }
+    },
+    [notify, setPlaylists],
+  );
 
   const reloadTracks = useCallback(async () => {
     trackCoverPollAttemptsRef.current = 0;
@@ -2047,11 +2126,14 @@ export default function LibraryApp() {
   );
 
   const playFromList = useCallback(
-    (list: TrackRecord[], trackId: string) => {
+    (list: TrackRecord[], trackId: string, playlistId?: string) => {
       const ids = list.map((track) => track.id);
       const index = ids.indexOf(trackId);
       if (index < 0) return;
-      setPlayingFromView(view);
+      const sourcePlaylistId =
+        playlistId ?? (view.startsWith("playlist:") ? view.slice("playlist:".length) : null);
+      playlistPlaybackRef.current = sourcePlaylistId;
+      setPlayingFromView(sourcePlaylistId ? `playlist:${sourcePlaylistId}` : view);
       shufflePlayedRef.current = new Set([index]);
       setQueue(ids, index);
       startTrack(trackId);
@@ -2563,6 +2645,11 @@ export default function LibraryApp() {
         if (!attempt.listenRecorded && attempt.listenedSeconds >= listenThreshold) {
           attempt.listenRecorded = true;
           void recordTrackListen(attempt.trackId);
+          const playlistId = playlistPlaybackRef.current;
+          if (playlistId) {
+            playlistPlaybackRef.current = null;
+            void recordPlaylistListen(playlistId);
+          }
         }
       }
       clearStallTimer(attempt);
@@ -2706,6 +2793,7 @@ export default function LibraryApp() {
     handleAudioError,
     handlePlaybackFailure,
     recordTrackListen,
+    recordPlaylistListen,
     setPlaybackStatus,
     setPlaying,
   ]);
@@ -3585,13 +3673,23 @@ export default function LibraryApp() {
                 </div>
                 {view === "account" || view === "artists" || view.startsWith("artist:") ? null : view === "recap" ? (
                   <div className="recap-page">
-                    <section className="recap-intro">
-                      <span className="recap-intro-icon" aria-hidden="true"><Icon name="clock" /></span>
-                      <div>
+                    <div className="recap-overview">
+                      <section className="recap-intro">
                         <h2>{t("Your listening, over time")}</h2>
                         <p>{t("Recaps only include listens recorded since listening history was added. Earlier plays aren't available.")}</p>
-                      </div>
-                    </section>
+                      </section>
+                      {canOpenYearlyRecap ? (
+                        <button
+                          className="recap-yearly-trigger"
+                          type="button"
+                          onClick={() => setYearlyRecapOpen(true)}
+                          aria-haspopup="dialog"
+                        >
+                          <span>{t("Yearly recap")}</span>
+                          <strong>{listeningSummary?.yearLabel}</strong>
+                        </button>
+                      ) : null}
+                    </div>
                     {listeningError ? <p className="recap-notice" role="status">{t(listeningError)}</p> : null}
                     {listeningSummary ? (
                       <>
@@ -3603,22 +3701,17 @@ export default function LibraryApp() {
                             tracksById={tracksById}
                             onPlay={(track) => playFromList(tracks, track.id)}
                           />
-                          <ListeningRecapCard
-                            title={listeningSummary.yearLabel}
-                            period={t("Yearly recap")}
-                            summary={listeningSummary.year}
-                            tracksById={tracksById}
-                            onPlay={(track) => playFromList(tracks, track.id)}
-                          />
                         </div>
                         <section className="recap-rediscover">
                           <div className="recap-rediscover-heading">
-                            <div>
-                              <h2>{t("Played before, not lately")}</h2>
-                              <p>{t("Songs with a recorded listen more than 30 days ago.")}</p>
-                              <span className="recap-rediscover-count">
-                                {rediscoveryTracks.length} {t("songs")}
-                              </span>
+                            <div className="recap-rediscover-copy">
+                              <div className="recap-rediscover-title">
+                                <h2>{t("Rediscover these songs")}</h2>
+                                <span className="recap-rediscover-count">
+                                  <strong>{rediscoveryTracks.length}</strong> {t("songs")}
+                                </span>
+                              </div>
+                              <p>{t("Last played more than 30 days ago.")}</p>
                             </div>
                             <button
                               className="btn btn-primary"
@@ -3632,23 +3725,30 @@ export default function LibraryApp() {
                           </div>
                           {rediscoveryTracks.length ? (
                             <div className="recap-top-tracks">
-                              {rediscoveryTracks.slice(0, 12).map((track, index) => (
-                                <button
-                                  className="recap-track"
-                                  key={track.id}
-                                  type="button"
-                                  onClick={() => playFromList(rediscoveryTracks, track.id)}
-                                  aria-label={`${t("Play")} ${track.title}`}
-                                >
-                                  <span className="recap-rank">{index + 1}</span>
-                                  <TrackImage track={track} className="recap-art" thumbnail />
-                                  <span className="recap-track-copy">
-                                    <strong>{track.title}</strong>
-                                    <small>{track.artist}</small>
-                                  </span>
-                                  <span className="recap-track-hint">{t("30+ days")}</span>
-                                </button>
-                              ))}
+                              {rediscoveryTracks.slice(0, 12).map((track) => {
+                                const lastPlayedAt = listeningSummary.lastPlayedAt[track.id];
+                                if (lastPlayedAt === undefined) return null;
+                                const lastPlayedLabel = t("Last played {date}").replace(
+                                  "{date}",
+                                  recapTrackDateFormatter.format(new Date(lastPlayedAt * 1000)),
+                                );
+                                return (
+                                  <button
+                                    className="recap-track recap-rediscover-track"
+                                    key={track.id}
+                                    type="button"
+                                    onClick={() => playFromList(rediscoveryTracks, track.id)}
+                                    aria-label={`${t("Play")} ${track.title}, ${lastPlayedLabel}`}
+                                  >
+                                    <TrackImage track={track} className="recap-art" thumbnail />
+                                    <span className="recap-track-copy">
+                                      <strong>{track.title}</strong>
+                                      <small>{track.artist}</small>
+                                      <small className="recap-last-played">{lastPlayedLabel}</small>
+                                    </span>
+                                  </button>
+                                );
+                              })}
                               {rediscoveryTracks.length > 12 ? (
                                 <p className="recap-more">
                                   {t("{count} more songs are included in your playlist.").replace(
@@ -3711,6 +3811,64 @@ export default function LibraryApp() {
               )
             ) : (
               <>
+                {view === "library" && !search.trim() && playlistRecommendations.length > 0 ? (
+                  <section className="playlist-recommendations" aria-labelledby="playlist-recommendations-title">
+                    <div className="playlist-recommendations-heading">
+                      <div>
+                        <h2 id="playlist-recommendations-title">{t("Playlists to revisit")}</h2>
+                        <p>{t("Playlists you haven't heard in 30 days, or haven't played yet.")}</p>
+                      </div>
+                    </div>
+                    <div className="playlist-recommendations-list">
+                      {playlistRecommendations.map(({ playlist, tracks: recommendationTracks }) => {
+                        const coverTracks = playlistCoverTracks(playlist);
+                        const lastPlayed = playlist.lastPlayedAt
+                          ? t("Last played {date}").replace(
+                              "{date}",
+                              recapTrackDateFormatter.format(new Date(playlist.lastPlayedAt * 1000)),
+                            )
+                          : t("Not played yet");
+                        const playLabel = t("Play playlist {name}").replace("{name}", playlist.name);
+                        const trackCount = recommendationTracks.length;
+                        const firstTrack = recommendationTracks[0];
+                        return (
+                          <article className="playlist-recommendation" key={playlist.id}>
+                            <button
+                              className="playlist-recommendation-open"
+                              type="button"
+                              aria-label={`${t("Open playlist")} ${playlist.name}`}
+                              onClick={() => setView(`playlist:${playlist.id}`)}
+                            >
+                              <span className={`playlist-recommendation-cover playlist-cover${coverTracks.length === 1 ? " single" : ""}`}>
+                                {coverTracks.map((track) => (
+                                  <TrackImage key={track.id} track={track} thumbnail />
+                                ))}
+                              </span>
+                              <span className="playlist-recommendation-copy">
+                                <strong>{playlist.name}</strong>
+                                <small>{trackCount} {t("songs")}</small>
+                                <small className="playlist-recommendation-last-played">{lastPlayed}</small>
+                              </span>
+                            </button>
+                            <button
+                              className="playlist-recommendation-play"
+                              type="button"
+                              aria-label={playLabel}
+                              disabled={!firstTrack}
+                              onClick={() => {
+                                if (firstTrack) {
+                                  playFromList(recommendationTracks, firstTrack.id, playlist.id);
+                                }
+                              }}
+                            >
+                              <Icon name="play" />
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ) : null}
                 {playlistForView ? (
                   <div className="playlist-detail">
                     <button className="playlist-back" type="button" onClick={() => setView("playlists")}><Icon name="prev" /> {t("All playlists")}</button>
@@ -4100,6 +4258,52 @@ export default function LibraryApp() {
         />
       ) : null}
       {visualizerOpen ? <VisualizerOverlay onClose={() => setVisualizerOpen(false)} /> : null}
+      {yearlyRecapOpen && listeningSummary && typeof document !== "undefined"
+        ? createPortal(
+            <dialog
+              ref={yearlyRecapDialogRef}
+              className="yearly-recap-dialog"
+              aria-labelledby="yearly-recap-title"
+              onClose={() => setYearlyRecapOpen(false)}
+              onClick={(event) => {
+                if (event.target !== event.currentTarget) return;
+                const bounds = event.currentTarget.getBoundingClientRect();
+                if (
+                  event.clientX < bounds.left ||
+                  event.clientX > bounds.right ||
+                  event.clientY < bounds.top ||
+                  event.clientY > bounds.bottom
+                ) {
+                  yearlyRecapDialogRef.current?.close();
+                }
+              }}
+            >
+              <header className="yearly-recap-header">
+                <div>
+                  <span className="recap-period-label">{t("Yearly recap")}</span>
+                  <h2 id="yearly-recap-title">{listeningSummary.yearLabel}</h2>
+                </div>
+                <button
+                  className="icon-btn"
+                  type="button"
+                  aria-label={t("Close")}
+                  onClick={() => yearlyRecapDialogRef.current?.close()}
+                >
+                  <Icon name="close" />
+                </button>
+              </header>
+              <ListeningRecapCard
+                title={listeningSummary.yearLabel}
+                period={t("Yearly recap")}
+                summary={listeningSummary.year}
+                tracksById={tracksById}
+                onPlay={(track) => playFromList(tracks, track.id)}
+                showHeading={false}
+              />
+            </dialog>,
+            document.body,
+          )
+        : null}
       {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
         <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
           <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>

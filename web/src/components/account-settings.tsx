@@ -50,7 +50,9 @@ export default function AccountSettings({
   const [email, setEmail] = useState("");
   const [emailPassword, setEmailPassword] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
+  const [emailEditorOpen, setEmailEditorOpen] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
   const [photoDraftUrl, setPhotoDraftUrl] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export default function AccountSettings({
   const [photoOffset, setPhotoOffset] = useState({ x: 0, y: 0 });
   const [photoSaving, setPhotoSaving] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
+  const [deleteEditorOpen, setDeleteEditorOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoImageRef = useRef<HTMLImageElement>(null);
@@ -314,7 +317,6 @@ export default function AccountSettings({
 
   async function deleteAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!window.confirm(t("Delete your account and all of its music data permanently?"))) return;
     const formData = new FormData(event.currentTarget);
     setDeleteMessage(t("Deleting account…"));
     setPending(true);
@@ -338,6 +340,7 @@ export default function AccountSettings({
     { label: t("Artists"), count: artistCount, subtitle: t("in your library"), view: "artists" },
     { label: t("Playlists"), count: playlists.length, subtitle: t("saved playlists"), view: "playlists" },
   ];
+  const memberSince = new Date(account?.created_at ? account.created_at * 1000 : 0);
 
   if (!account) {
     return <div className="account-view acct-loading">{error || t("Loading account…")}</div>;
@@ -346,62 +349,168 @@ export default function AccountSettings({
   return (
     <div className="account-view">
       <section className="acct-card">
-        <button className="acct-avatar" type="button" title={t("Edit profile photo")} aria-label={t("Edit profile photo")} onClick={openPhotoEditor}>
-          {account.photo_url ? <img src={account.photo_url} alt={t("Profile photo")} /> : account.username.slice(0, 1).toUpperCase()}
+        <button className={`acct-avatar${account.photo_url ? " has-photo" : ""}`} type="button" title={t("Edit profile photo")} aria-label={t("Edit profile photo")} onClick={openPhotoEditor}>
+          {account.photo_url ? <img src={account.photo_url} alt="" /> : <span className="acct-avatar-monogram">{account.username.slice(0, 1).toUpperCase()}</span>}
         </button>
-        <div><div className="acct-name">{account.username}</div><div className="acct-sub">{account.email ?? t("No email on file")} · {t("Member since")} {dateLabel(account.created_at, language)}</div></div>
+        <div className="acct-profile-copy">
+          <div className="acct-profile-kicker">
+            <span className="acct-profile-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>
+            <span>{t("Profile")}</span>
+          </div>
+          <h1 className="acct-name">{account.username}</h1>
+          <p className="acct-member">
+            <span>{t("Member since")}</span>
+            <time dateTime={memberSince.toISOString()}>{dateLabel(account.created_at, language)}</time>
+          </p>
+        </div>
       </section>
 
-      <div className="acct-grid">
-        {cards.map((card) => <button type="button" className="acct-panel" key={card.label} onClick={() => setView(card.view)}><span className="acct-panel-head"><span>{card.label}</span><span className="acct-count">{card.count}</span></span><span className="acct-panel-sub">{card.subtitle}</span></button>)}
-      </div>
-
-      <section className="acct-settings">
-        <div className="acct-settings-title">{t("Language")}</div>
-        <p className="acct-danger-copy">{t("Choose the language used by Vervfy.")}</p>
-        <LanguageSelect />
+      <section className="acct-library-section" aria-labelledby="account-library-title">
+        <h2 className="acct-section-heading" id="account-library-title">{t("Your library")}</h2>
+        <div className="acct-grid">
+          {cards.map((card) => (
+            <button type="button" className="acct-panel" key={card.label} onClick={() => setView(card.view)}>
+              <span className="acct-panel-head"><span>{card.label}</span><span className="acct-count">{card.count}</span></span>
+              <span className="acct-panel-sub">{card.subtitle}</span>
+            </button>
+          ))}
+        </div>
       </section>
 
-      <section className="acct-settings">
-        <div className="acct-settings-title">{t("Credits")}</div>
-        <Link className="artist-website" href="/credits">{t("Credits and data sources")} ↗</Link>
+      <section className="acct-settings acct-settings-group" aria-labelledby="account-preferences-title">
+        <h2 className="acct-section-heading" id="account-preferences-title">{t("Preferences")}</h2>
+        <div className="acct-setting-row">
+          <div className="acct-setting-copy">
+            <h3>{t("Language")}</h3>
+            <p>{t("Choose the language used by Vervfy.")}</p>
+          </div>
+          <LanguageSelect className="acct-language-select" />
+        </div>
+        <div className="acct-setting-row">
+          <div className="acct-setting-copy">
+            <h3>{t("Credits")}</h3>
+            <p>{t("Credits and data sources")}</p>
+          </div>
+          <Link className="acct-link" href="/credits">{t("View credits")}</Link>
+        </div>
       </section>
 
-      <section className="acct-settings">
-        <div className="acct-settings-title">{t("Email address")}</div>
-        <form className="acct-form" onSubmit={saveEmail}>
-          <input type="email" placeholder="you@example.com" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
-          <input type="password" placeholder={t("Current password")} autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
-          <button className="btn btn-primary" type="submit">{t("Save email")}</button>
-          {account.email ? <button className="btn" type="button" onClick={() => setEmail("")}>{t("Clear email")}</button> : null}
-          <div className={`acct-form-msg${emailMessage.includes("salvo") || emailMessage.includes("removido") || emailMessage.includes("saved") || emailMessage.includes("removed") ? " ok" : emailMessage && !emailMessage.includes("Salvando") && !emailMessage.includes("Saving") ? " error" : ""}`}>{emailMessage || t("Email is account information only; sign in with your username.")}</div>
-        </form>
+      <section className="acct-settings acct-settings-group" aria-labelledby="account-security-title">
+        <h2 className="acct-section-heading" id="account-security-title">{t("Sign-in & security")}</h2>
+        <div className="acct-security-item">
+          <div className="acct-setting-copy">
+            <h3>{t("Email address")}</h3>
+            <p>{t("Email is account information only; sign in with your username.")}</p>
+            <p className="acct-current-value">{account.email ?? t("No email on file")}</p>
+          </div>
+          <div className="acct-security-action">
+            <button
+              className="btn"
+              type="button"
+              aria-expanded={emailEditorOpen}
+              onClick={() => {
+                setEmail(account.email ?? "");
+                setEmailPassword("");
+                setEmailMessage("");
+                setEmailEditorOpen((open) => !open);
+              }}
+            >
+              {t(emailEditorOpen ? "Cancel" : "Edit")}
+            </button>
+            {emailEditorOpen ? (
+              <form className="acct-form acct-inline-editor" id="account-email-editor" onSubmit={saveEmail}>
+                <label className="acct-field">
+                  <span>{t("Email address")}</span>
+                  <input type="email" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
+                </label>
+                <label className="acct-field">
+                  <span>{t("Current password")}</span>
+                  <input type="password" autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
+                </label>
+                <div className="acct-form-actions">
+                  <button className="btn btn-primary" type="submit">{t("Save email")}</button>
+                </div>
+                <div className={`acct-form-msg${emailMessage.includes("salvo") || emailMessage.includes("removido") || emailMessage.includes("saved") || emailMessage.includes("removed") ? " ok" : emailMessage && !emailMessage.includes("Salvando") && !emailMessage.includes("Saving") ? " error" : ""}`} role="status" aria-live="polite">
+                  {emailMessage}
+                </div>
+              </form>
+            ) : null}
+          </div>
+        </div>
+        <div className="acct-security-item">
+          <div className="acct-setting-copy">
+            <h3>{t("Password")}</h3>
+          </div>
+          <div className="acct-security-action">
+            <button
+              className="btn"
+              type="button"
+              aria-expanded={passwordEditorOpen}
+              onClick={() => {
+                setPasswordMessage("");
+                setPasswordEditorOpen((open) => !open);
+              }}
+            >
+              {t(passwordEditorOpen ? "Cancel" : "Change password")}
+            </button>
+            {passwordEditorOpen ? (
+              <form className="acct-form acct-inline-editor" id="account-password-editor" onSubmit={savePassword}>
+                <label className="acct-field">
+                  <span>{t("Current password")}</span>
+                  <input name="current_password" type="password" autoComplete="current-password" required />
+                </label>
+                <label className="acct-field">
+                  <span>{t("New password (min 8 characters)")}</span>
+                  <input name="new_password" type="password" autoComplete="new-password" minLength={8} required />
+                </label>
+                <button className="btn btn-primary" type="submit">{t("Update password")}</button>
+                <div className={`acct-form-msg${passwordMessage === t("Password updated.") ? " ok" : passwordMessage && passwordMessage !== t("Updating…") ? " error" : ""}`} role="status" aria-live="polite">{passwordMessage}</div>
+              </form>
+            ) : null}
+          </div>
+        </div>
       </section>
 
-      <section className="acct-settings">
-        <div className="acct-settings-title">{t("Change password")}</div>
-        <form className="acct-form" onSubmit={savePassword}>
-          <input name="current_password" type="password" placeholder={t("Current password")} autoComplete="current-password" required />
-          <input name="new_password" type="password" placeholder={t("New password (min 8 characters)")} autoComplete="new-password" minLength={8} required />
-          <button className="btn btn-primary" type="submit">{t("Update password")}</button>
-          <div className={`acct-form-msg${passwordMessage === t("Password updated.") ? " ok" : passwordMessage && passwordMessage !== t("Updating…") ? " error" : ""}`}>{passwordMessage}</div>
-        </form>
+      <section className="acct-settings acct-session" aria-labelledby="account-session-title">
+        <h2 className="acct-section-heading" id="account-session-title">{t("Session")}</h2>
+        <div className="acct-session-actions">
+          <LogoutButton className="btn" />
+          <button className="btn" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button>
+        </div>
       </section>
 
-      <section className="acct-settings">
-        <div className="acct-settings-title">{t("Session")}</div>
-        <div className="acct-form"><LogoutButton /><button className="btn" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button></div>
-      </section>
-
-      <section className="acct-settings acct-danger-zone">
-        <div className="acct-settings-title">{t("Delete account")}</div>
+      <section className="acct-settings acct-danger-zone" aria-labelledby="account-delete-title">
+        <h2 className="acct-section-heading" id="account-delete-title">{t("Delete account")}</h2>
         <p className="acct-danger-copy">{t("Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.")}</p>
-        <form className="acct-form" onSubmit={deleteAccount}>
-          <input name="current_password" type="password" placeholder={t("Current password")} autoComplete="current-password" required />
-          <input name="confirmation" type="text" placeholder={t("Type DELETE to confirm")} autoComplete="off" required />
-          <button className="btn btn-danger" type="submit" disabled={pending}>{t("Delete account")}</button>
-          <div className={`acct-form-msg${deleteMessage && !deleteMessage.includes("Deleting") ? " error" : ""}`}>{deleteMessage}</div>
-        </form>
+        <div className="acct-delete-editor">
+          <button
+            className={`btn${deleteEditorOpen ? "" : " btn-danger"}`}
+            type="button"
+            aria-expanded={deleteEditorOpen}
+            onClick={() => {
+              setDeleteMessage("");
+              setDeleteEditorOpen((open) => !open);
+            }}
+          >
+            {t(deleteEditorOpen ? "Cancel" : "Delete account")}
+          </button>
+          {deleteEditorOpen ? (
+            <form className="acct-form acct-delete-form" onSubmit={deleteAccount}>
+              <label className="acct-field">
+                <span>{t("Current password")}</span>
+                <input name="current_password" type="password" autoComplete="current-password" required />
+              </label>
+              <label className="acct-field">
+                <span>{t("Type DELETE to confirm")}</span>
+                <input name="confirmation" type="text" autoComplete="off" required />
+              </label>
+              <div className="acct-form-actions">
+                <button className="btn btn-danger" type="submit" disabled={pending}>{t("Delete account")}</button>
+              </div>
+              <div className={`acct-form-msg${deleteMessage && !deleteMessage.includes("Deleting") ? " error" : ""}`} role="status" aria-live="polite">{deleteMessage}</div>
+            </form>
+          ) : null}
+        </div>
       </section>
 
       {photoEditorOpen ? (

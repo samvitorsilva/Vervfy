@@ -1285,6 +1285,8 @@ def startup() -> None:
         existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
         if "position" not in existing_playlist_columns:
             connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
+        if "last_played_at" not in existing_playlist_columns:
+            connection.execute(text("ALTER TABLE playlists ADD COLUMN last_played_at FLOAT"))
         existing_artist_photo_columns = {
             column["name"] for column in inspect(engine).get_columns("artist_photos")
         }
@@ -1633,7 +1635,8 @@ def _library_state_from_session(user_id: str, session) -> dict:
     ).all()
     return {"favorites": favorites, "playlists": [
         {"id": playlist.id, "name": playlist.name,
-         "trackIds": [item.track_id for item in playlist.tracks]}
+         "trackIds": [item.track_id for item in playlist.tracks],
+         "lastPlayedAt": playlist.last_played_at}
         for playlist in playlists
     ]}
 
@@ -1703,7 +1706,14 @@ def _listening_summary(user_id: str) -> dict:
 def _library_state_etag(state: dict) -> str:
     canonical = {
         "favorites": sorted(state["favorites"]),
-        "playlists": state["playlists"],
+        "playlists": [
+            {
+                "id": playlist["id"],
+                "name": playlist["name"],
+                "trackIds": playlist["trackIds"],
+            }
+            for playlist in state["playlists"]
+        ],
     }
     digest = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1902,6 +1912,27 @@ def record_track_listen(
         )
         session.commit()
     return {"trackId": payload.track_id, "playedAt": played_at}
+
+
+@app.post("/api/library/playlists/{playlist_id}/listening")
+def record_playlist_listen(
+    playlist_id: SafeId,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    with tenant_session(user["id"]) as session:
+        playlist = session.scalar(
+            select(Playlist).where(
+                Playlist.user_id == user["id"],
+                Playlist.id == playlist_id,
+            )
+        )
+        if playlist is None:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        played_at = max(time.time(), playlist.last_played_at or 0.0)
+        playlist.last_played_at = played_at
+        session.commit()
+    return {"playlistId": playlist_id, "lastPlayedAt": played_at}
 
 
 @app.get("/api/library/usage")

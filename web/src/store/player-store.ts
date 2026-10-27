@@ -51,6 +51,7 @@ export interface PlaylistRecord {
   id: string;
   name: string;
   trackIds: string[];
+  lastPlayedAt?: number | null;
 }
 
 interface PlayerStore {

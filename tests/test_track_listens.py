@@ -14,7 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("VERVFY_SECRET_KEY", "test-only-vervfy-session-secret")
 
 import server
-from db import Base, TrackListen, TrackRecord, User
+from db import Base, Playlist, PlaylistTrack, TrackListen, TrackRecord, User
 
 
 class TrackListenTests(unittest.TestCase):
@@ -33,6 +33,15 @@ class TrackListenTests(unittest.TestCase):
                 )
             )
             session.add(
+                User(
+                    id="other-user",
+                    username="other",
+                    username_key="other",
+                    password_hash="test-hash",
+                    created_at=self.now,
+                )
+            )
+            session.add(
                 TrackRecord(
                     id="track-one",
                     user_id="test-user",
@@ -41,6 +50,29 @@ class TrackListenTests(unittest.TestCase):
                     artist="Artist",
                     album="Album",
                     duration=180,
+                )
+            )
+            session.add(
+                Playlist(
+                    id="playlist-one",
+                    user_id="test-user",
+                    name="Favorites mix",
+                    position=0,
+                )
+            )
+            session.add(
+                PlaylistTrack(
+                    playlist_id="playlist-one",
+                    track_id="track-one",
+                    position=0,
+                )
+            )
+            session.add(
+                Playlist(
+                    id="private-playlist",
+                    user_id="other-user",
+                    name="Private",
+                    position=0,
                 )
             )
             session.add_all(
@@ -104,6 +136,26 @@ class TrackListenTests(unittest.TestCase):
                 server.record_track_listen(payload, {"id": "test-user"}, None)
 
         self.assertEqual(error.exception.status_code, 404)
+
+    def test_recorded_playlist_listen_updates_state_without_changing_metadata_etag(self) -> None:
+        with patch.object(server, "tenant_session", self.tenant_session):
+            before = server._library_state("test-user")
+            before_etag = server._library_state_etag(before)
+            result = server.record_playlist_listen("playlist-one", {"id": "test-user"}, None)
+            after = server._library_state("test-user")
+
+        self.assertEqual(result["playlistId"], "playlist-one")
+        self.assertGreater(result["lastPlayedAt"], self.now - 1)
+        self.assertEqual(after["playlists"][0]["lastPlayedAt"], result["lastPlayedAt"])
+        self.assertEqual(server._library_state_etag(after), before_etag)
+
+    def test_record_playlist_listen_rejects_missing_or_foreign_playlist(self) -> None:
+        with patch.object(server, "tenant_session", self.tenant_session):
+            for playlist_id in ("missing-playlist", "private-playlist"):
+                with self.subTest(playlist_id=playlist_id):
+                    with self.assertRaises(server.HTTPException) as error:
+                        server.record_playlist_listen(playlist_id, {"id": "test-user"}, None)
+                    self.assertEqual(error.exception.status_code, 404)
 
 
 if __name__ == "__main__":
