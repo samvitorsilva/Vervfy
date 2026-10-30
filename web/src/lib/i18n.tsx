@@ -1,8 +1,9 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { languageFromLocale, type Language } from "@/lib/language";
 
-export type Language = "en" | "pt-BR" | "fr" | "es";
+export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
   "Welcome back": "Que bom ter você de volta!",
@@ -155,7 +156,7 @@ const translations: Record<string, string> = {
   "Monthly recap": "Resumo mensal",
   "Yearly recap": "Resumo anual",
   Recap: "Resumo",
-  "Top tracks": "Músicas mais tocadas",
+  "Top {count} tracks": "Top {count} músicas",
   "Top artists": "Artistas mais ouvidos",
   "No qualifying listens in this period yet.": "Ainda não há reproduções qualificadas neste período.",
   "Listening history could not be loaded.": "Não foi possível carregar o histórico de reprodução.",
@@ -571,7 +572,7 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "Monthly recap": ["Récapitulatif mensuel", "Resumen mensual"],
   "Yearly recap": ["Récapitulatif annuel", "Resumen anual"],
   Recap: ["Récapitulatif", "Resumen"],
-  "Top tracks": ["Morceaux les plus écoutés", "Canciones más escuchadas"],
+  "Top {count} tracks": ["Top {count} morceaux", "Top {count} canciones"],
   "Top artists": ["Artistes les plus écoutés", "Artistas más escuchados"],
   "No qualifying listens in this period yet.": ["Aucune écoute prise en compte pour cette période.", "Aún no hay reproducciones contabilizadas en este periodo."],
   "Listening history could not be loaded.": ["Impossible de charger l’historique d’écoute.", "No se pudo cargar el historial de reproducción."],
@@ -850,7 +851,7 @@ const LanguageContext = createContext<LanguageContextValue>({
   t: (text) => text,
 });
 
-let activeLanguage: Language = "en";
+let activeLanguage: Language | null = null;
 const languageListeners = new Set<() => void>();
 
 function subscribeLanguage(listener: () => void): () => void {
@@ -858,12 +859,17 @@ function subscribeLanguage(listener: () => void): () => void {
   return () => languageListeners.delete(listener);
 }
 
-function currentLanguage(): Language {
-  return activeLanguage;
-}
+function currentLanguage(fallback: Language): Language {
+  if (activeLanguage) return activeLanguage;
+  if (typeof window === "undefined") return fallback;
 
-function serverLanguage(): Language {
-  return "en";
+  try {
+    const saved = languageFromLocale(window.localStorage.getItem("vervfy:language"));
+    if (saved) return saved;
+  } catch (error) {
+    console.warn("Could not read the saved language preference.", error);
+  }
+  return fallback;
 }
 
 function updateLanguage(language: Language): void {
@@ -872,42 +878,43 @@ function updateLanguage(language: Language): void {
   for (const listener of languageListeners) listener();
 }
 
-function browserLanguage(): Language {
-  if (typeof navigator === "undefined") return "en";
-  const languages = navigator.languages.length ? navigator.languages : [navigator.language];
-  for (const language of languages) {
-    const normalized = language.toLowerCase();
-    if (normalized.startsWith("pt")) return "pt-BR";
-    if (normalized.startsWith("fr")) return "fr";
-    if (normalized.startsWith("es")) return "es";
-    if (normalized.startsWith("en")) return "en";
-  }
-  return "en";
-}
-
-export function LanguageProvider({ children }: { children: ReactNode }) {
-  const language = useSyncExternalStore(subscribeLanguage, currentLanguage, serverLanguage);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("vervfy:language");
-    const supportedLanguages: Language[] = ["en", "pt-BR", "fr", "es"];
-    const initial = supportedLanguages.find((supported) => supported === saved) ?? browserLanguage();
-    updateLanguage(initial);
-  }, []);
+export function LanguageProvider({
+  children,
+  initialLanguage,
+}: {
+  children: ReactNode;
+  initialLanguage: Language;
+}) {
+  const getLanguage = useCallback(
+    () => currentLanguage(initialLanguage),
+    [initialLanguage],
+  );
+  const getServerLanguage = useCallback(() => initialLanguage, [initialLanguage]);
+  const language = useSyncExternalStore(
+    subscribeLanguage,
+    getLanguage,
+    getServerLanguage,
+  );
 
   const setLanguage = useCallback((next: Language) => {
-    window.localStorage.setItem("vervfy:language", next);
+    try {
+      window.localStorage.setItem("vervfy:language", next);
+    } catch (error) {
+      console.warn("Could not save the language preference in this browser.", error);
+    }
+    document.cookie = `vervfy-language=${next}; Path=/; Max-Age=31536000; SameSite=Lax${window.location.protocol === "https:" ? "; Secure" : ""}`;
+    document.documentElement.lang = next;
     updateLanguage(next);
   }, []);
 
   const t = useCallback(
     (text: string) => {
-      if (activeLanguage === "pt-BR") return translations[text] ?? text;
-      if (activeLanguage === "fr") return frenchSpanishTranslations[text]?.[0] ?? text;
-      if (activeLanguage === "es") return frenchSpanishTranslations[text]?.[1] ?? text;
+      if (language === "pt-BR") return translations[text] ?? text;
+      if (language === "fr") return frenchSpanishTranslations[text]?.[0] ?? text;
+      if (language === "es") return frenchSpanishTranslations[text]?.[1] ?? text;
       return text;
     },
-    [],
+    [language],
   );
 
   useEffect(() => {
@@ -936,11 +943,7 @@ export function LanguageSelect({ className = "" }: { className?: string }) {
         value={language}
         onChange={(event) => {
           const nextLanguage = event.currentTarget.value;
-          if (nextLanguage === "pt-BR" || nextLanguage === "fr" || nextLanguage === "es") {
-            setLanguage(nextLanguage);
-          } else {
-            setLanguage("en");
-          }
+          setLanguage(languageFromLocale(nextLanguage) ?? "en");
         }}
       >
         <option value="en">English</option>

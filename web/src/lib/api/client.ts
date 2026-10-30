@@ -115,8 +115,25 @@ export async function expectOk(response: Response): Promise<Response> {
   return response;
 }
 
-const wait = (milliseconds: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
+const wait = (milliseconds: number, signal?: AbortSignal | null): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+      return;
+    }
+
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    const abort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 
 export async function fetchWithRetry(
   input: string,
@@ -124,10 +141,16 @@ export async function fetchWithRetry(
   attempts = 5,
 ): Promise<Response> {
   let lastError: Error = new Error("The backend is unavailable.");
+  const callerSignal = init.signal;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (callerSignal?.aborted) {
+      throw callerSignal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
+    const abortController = () => controller.abort();
+    callerSignal?.addEventListener("abort", abortController, { once: true });
 
     try {
       const response = await fetch(input, {
@@ -146,14 +169,18 @@ export async function fetchWithRetry(
       }
       lastError = await responseError(response);
     } catch (error) {
+      if (callerSignal?.aborted) {
+        throw callerSignal.reason ?? error;
+      }
       lastError =
         error instanceof Error ? error : new Error("The backend is unavailable.");
     } finally {
       clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortController);
     }
 
     if (attempt < attempts - 1) {
-      await wait(Math.min(2_000 * 2 ** attempt, 10_000));
+      await wait(Math.min(2_000 * 2 ** attempt, 10_000), callerSignal);
     }
   }
 

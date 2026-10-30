@@ -267,7 +267,29 @@ function ListeningRecapCard({
   onPlay: (track: TrackRecord) => void;
   showHeading?: boolean;
 }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
+  const numberFormat = useMemo(() => new Intl.NumberFormat(language), [language]);
+  const maxTrackPlayCount = Math.max(
+    0,
+    ...summary.topTracks.map((item) => item.playCount),
+  );
+  const topTracks = summary.topTracks.flatMap((item) => {
+    const track = tracksById.get(item.trackId);
+    return track ? [{ item, track }] : [];
+  });
+  const artistArtwork = new Map<string, TrackRecord>();
+  for (const { track } of topTracks) {
+    const key = track.artist.trim().toLocaleLowerCase();
+    if (track.hasCover && track.coverUrl && !artistArtwork.has(key)) {
+      artistArtwork.set(key, track);
+    }
+  }
+  for (const track of tracksById.values()) {
+    const key = track.artist.trim().toLocaleLowerCase();
+    if (track.hasCover && track.coverUrl && !artistArtwork.has(key)) {
+      artistArtwork.set(key, track);
+    }
+  }
   return (
     <section className="recap-period">
       {showHeading ? (
@@ -277,27 +299,30 @@ function ListeningRecapCard({
             <h2>{title}</h2>
           </div>
           <p className="recap-period-total">
-            <strong>{summary.playCount}</strong> {t("plays")}
+            <strong>{numberFormat.format(summary.playCount)}</strong> {t("plays")}
           </p>
         </div>
       ) : (
         <p className="recap-period-total yearly-recap-total">
-          <strong>{summary.playCount}</strong> {t("plays")}
+          <strong>{numberFormat.format(summary.playCount)}</strong> {t("plays")}
         </p>
       )}
-      {summary.topTracks.length ? (
+      {topTracks.length ? (
         <div className="recap-top-tracks">
-          <span className="recap-track-label">{t("Top tracks")}</span>
-          {summary.topTracks.map((item, index) => {
-            const track = tracksById.get(item.trackId);
-            if (!track) return null;
+          <h3 className="recap-track-label">
+            {t("Top {count} tracks").replace(
+              "{count}",
+              numberFormat.format(topTracks.length),
+            )}
+          </h3>
+          {topTracks.map(({ item, track }, index) => {
             return (
               <button
                 className="recap-track"
                 key={item.trackId}
                 type="button"
                 onClick={() => onPlay(track)}
-                aria-label={`${t("Play")} ${track.title}`}
+                aria-label={`${t("Play")} ${track.title}, ${numberFormat.format(item.playCount)} ${t("plays")}`}
               >
                 <span className="recap-rank">{index + 1}</span>
                 <TrackImage track={track} className="recap-art" thumbnail />
@@ -305,7 +330,18 @@ function ListeningRecapCard({
                   <strong>{track.title}</strong>
                   <small>{track.artist}</small>
                 </span>
-                <span className="recap-play-count">{item.playCount}×</span>
+                <span className="recap-play-count">
+                  <span>{numberFormat.format(item.playCount)}×</span>
+                  <span className="recap-play-bar" aria-hidden="true">
+                    <span
+                      style={{
+                        width: maxTrackPlayCount
+                          ? `${(Math.max(0, item.playCount) / maxTrackPlayCount) * 100}%`
+                          : "0%",
+                      }}
+                    />
+                  </span>
+                </span>
               </button>
             );
           })}
@@ -315,8 +351,38 @@ function ListeningRecapCard({
       )}
       {summary.topArtists.length ? (
         <div className="recap-artists">
-          <span>{t("Top artists")}</span>
-          <p>{summary.topArtists.slice(0, 3).map((artist) => artist.artist).join(" · ")}</p>
+          <h3>{t("Top artists")}</h3>
+          <ul className="recap-artist-list" aria-label={t("Top artists")}>
+            {summary.topArtists.slice(0, 3).map((artist, index) => {
+              const artwork = artistArtwork.get(
+                artist.artist.trim().toLocaleLowerCase(),
+              );
+              return (
+                <li className="recap-artist-row" key={artist.artist}>
+                  <span className="recap-artist-rank" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <span className="recap-artist-avatar" aria-hidden="true">
+                    {artwork ? (
+                      <TrackImage
+                        track={artwork}
+                        className="recap-artist-cover"
+                        thumbnail
+                      />
+                    ) : (
+                      <span>{artist.artist.trim().slice(0, 1).toLocaleUpperCase()}</span>
+                    )}
+                  </span>
+                  <span className="recap-artist-copy">
+                    <span className="recap-artist-name">{artist.artist}</span>
+                    <span className="recap-artist-count">
+                      {numberFormat.format(artist.playCount)} {t("plays")}
+                    </span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
     </section>
@@ -1094,8 +1160,12 @@ export default function LibraryApp() {
   }, [expandedPlayerOpen]);
 
   useEffect(() => {
-    const savedMode = window.localStorage.getItem("vervfy:list-mode");
-    if (savedMode === "grid" || savedMode === "list") setListMode(savedMode);
+    try {
+      const savedMode = window.localStorage.getItem("vervfy:list-mode");
+      if (savedMode === "grid" || savedMode === "list") setListMode(savedMode);
+    } catch (error) {
+      console.warn("Could not read the saved list view preference.", error);
+    }
   }, [setListMode]);
 
   useEffect(() => {
@@ -1168,7 +1238,6 @@ export default function LibraryApp() {
         if (
           !cancelled &&
           lyrics.source !== "none" &&
-          lyrics.source !== "disabled" &&
           !(lyrics.source === "online-plain" && cachedLyrics?.source === "online-plain")
         ) {
           setCachedLyrics(currentTrack.id, lyrics);
@@ -1230,6 +1299,10 @@ export default function LibraryApp() {
     : "";
   const recapTrackDateFormatter = useMemo(
     () => new Intl.DateTimeFormat(language, { month: "short", day: "numeric", year: "numeric" }),
+    [language],
+  );
+  const recapNumberFormatter = useMemo(
+    () => new Intl.NumberFormat(language),
     [language],
   );
   const canOpenYearlyRecap = listeningSummary
@@ -3708,20 +3781,35 @@ export default function LibraryApp() {
                               <div className="recap-rediscover-title">
                                 <h2>{t("Rediscover these songs")}</h2>
                                 <span className="recap-rediscover-count">
-                                  <strong>{rediscoveryTracks.length}</strong> {t("songs")}
+                                  <strong>{recapNumberFormatter.format(rediscoveryTracks.length)}</strong> {t("songs")}
                                 </span>
                               </div>
                               <p>{t("Last played more than 30 days ago.")}</p>
                             </div>
-                            <button
-                              className="btn btn-primary"
-                              type="button"
-                              disabled={!rediscoveryTracks.length}
-                              onClick={createRediscoveryPlaylist}
-                            >
-                              <Icon name="plus" />
-                              {t(hasRediscoveryPlaylist ? "Update Rediscover playlist" : "Create Rediscover playlist")}
-                            </button>
+                            <div className="recap-rediscover-action">
+                              <button
+                                className="btn btn-primary"
+                                type="button"
+                                disabled={!rediscoveryTracks.length}
+                                aria-describedby={
+                                  rediscoveryTracks.length
+                                    ? undefined
+                                    : "recap-rediscover-disabled-reason"
+                                }
+                                onClick={createRediscoveryPlaylist}
+                              >
+                                <Icon name="plus" />
+                                {t(hasRediscoveryPlaylist ? "Update Rediscover playlist" : "Create Rediscover playlist")}
+                              </button>
+                              {!rediscoveryTracks.length ? (
+                                <p
+                                  className="recap-disabled-hint"
+                                  id="recap-rediscover-disabled-reason"
+                                >
+                                  {t("No songs have a recorded listen older than 30 days yet.")}
+                                </p>
+                              ) : null}
+                            </div>
                           </div>
                           {rediscoveryTracks.length ? (
                             <div className="recap-top-tracks">
@@ -3758,9 +3846,7 @@ export default function LibraryApp() {
                                 </p>
                               ) : null}
                             </div>
-                          ) : (
-                            <p className="recap-empty">{t("No songs have a recorded listen older than 30 days yet.")}</p>
-                          )}
+                          ) : null}
                         </section>
                       </>
                     ) : (

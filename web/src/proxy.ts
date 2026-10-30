@@ -2,8 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const isDevelopment = process.env.NODE_ENV === "development";
   const developmentBackendOrigin =
-    process.env.NODE_ENV === "development" && process.env.BACKEND_URL
+    isDevelopment && process.env.BACKEND_URL
       ? new URL(process.env.BACKEND_URL).origin
       : null;
   const mediaSources = ["'self'", "blob:", "https://*.supabase.co"];
@@ -18,7 +19,7 @@ export function proxy(request: NextRequest) {
     "object-src 'none'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDevelopment ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com https://coverartarchive.org https://*.archive.org https://archive.org https://*.supabase.co",

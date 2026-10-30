@@ -1,7 +1,8 @@
 import type { Metadata, Viewport } from "next";
-import { connection } from "next/server";
+import { cookies, headers } from "next/headers";
 import type { ReactNode } from "react";
 import RootProviders from "@/components/root-providers";
+import { languageFromAcceptLanguage, languageFromLocale } from "@/lib/language";
 import "./styles.css";
 import "./auth.css";
 
@@ -23,9 +24,13 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  await connection();
+  const cookieStore = await cookies();
+  const language =
+    languageFromLocale(cookieStore.get("vervfy-language")?.value) ??
+    languageFromAcceptLanguage((await headers()).get("accept-language"));
+
   return (
-    <html lang="en">
+    <html lang={language}>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -39,7 +44,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <div className="field-blob field-blob-a" />
           <div className="field-blob field-blob-b" />
         </div>
-        <RootProviders>{children}</RootProviders>
+        <RootProviders initialLanguage={language}>{children}</RootProviders>
       </body>
     </html>
   );

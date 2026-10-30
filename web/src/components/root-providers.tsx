@@ -4,9 +4,15 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { usePlayerStore } from "@/store/player-store";
 import LiquidGlass from "@/components/liquid-glass";
 import ServiceWorkerRegistration from "@/components/service-worker-registration";
-import { LanguageProvider } from "@/lib/i18n";
+import { LanguageProvider, type Language } from "@/lib/i18n";
 
-export default function RootProviders({ children }: { children: ReactNode }) {
+export default function RootProviders({
+  children,
+  initialLanguage,
+}: {
+  children: ReactNode;
+  initialLanguage: Language;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const setAudioElement = usePlayerStore((store) => store.setAudioElement);
 
@@ -18,7 +24,7 @@ export default function RootProviders({ children }: { children: ReactNode }) {
   }, [setAudioElement]);
 
   return (
-    <LanguageProvider>
+    <LanguageProvider initialLanguage={initialLanguage}>
       <ServiceWorkerRegistration />
       <LiquidGlass />
       {children}

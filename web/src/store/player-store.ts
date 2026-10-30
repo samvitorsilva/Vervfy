@@ -121,7 +121,11 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   setListMode: (listMode) => {
     set({ listMode });
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("vervfy:list-mode", listMode);
+      try {
+        window.localStorage.setItem("vervfy:list-mode", listMode);
+      } catch (error) {
+        console.warn("Could not save the list view preference in this browser.", error);
+      }
     }
   },
   setRepeat: (repeat) => set({ repeat }),

@@ -186,8 +186,12 @@ const LYRICS_FALLBACK_COVER =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'%3E%3Crect width='300' height='300' fill='%2312151e'/%3E%3C/svg%3E";
 
 const LYRICS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
-const LYRICS_CACHE_PREFIX = "vervfy:lrclib:v1:";
+const LYRICS_CACHE_PREFIX = "vervfy:lrclib:v4:";
 let lyricsProviderEnabledPromise: Promise<boolean> | null = null;
+const LRCLIB_SYNC_CORRECTIONS_MS = new Map([
+  ["the chainsmokers|dont let me down", 1800],
+  ["tate mcrae|just keep watching", 1800],
+]);
 
 async function isLrclibEnabled(): Promise<boolean> {
   if (!lyricsProviderEnabledPromise) {
@@ -419,20 +423,35 @@ async function lookupOnlineLyrics(
   const leadOf = (value: string) => value.split(/[,;/]|\b(?:feat(?:uring)?|ft\.?|with)\b/i)[0]?.trim() ?? "";
   const titleKey = normalized(title);
   const artistKey = normalized(leadArtist);
-  const durationTolerance = Math.min(15, Math.max(5, track.duration * 0.06));
-  const syncedFallbackTolerance = Math.min(20, Math.max(10, track.duration * 0.08));
+  const albumKey = normalized(track.album);
+  const durationTolerance = 3;
 
-  const sameSong = (entry: LrclibEntry) =>
-    normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
-    normalized(leadOf(String(entry.artistName ?? ""))) === artistKey;
+  const sameSong = (entry: LrclibEntry) => {
+    const entryAlbum = normalized(String(entry.albumName ?? ""));
+    const hasAlbum = (value: string) =>
+      value.length > 0 && !/^(?:unknown(?: album)?|null|none)$/i.test(value);
+    return (
+      normalized(cleanTitle(String(entry.trackName ?? ""))) === titleKey &&
+      normalized(leadOf(String(entry.artistName ?? ""))) === artistKey &&
+      (!hasAlbum(albumKey) ||
+        !hasAlbum(entryAlbum) ||
+        albumKey === entryAlbum)
+    );
+  };
   const durationDelta = (entry: LrclibEntry) =>
     typeof entry.duration === "number" && entry.duration > 0
       ? Math.abs(entry.duration - track.duration)
       : Number.POSITIVE_INFINITY;
-  const within = (entry: LrclibEntry, tolerance: number) => !track.duration || durationDelta(entry) <= tolerance;
-  const hasSynced = (entry: LrclibEntry) =>
-    typeof entry.syncedLyrics === "string" &&
-    parseLrc(entry.syncedLyrics).length > 0;
+  const within = (entry: LrclibEntry, tolerance: number) =>
+    track.duration > 0 && durationDelta(entry) <= tolerance;
+  const hasSynced = (entry: LrclibEntry) => {
+    if (typeof entry.syncedLyrics !== "string" || !track.duration) return false;
+    const lines = parseLrc(entry.syncedLyrics);
+    return (
+      lines.length > 0 &&
+      lines.every((line) => line.time <= (track.duration + durationTolerance) * 1000)
+    );
+  };
   const hasPlain = (entry: LrclibEntry) =>
     typeof entry.plainLyrics === "string" && entry.plainLyrics.trim().length > 0;
   const closest = (entries: LrclibEntry[]) =>
@@ -456,12 +475,10 @@ async function lookupOnlineLyrics(
   if (exact?.instrumental === true) return { source: "none" };
 
   const pool: LrclibEntry[] = exact ? [exact] : [];
-  // Prefer a timed copy: close in length first, then (only if none) a slightly wider window.
   const pickBest = (): LrclibEntry | null => {
     const usable = pool.filter((entry) => entry.instrumental !== true);
     return (
       closest(usable.filter((entry) => hasSynced(entry) && within(entry, durationTolerance))) ??
-      closest(usable.filter((entry) => hasSynced(entry) && within(entry, syncedFallbackTolerance))) ??
       closest(usable.filter((entry) => hasPlain(entry) && within(entry, durationTolerance)))
     );
   };
@@ -470,7 +487,7 @@ async function lookupOnlineLyrics(
     return best !== null && hasSynced(best);
   };
 
-  // The exact hit already has timestamps: no extra requests needed.
+  // Avoid searching for an alternate recording when the exact result has valid timestamps.
   if (!hasTimedChoice()) {
     const searches = [
       new URLSearchParams({ track_name: title, artist_name: leadArtist }),
@@ -507,8 +524,18 @@ async function lookupOnlineLyrics(
   if (!candidate) return { source: "none" };
   const synced = typeof candidate.syncedLyrics === "string" ? candidate.syncedLyrics.trim() : "";
   const plain = typeof candidate.plainLyrics === "string" ? candidate.plainLyrics.trim() : "";
-  const result = synced && parseLrc(synced).length
-    ? parseLyricsText(synced, "online-synced")
+  const parsedSynced = synced ? parseLrc(synced) : [];
+  const correctionMs = LRCLIB_SYNC_CORRECTIONS_MS.get(
+    `${artistKey}|${titleKey}`,
+  ) ?? 0;
+  const result = parsedSynced.length
+    ? {
+        source: "online-synced",
+        lines: parsedSynced.map((line) => ({
+          ...line,
+          time: line.time + correctionMs,
+        })),
+      }
     : plain
       ? { source: "online-plain", text: plain }
       : { source: "none" };

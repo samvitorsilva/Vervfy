@@ -33,6 +33,33 @@ function makeWav(): Buffer {
   return wav;
 }
 
+test("document language follows the saved locale and language changes", async ({ page }) => {
+  test.skip(
+    externalApp,
+    "This regression test checks the local server-rendered document language.",
+  );
+  await page.goto("/login");
+  await page.evaluate(() => {
+    localStorage.removeItem("vervfy:language");
+    document.cookie = "vervfy-language=fr; Path=/";
+  });
+  await page.reload();
+
+  await expect(page.locator("html")).toHaveAttribute("lang", "fr");
+  await expect(page.getByRole("heading", { name: "Bon retour" })).toBeVisible();
+  const languageSelect = page.locator(".auth-language-select select");
+  for (const [value, language, heading] of [
+    ["es", "es", "Qué bueno verte de nuevo"],
+    ["pt-BR", "pt-BR", "Que bom ter você de volta!"],
+    ["en", "en", "Welcome back"],
+    ["fr", "fr", "Bon retour"],
+  ]) {
+    await languageSelect.selectOption(value);
+    await expect(page.locator("html")).toHaveAttribute("lang", language);
+    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+  }
+});
+
 async function loadMockPlaybackTrack(
   page: Page,
   title: string,
@@ -487,6 +514,21 @@ test("public credits page keeps the nonce CSP and lists attribution", async ({ p
   );
 });
 
+test("development CSP supports React debugging and disables service worker caching", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This regression test requires the local development server.",
+  );
+  const response = await page.goto("/login");
+  expect(response?.headers()["content-security-policy"]).toContain("'unsafe-eval'");
+  await expect.poll(() =>
+    page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration();
+      return !registration && !navigator.serviceWorker.controller;
+    }),
+  ).toBe(true);
+});
+
 test("disabled LRCLIB lookup makes no external lyrics request", async ({ page }) => {
   let lrclibRequests = 0;
   await page.route("**/api/config", (route) =>
@@ -640,7 +682,7 @@ test("cached plain lyrics upgrade to an automatically synced copy", async ({ pag
   const trackCard = await loadMockPlaybackTrack(page, title, 58, artist);
   await page.evaluate(() => {
     localStorage.setItem(
-      "vervfy:lrclib:v1:playwright-track-58",
+      "vervfy:lrclib:v4:playwright-track-58",
       JSON.stringify({
         savedAt: Date.now(),
         lyrics: { source: "online-plain", text: "Plain lyric line" },
@@ -673,6 +715,154 @@ test("cached plain lyrics upgrade to an automatically synced copy", async ({ pag
   await page.locator(".player-control-lyrics").click();
   const lyrics = page.getByRole("dialog", { name: "Lyrics" });
   await expect(lyrics.locator(".lyrics-line")).toHaveText("Automatically synced line");
+});
+
+test("lyrics lookup rejects timestamps from a different-duration recording", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const title = "Duration mismatch";
+  const artist = "AJ Vitanza";
+  const trackCard = await loadMockPlaybackTrack(page, title, 61, artist);
+  const mismatchedRecording = {
+    trackName: title,
+    artistName: artist,
+    duration: 34,
+    syncedLyrics: "[00:00.00]Incorrectly timed lyric line",
+  };
+  await page.route("https://lrclib.net/api/**", (route) =>
+    route.fulfill({
+      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+        ? mismatchedRecording
+        : [mismatchedRecording],
+    }),
+  );
+
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+  const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyrics.getByRole("heading", { name: "No lyrics available" })).toBeVisible();
+  await expect(lyrics.locator(".lyrics-line")).toHaveCount(0);
+});
+
+test("lyrics lookup rejects a synced match from a different album", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const title = "Album mismatch";
+  const artist = "AJ Vitanza";
+  const trackCard = await loadMockPlaybackTrack(page, title, 62, artist);
+  const otherAlbum = {
+    trackName: title,
+    artistName: artist,
+    albumName: "Different Album",
+    duration: 30,
+    syncedLyrics: "[00:00.00]Incorrect recording lyric line",
+  };
+  await page.route("https://lrclib.net/api/**", (route) =>
+    route.fulfill({
+      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+        ? otherAlbum
+        : [otherAlbum],
+    }),
+  );
+
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+  const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyrics.getByRole("heading", { name: "No lyrics available" })).toBeVisible();
+  await expect(lyrics.locator(".lyrics-line")).toHaveCount(0);
+});
+
+test("lyrics lookup rejects timestamps past the end of the track", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const title = "Out of range timestamp";
+  const artist = "AJ Vitanza";
+  const trackCard = await loadMockPlaybackTrack(page, title, 63, artist);
+  const invalidTiming = {
+    trackName: title,
+    artistName: artist,
+    albumName: "Playwright Test Album",
+    duration: 30,
+    syncedLyrics: "[00:34.00]Out of range lyric line",
+  };
+  await page.route("https://lrclib.net/api/**", (route) =>
+    route.fulfill({
+      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+        ? invalidTiming
+        : [invalidTiming],
+    }),
+  );
+
+  await trackCard.click();
+  await page.locator(".player-control-lyrics").click();
+  const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyrics.getByRole("heading", { name: "No lyrics available" })).toBeVisible();
+  await expect(lyrics.locator(".lyrics-line")).toHaveCount(0);
+});
+
+test("known early LRCLIB lyrics are delayed by 2.5 seconds", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic lyrics test uses the local mock backend.",
+  );
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+
+  for (const [title, artist, trackNumber] of [
+    ["Don't Let Me Down", "The Chainsmokers", 64],
+    ["Just Keep Watching", "Tate McRae", 65],
+  ] as const) {
+    const trackCard = await loadMockPlaybackTrack(page, title, trackNumber, artist);
+    await page.route("https://lrclib.net/api/**", (route) =>
+      route.fulfill({
+        json: {
+          trackName: title,
+          artistName: artist,
+          albumName: "Playwright Test Album",
+          duration: 30,
+          syncedLyrics: "[00:01.00]Test lyric line",
+        },
+      }),
+    );
+
+    await trackCard.click();
+    await page.locator(".player-control-lyrics").click();
+    const lyrics = page.getByRole("dialog", { name: "Lyrics" });
+    const lyricLine = lyrics.locator(".lyrics-line").first();
+    await expect(lyricLine).toHaveText("Test lyric line");
+    await lyricLine.click();
+    await expect
+      .poll(() =>
+        page.locator("audio").evaluate((element) => (element as HTMLAudioElement).currentTime),
+      )
+      .toBeCloseTo(3.5, 1);
+    await page.getByRole("button", { name: "Close lyrics" }).click();
+    await page.unroute("https://lrclib.net/api/**");
+  }
 });
 
 test("track cover can be changed and reverted in the library", async ({ page }) => {
@@ -877,6 +1067,132 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
         (transportBounds!.x + transportBounds!.width / 2),
     ),
   ).toBeLessThan(1);
+});
+
+test("listening recap visualizes recorded play counts accessibly", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This recap regression test uses the local mock backend.",
+  );
+  const tracks = [
+    {
+      id: "recap-top-track",
+      title: "Most played",
+      artist: "Recap artist",
+      album: "Recap album",
+      duration: 30,
+      has_cover: true,
+      cover_source: "embedded",
+      cover_url: "/api/tracks/recap-top-track/cover",
+      stream_url: "/api/tracks/recap-top-track/stream",
+      custom_lyrics: null,
+    },
+    {
+      id: "recap-next-track",
+      title: "Next played",
+      artist: "Other recap artist",
+      album: "Recap album",
+      duration: 30,
+      has_cover: false,
+      cover_source: "placeholder",
+      cover_url: "/api/tracks/recap-next-track/cover",
+      stream_url: "/api/tracks/recap-next-track/stream",
+      custom_lyrics: null,
+    },
+  ];
+  const period = {
+    playCount: 12,
+    topTracks: [
+      { trackId: "recap-top-track", playCount: 8 },
+      { trackId: "recap-next-track", playCount: 4 },
+    ],
+    topArtists: [
+      { artist: "Recap artist", playCount: 8 },
+      { artist: "Other recap artist", playCount: 4 },
+    ],
+  };
+  const lastPlayedAt: Record<string, number> = {};
+  await page.route("**/api/tracks", (route) =>
+    route.fulfill({ json: { tracks } }),
+  );
+  await page.route("**/api/library/listening", (route) =>
+    route.fulfill({
+      json: {
+        lastPlayedAt,
+        month: period,
+        year: period,
+        monthStart: Date.UTC(2026, 9, 1) / 1000,
+        yearLabel: "2026",
+        asOf: Date.UTC(2026, 9, 30) / 1000,
+      },
+    }),
+  );
+
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  const recapNav = page.getByRole("button", { name: "Recap" });
+  await recapNav.focus();
+  expect(
+    await recapNav.evaluate((element) =>
+      getComputedStyle(element, "::after").content,
+    ),
+  ).toBe('"Recap"');
+  await recapNav.click();
+
+  const recapTracks = page.locator(".recap-period .recap-track");
+  await expect(page.getByRole("heading", { name: "Top 2 tracks" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Top artists" })).toBeVisible();
+  await expect(recapTracks).toHaveCount(2);
+  await expect(recapTracks.first()).toHaveAccessibleName("Play Most played, 8 plays");
+  await expect(recapTracks.nth(1)).toHaveAccessibleName("Play Next played, 4 plays");
+  await expect(recapTracks.nth(0).locator(".recap-play-bar > span")).toHaveAttribute(
+    "style",
+    "width: 100%;",
+  );
+  await expect(recapTracks.nth(1).locator(".recap-play-bar > span")).toHaveAttribute(
+    "style",
+    "width: 50%;",
+  );
+  const recapArtists = page.getByRole("list", { name: "Top artists" });
+  await expect(recapArtists.getByRole("listitem")).toHaveCount(2);
+  await expect(recapArtists.getByRole("listitem").first()).toContainText("8 plays");
+  await expect(recapArtists.locator(".recap-artist-avatar")).toHaveCount(2);
+  await expect(recapArtists.locator(".recap-artist-cover")).toHaveCount(1);
+  await expect(recapArtists.locator(".recap-play-bar")).toHaveCount(0);
+  const rediscoverButton = page.getByRole("button", {
+    name: "Create Rediscover playlist",
+  });
+  await expect(rediscoverButton).toBeDisabled();
+  await expect(page.locator("#recap-rediscover-disabled-reason")).toContainText(
+    "No songs have a recorded listen older than 30 days yet.",
+  );
+  await expect(rediscoverButton).toHaveAttribute(
+    "aria-describedby",
+    "recap-rediscover-disabled-reason",
+  );
+  for (const width of [390, 980, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(recapTracks.first().locator(".recap-play-bar")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+      true,
+    );
+    const recapBounds = await page.locator(".recap-page").boundingBox();
+    expect(recapBounds).not.toBeNull();
+    expect(recapBounds!.width).toBeLessThanOrEqual(1140);
+    if (width === 1440) {
+      expect(recapBounds!.width).toBeGreaterThanOrEqual(1100);
+    }
+  }
+  lastPlayedAt["recap-top-track"] = Date.UTC(2026, 8, 1) / 1000;
+  await page.reload();
+  await page.getByRole("button", { name: "Recap" }).click();
+  await expect(
+    page.getByRole("button", { name: "Create Rediscover playlist" }),
+  ).toBeEnabled();
+  await expect(page.locator("#recap-rediscover-disabled-reason")).toHaveCount(0);
 });
 
 test("mobile player menu opens MusicBrainz cover art information", async ({ page }) => {
