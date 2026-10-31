@@ -468,7 +468,7 @@ async function lookupOnlineLyrics(
     signal,
     headers: { "Lrclib-Client": "Vervfy/1.0 (https://github.com/samvitorsilva/Vervfy)" },
   };
-  const response = await fetch(`https://lrclib.net/api/get?${query}`, requestOptions);
+  const response = await fetch(`/api/lyrics/lrclib/get?${query}`, requestOptions);
   let providerUnavailable = response.status === 429 || response.status >= 500;
   let exact: LrclibEntry | null = response.ok ? ((await response.json()) as LrclibEntry) : null;
   if (exact && !(sameSong(exact) && within(exact, durationTolerance))) exact = null;
@@ -496,7 +496,7 @@ async function lookupOnlineLyrics(
     const seen = new Set<unknown>(pool.map((entry) => entry.id));
     const searchResponses = await Promise.all(
       searches.map((search) =>
-        fetch(`https://lrclib.net/api/search?${search}`, requestOptions),
+        fetch(`/api/lyrics/lrclib/search?${search}`, requestOptions),
       ),
     );
     let searchSucceeded = false;
@@ -595,7 +595,7 @@ export default function LyricsOverlay({
   shuffle: boolean;
   repeat: RepeatMode;
 }) {
-  const { t } = useLanguage();
+  const { t, translateError } = useLanguage();
   const setTrackLyrics = usePlayerStore((state) => state.setTrackLyrics);
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const clearCachedLyrics = usePlayerStore((state) => state.clearCachedLyrics);
@@ -763,6 +763,14 @@ export default function LyricsOverlay({
     if (drag.wasPlaying) onTogglePlayback();
   }
 
+  function cancelSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = seekingPointerRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    seekingPointerRef.current = null;
+    setScrubbingTime(null);
+    if (drag.wasPlaying) onTogglePlayback();
+  }
+
   function seekByKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
     const audio = usePlayerStore.getState().audioElement;
     if (!audio || !duration) return;
@@ -814,7 +822,7 @@ export default function LyricsOverlay({
       setSyncLines(null);
       onToast(t("Lyrics saved."));
     } catch (error) {
-      onToast(error instanceof Error ? error.message : "Could not save lyrics.");
+      onToast(translateError(error instanceof Error ? error.message : "", "Could not save lyrics."));
     } finally {
       setSavePending(false);
     }
@@ -869,7 +877,7 @@ export default function LyricsOverlay({
       setSyncLines(null);
       onToast(t("Lyrics synced to the track."));
     } catch (error) {
-      onToast(error instanceof Error ? error.message : "Could not save synced lyrics.");
+      onToast(translateError(error instanceof Error ? error.message : "", "Could not save synced lyrics."));
     } finally {
       setSavePending(false);
     }
@@ -888,7 +896,7 @@ export default function LyricsOverlay({
 
   return (
     <div className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label={t("Lyrics")}>
-      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}"), radial-gradient(circle at 50% 40%, #302c53, #12151e 75%)` }} />
+      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}"), radial-gradient(circle at 50% 40%, #1b3035, #12151e 75%)` }} />
       <header className="lyrics-topbar">
         <button className="lyrics-close" type="button" aria-label={t("Close lyrics")} onClick={onClose}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 9 6 6 6-6" /></svg>
@@ -938,7 +946,7 @@ export default function LyricsOverlay({
           ) : editorOpen ? (
             <form className="lyrics-editor" onSubmit={saveLyrics}>
               <div className="lyrics-editor-heading"><h3>{t("Add lyrics")}</h3><p>{activeTrack.title} · {activeTrack.artist}</p></div>
-              <textarea className="lyrics-input" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("Paste plain lyrics or timestamped LRC lyrics here…")} />
+              <textarea className="lyrics-input" aria-label={t("Lyrics")} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("Paste plain lyrics or timestamped LRC lyrics here…")} />
               <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setEditorOpen(false)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit" disabled={savePending}>{savePending ? t("Saving…") : t("Save lyrics")}</button></div>
             </form>
           ) : loading && !lyrics?.lines?.length && !lyrics?.text ? (
@@ -976,7 +984,7 @@ export default function LyricsOverlay({
             onPointerDown={beginSeek}
             onPointerMove={continueSeek}
             onPointerUp={finishSeek}
-            onPointerCancel={finishSeek}
+            onPointerCancel={cancelSeek}
             onKeyDown={seekByKeyboard}
           >
             <div className="seek-track"><div className="seek-fill" style={{ width: `${progress}%` }} /></div>

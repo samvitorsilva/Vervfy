@@ -257,7 +257,7 @@ CSP_REPORT_ONLY = (
         "img-src 'self' data: blob: https://*.theaudiodb.com https://theaudiodb.com "
         "https://coverartarchive.org https://*.archive.org https://archive.org https://*.supabase.co; "
         "media-src 'self' blob: https://*.supabase.co; "
-        "connect-src 'self' https://lrclib.net https://*.supabase.co; "
+        "connect-src 'self' https://*.supabase.co; "
         "frame-ancestors 'none'"
 )
 
@@ -2304,6 +2304,7 @@ def track_covers(
                     user["id"],
                     track.id,
                     lookup_audiodb=audiodb_queue.lookup_track_cover,
+                    prefer_audiodb=True,
                 )
             )
         pending = pending or is_pending
@@ -2405,6 +2406,7 @@ async def upload_track(
             user["id"],
             track.id,
             lookup_audiodb=audiodb_queue.lookup_track_cover,
+            prefer_audiodb=True,
         )
         return _track_payload(track)
     finally:
@@ -2657,6 +2659,7 @@ async def retry_track_cover(
         track_id,
         force=True,
         lookup_audiodb=audiodb_queue.lookup_track_cover,
+        prefer_audiodb=True,
     )
     return {"status": "queued", "cover_source": track.cover_source}
 

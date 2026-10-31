@@ -13,7 +13,7 @@ export default function LogoutButton({
   children?: ReactNode;
   ariaLabel?: string;
 }) {
-  const { t } = useLanguage();
+  const { t, translateError } = useLanguage();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -30,7 +30,7 @@ export default function LogoutButton({
       window.location.assign("/login");
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : t("Could not log out."),
+        translateError(reason instanceof Error ? reason.message : "", "Could not log out."),
       );
       setPending(false);
     }

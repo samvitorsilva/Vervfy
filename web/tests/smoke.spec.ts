@@ -60,6 +60,85 @@ test("document language follows the saved locale and language changes", async ({
   }
 });
 
+test("public routes have useful metadata, a working footer, and a branded 404", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await expect(page).toHaveTitle("Log in | Vervfy");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    "Log in to your Vervfy account to access your music library.",
+  );
+  await expect(page.locator(".site-footer")).toContainText(
+    `© ${new Date().getFullYear()} Vervfy`,
+  );
+  await expect(
+    page.locator(".site-footer a").filter({ hasText: "View credits" }),
+  ).toHaveAttribute("href", "/credits");
+  await expect(
+    page.locator(".site-footer a").filter({ hasText: "Privacy Policy" }),
+  ).toHaveAttribute("href", "/privacy");
+  await expect(
+    page.locator(".site-footer a").filter({ hasText: "Terms and Conditions" }),
+  ).toHaveAttribute("href", "/terms");
+
+  await page.goto("/register");
+  await expect(page).toHaveTitle("Create an account | Vervfy");
+  await page.goto("/credits");
+  await expect(page).toHaveTitle("Credits and data sources | Vervfy");
+  await page.goto("/privacy");
+  await expect(page).toHaveTitle("Privacy Policy | Vervfy");
+  await expect(page.getByRole("heading", { name: "Privacy Policy" })).toBeVisible();
+  await expect(page.getByText(/Draft for legal review/)).toBeVisible();
+  const privacyContactLinks = page.getByRole("link", { name: "vervfy.dev@proton.me" });
+  await expect(privacyContactLinks).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await expect(privacyContactLinks.nth(index)).toHaveAttribute(
+      "href",
+      "mailto:vervfy.dev@proton.me",
+    );
+  }
+  await page.goto("/terms");
+  await expect(page).toHaveTitle("Terms and Conditions | Vervfy");
+  await expect(page.getByRole("heading", { name: "Terms and Conditions" })).toBeVisible();
+  await expect(page.getByText(/Brazil, State of Pernambuco/)).toBeVisible();
+  const manifestResponse = await page.request.get("/manifest.webmanifest");
+  expect(manifestResponse.ok()).toBe(true);
+  const manifest = await manifestResponse.json();
+  expect(manifest.icons).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ src: "/icon-192.png", sizes: "192x192" }),
+      expect.objectContaining({ src: "/icon-512.png", sizes: "512x512" }),
+    ]),
+  );
+  for (const iconPath of ["/favicon.ico", "/apple-icon.png", "/icon-192.png", "/icon-512.png"]) {
+    expect((await page.request.get(iconPath)).ok(), iconPath).toBe(true);
+  }
+
+  const missingPage = await page.goto("/this-page-does-not-exist");
+  expect(missingPage?.status()).toBe(404);
+  await expect(page).toHaveTitle("Page not found | Vervfy");
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Back to Vervfy/ })).toHaveAttribute(
+    "href",
+    "/",
+  );
+});
+
+test("brand logo returns to the library view", async ({ page }) => {
+  await logInToMockLibrary(page);
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  await expect(page.locator(".view-title")).toHaveText("Library");
+  await expect(page.locator(".home-profile-avatar")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Main navigation" })
+    .getByRole("button", { name: "Playlists" })
+    .click();
+  await expect(page.locator(".view-title")).toHaveText("Playlists");
+  await page.getByRole("link", { name: "Vervfy" }).click();
+  await expect(page.locator(".view-title")).toHaveText("Library");
+});
+
 async function loadMockPlaybackTrack(
   page: Page,
   title: string,
@@ -100,6 +179,27 @@ async function logInToMockLibrary(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 }
+
+test("permanent API client errors are not retried", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This retry regression test uses the local mock backend.",
+  );
+  let trackRequests = 0;
+  await page.route("**/api/tracks", async (route) => {
+    trackRequests += 1;
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Invalid request" }),
+    });
+  });
+  await logInToMockLibrary(page);
+  await expect.poll(() => trackRequests).toBeGreaterThan(0);
+  const initialRequests = trackRequests;
+  await page.waitForTimeout(2_500);
+  expect(trackRequests).toBe(initialRequests);
+});
 
 async function loadMockPlaybackQueue(
   page: Page,
@@ -322,6 +422,33 @@ test("French and Spanish are detected and can be selected", async ({ page }) => 
   await expect(page.locator("html")).toHaveAttribute("lang", "es");
   await page.reload();
   await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
+});
+
+test("language changes translate legal pages, navigation, and document metadata", async ({ page }) => {
+  await page.goto("/privacy");
+  const languageSelect = page.locator(".site-footer-language select");
+
+  await languageSelect.selectOption("fr");
+  await expect(page.locator("html")).toHaveAttribute("lang", "fr");
+  await expect(page).toHaveTitle("Politique de confidentialité | Vervfy");
+  await expect(page.getByRole("heading", { name: "Qui exploite Vervfy" })).toBeVisible();
+  await expect(page.getByText("Informations traitées par le service")).toBeVisible();
+  await expect(page.getByText(/Projet soumis à une vérification juridique/)).toBeVisible();
+  await expect(page.locator(".site-footer")).toContainText("Voir les crédits");
+
+  await page.goto("/terms");
+  await expect(page).toHaveTitle("Conditions générales | Vervfy");
+  await expect(page.getByRole("heading", { name: "Votre musique et vos autres contenus" })).toBeVisible();
+  await expect(page.getByText(/Le Brésil, État de Pernambuco/)).toBeVisible();
+
+  await page.locator(".site-footer-language select").selectOption("es");
+  await expect(page).toHaveTitle("Condiciones generales | Vervfy");
+  await expect(page.getByRole("heading", { name: "Tu música y otros contenidos" })).toBeVisible();
+  await expect(page.getByText(/Se propone Brasil, estado de Pernambuco/)).toBeVisible();
+
+  await page.goto("/credits");
+  await expect(page).toHaveTitle("Créditos y fuentes de datos | Vervfy");
+  await expect(page.getByRole("heading", { name: "Créditos y fuentes de datos" })).toBeVisible();
 });
 
 test("Spanish language selection persists across page loads", async ({ page }) => {
@@ -572,7 +699,7 @@ test("disabled LRCLIB lookup makes no external lyrics request", async ({ page })
   await page.route("**/api/config", (route) =>
     route.fulfill({ json: { lyrics_provider_lrclib: false } }),
   );
-  await page.route("https://lrclib.net/**", (route) => {
+  await page.route("**/api/lyrics/lrclib/**", (route) => {
     lrclibRequests += 1;
     return route.abort();
   });
@@ -639,8 +766,8 @@ test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page
       if (!route.request().failure()) throw error;
     }
   });
-  await page.route("https://lrclib.net/api/**", (route) => {
-    if (new URL(route.request().url()).pathname.endsWith("/api/get")) {
+  await page.route("**/api/lyrics/lrclib/**", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/get")) {
       return route.fulfill({
         json: {
           trackName: "Fast lyrics",
@@ -679,7 +806,7 @@ test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page 
 
   const unavailableRoute = (route: Route) =>
     route.fulfill({ status: 503, body: "temporarily unavailable" });
-  await page.route("https://lrclib.net/api/**", unavailableRoute);
+  await page.route("**/api/lyrics/lrclib/**", unavailableRoute);
   await trackCard.click();
   await page.locator(".player-control-lyrics").click();
 
@@ -687,9 +814,9 @@ test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page 
   await expect(
     lyrics.getByRole("heading", { name: "Impossible de charger les paroles. Touchez pour réessayer." }),
   ).toBeVisible();
-  await page.unroute("https://lrclib.net/api/**", unavailableRoute);
-  await page.route("https://lrclib.net/api/**", (route) => {
-    if (new URL(route.request().url()).pathname.endsWith("/api/get")) {
+  await page.unroute("**/api/lyrics/lrclib/**", unavailableRoute);
+  await page.route("**/api/lyrics/lrclib/**", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/get")) {
       return route.fulfill({
         json: {
           trackName: "Miles & Miles",
@@ -727,9 +854,9 @@ test("cached plain lyrics upgrade to an automatically synced copy", async ({ pag
       }),
     );
   });
-  await page.route("https://lrclib.net/api/**", (route) => {
+  await page.route("**/api/lyrics/lrclib/**", (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith("/api/get")) {
+    if (url.pathname.endsWith("/get")) {
       return route.fulfill({
         json: {
           trackName: title,
@@ -774,9 +901,9 @@ test("lyrics lookup rejects timestamps from a different-duration recording", asy
     duration: 34,
     syncedLyrics: "[00:00.00]Incorrectly timed lyric line",
   };
-  await page.route("https://lrclib.net/api/**", (route) =>
+  await page.route("**/api/lyrics/lrclib/**", (route) =>
     route.fulfill({
-      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+      json: new URL(route.request().url()).pathname.endsWith("/get")
         ? mismatchedRecording
         : [mismatchedRecording],
     }),
@@ -809,9 +936,9 @@ test("lyrics lookup rejects a synced match from a different album", async ({ pag
     duration: 30,
     syncedLyrics: "[00:00.00]Incorrect recording lyric line",
   };
-  await page.route("https://lrclib.net/api/**", (route) =>
+  await page.route("**/api/lyrics/lrclib/**", (route) =>
     route.fulfill({
-      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+      json: new URL(route.request().url()).pathname.endsWith("/get")
         ? otherAlbum
         : [otherAlbum],
     }),
@@ -844,9 +971,9 @@ test("lyrics lookup rejects timestamps past the end of the track", async ({ page
     duration: 30,
     syncedLyrics: "[00:34.00]Out of range lyric line",
   };
-  await page.route("https://lrclib.net/api/**", (route) =>
+  await page.route("**/api/lyrics/lrclib/**", (route) =>
     route.fulfill({
-      json: new URL(route.request().url()).pathname.endsWith("/api/get")
+      json: new URL(route.request().url()).pathname.endsWith("/get")
         ? invalidTiming
         : [invalidTiming],
     }),
@@ -875,7 +1002,7 @@ test("known early LRCLIB lyrics are delayed by 1.8 seconds", async ({ page }) =>
     ["Just Keep Watching", "Tate McRae", 65],
   ] as const) {
     const trackCard = await loadMockPlaybackTrack(page, title, trackNumber, artist);
-    await page.route("https://lrclib.net/api/**", (route) =>
+    await page.route("**/api/lyrics/lrclib/**", (route) =>
       route.fulfill({
         json: {
           trackName: title,
@@ -906,7 +1033,7 @@ test("known early LRCLIB lyrics are delayed by 1.8 seconds", async ({ page }) =>
       )
       .toBeCloseTo(2.8, 1);
     await page.getByRole("button", { name: "Close lyrics" }).click();
-    await page.unroute("https://lrclib.net/api/**");
+    await page.unroute("**/api/lyrics/lrclib/**");
   }
 });
 
@@ -1019,7 +1146,7 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
     });
   });
   let lrclibClientHeader = "";
-  await page.route("https://lrclib.net/api/get**", (route) => {
+  await page.route("**/api/lyrics/lrclib/get**", (route) => {
     lrclibClientHeader = route.request().headers()["lrclib-client"] ?? "";
     return route.fulfill({
       contentType: "application/json",
@@ -1034,7 +1161,7 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
       }),
     });
   });
-  await page.route("https://lrclib.net/api/search**", (route) =>
+  await page.route("**/api/lyrics/lrclib/search**", (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify([
@@ -1976,6 +2103,68 @@ test("artist About section stops loading after profile lookup failures", async (
     "No artist information is available yet.",
   );
   await expect(about.locator(".artist-bio")).not.toContainText("Looking up");
+});
+
+test("cancelled seeks preserve the playhead and the lyrics editor is labeled", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const trackCard = await loadMockPlaybackTrack(page, "cancelled-seek", 57);
+  await trackCard.click();
+  const audio = page.locator("audio");
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).currentTime))
+    .toBeGreaterThan(0.5);
+
+  const cancelSeek = async (seekBar: Locator) => {
+    const bounds = await seekBar.boundingBox();
+    expect(bounds).not.toBeNull();
+    const seekY = (bounds?.y ?? 0) + (bounds?.height ?? 0) / 2;
+    await page.mouse.move((bounds?.x ?? 0) + (bounds?.width ?? 0) * 0.1, seekY);
+    await page.mouse.down();
+    await expect
+      .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused))
+      .toBe(true);
+    const pausedAt = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
+    const cancelX = (bounds?.x ?? 0) + (bounds?.width ?? 0) * 0.9;
+    await page.mouse.move(cancelX, seekY);
+    await seekBar.evaluate(
+      (element, point) =>
+        element.dispatchEvent(
+          new PointerEvent("pointercancel", {
+            bubbles: true,
+            pointerId: 1,
+            isPrimary: true,
+            clientX: point.x,
+            clientY: point.y,
+          }),
+        ),
+      { x: cancelX, y: seekY },
+    );
+    await expect
+      .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused))
+      .toBe(false);
+    await page.mouse.up();
+    await audio.evaluate((element) => (element as HTMLAudioElement).pause());
+    const afterCancel = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
+    expect(afterCancel).toBeLessThan(pausedAt + 1);
+  };
+  await cancelSeek(page.locator('.nowbar [aria-label="Track progress"]'));
+
+  await page.locator('.nowbar button[aria-label="Lyrics"]').click();
+  const lyricsDialog = page.getByRole("dialog", { name: "Lyrics" });
+  await expect(lyricsDialog).toBeVisible();
+  await lyricsDialog.getByRole("button", { name: "Play", exact: true }).click();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(
+    false,
+  );
+  await cancelSeek(lyricsDialog.locator('[aria-label="Track progress"]'));
+  await lyricsDialog.getByRole("button", { name: /Paste lyrics|Edit lyrics/ }).click();
+  await expect(lyricsDialog.getByRole("textbox", { name: "Lyrics" })).toBeVisible();
 });
 
 test("mock-backend login, upload, playback, seeking, playlist, and Range flow", async ({

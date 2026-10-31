@@ -473,6 +473,45 @@ class ResolveCoverChainTests(unittest.TestCase):
             "https://r2.theaudiodb.com/x.jpg",
         )
 
+    def test_preferred_audiodb_cover_skips_musicbrainz_when_found(self) -> None:
+        track = MagicMock(
+            id="track-audiodb-first",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            cover_source="generated",
+            has_cover=False,
+        )
+        library = MagicMock()
+        library.get.return_value = track
+        musicbrainz = AsyncMock(
+            side_effect=AssertionError("MusicBrainz should not delay an AudioDB hit")
+        )
+
+        with (
+            patch("library.Library", return_value=library),
+            patch.object(cover_art, "uploaded_cover", return_value=None),
+            patch.object(cover_art, "embedded_cover", return_value=None),
+        ):
+            asyncio.run(
+                cover_art.resolve_cover(
+                    "user-1",
+                    "track-audiodb-first",
+                    audio_path="/tmp/missing.mp3",
+                    lookup_musicbrainz=musicbrainz,
+                    lookup_audiodb=lambda *args: "https://r2.theaudiodb.com/x.jpg",
+                    prefer_audiodb=True,
+                )
+            )
+
+        musicbrainz.assert_not_called()
+        library.set_resolved_cover.assert_called_once_with(
+            "track-audiodb-first",
+            "audiodb",
+            None,
+            "https://r2.theaudiodb.com/x.jpg",
+        )
+
     def test_audiodb_failure_does_not_log_api_key_from_request_url(self) -> None:
         track = MagicMock(
             id="track-audiodb-error",

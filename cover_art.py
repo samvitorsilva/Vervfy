@@ -273,6 +273,7 @@ async def resolve_cover(
     force: bool = False,
     lookup_musicbrainz: Callable[[str, str], Awaitable[str | None] | str | None] | None = None,
     lookup_audiodb: Callable[[str, str, str], str | None] | None = None,
+    prefer_audiodb: bool = False,
 ) -> None:
     """Run the ordered lookup; each failed provider logs and falls through."""
     from library import Library
@@ -325,38 +326,51 @@ async def resolve_cover(
     if track.cover_source in {"embedded", *owned}:
         return
 
-    try:
-        lookup = lookup_musicbrainz or musicbrainz_cover
-        result = lookup(track.artist, track.title)
-        url = await result if asyncio.iscoroutine(result) else result
-        if url:
-            await persist("musicbrainz", url=url)
-            log.info("cover lookup track_id=%s step=musicbrainz result=hit", track_id)
-            return
-        log.info("cover lookup track_id=%s step=musicbrainz result=miss", track_id)
-    except Exception:
-        log.exception("cover lookup track_id=%s step=musicbrainz result=error", track_id)
+    async def resolve_musicbrainz() -> bool:
+        try:
+            lookup = lookup_musicbrainz or musicbrainz_cover
+            result = lookup(track.artist, track.title)
+            url = await result if asyncio.iscoroutine(result) else result
+            if url:
+                await persist("musicbrainz", url=url)
+                log.info("cover lookup track_id=%s step=musicbrainz result=hit", track_id)
+                return True
+            log.info("cover lookup track_id=%s step=musicbrainz result=miss", track_id)
+        except Exception:
+            log.exception("cover lookup track_id=%s step=musicbrainz result=error", track_id)
+        return False
 
-    try:
-        lookup = lookup_audiodb or audiodb_cover
-        url = await asyncio.to_thread(lookup, track.artist, track.title, track.album)
-        if url:
-            await persist("audiodb", url=url)
-            log.info("cover lookup track_id=%s step=audiodb result=hit", track_id)
+    async def resolve_audiodb() -> bool:
+        try:
+            lookup = lookup_audiodb or audiodb_cover
+            url = await asyncio.to_thread(lookup, track.artist, track.title, track.album)
+            if url:
+                await persist("audiodb", url=url)
+                log.info("cover lookup track_id=%s step=audiodb result=hit", track_id)
+                return True
+            log.info("cover lookup track_id=%s step=audiodb result=miss", track_id)
+        except Exception as exc:
+            status = (
+                f" status={exc.response.status_code}"
+                if isinstance(exc, httpx.HTTPStatusError)
+                else ""
+            )
+            log.warning(
+                "cover lookup track_id=%s step=audiodb result=error type=%s%s",
+                track_id,
+                type(exc).__name__,
+                status,
+            )
+        return False
+
+    providers = (
+        (resolve_audiodb, resolve_musicbrainz)
+        if prefer_audiodb
+        else (resolve_musicbrainz, resolve_audiodb)
+    )
+    for resolve_provider in providers:
+        if await resolve_provider():
             return
-        log.info("cover lookup track_id=%s step=audiodb result=miss", track_id)
-    except Exception as exc:
-        status = (
-            f" status={exc.response.status_code}"
-            if isinstance(exc, httpx.HTTPStatusError)
-            else ""
-        )
-        log.warning(
-            "cover lookup track_id=%s step=audiodb result=error type=%s%s",
-            track_id,
-            type(exc).__name__,
-            status,
-        )
 
     try:
         image = generated_cover(track.title)

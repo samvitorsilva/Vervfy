@@ -264,7 +264,7 @@ export default function ArtistExplorer({
   onPlay: (tracks: TrackRecord[], startTrackId?: string) => void;
   renderTrack: (track: TrackRecord, index: number, playList: TrackRecord[]) => ReactNode;
 }) {
-  const { language, t } = useLanguage();
+  const { language, t, translateError } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const setView = usePlayerStore((state) => state.setView);
   const [profileByArtist, setProfileByArtist] = useState<
@@ -336,7 +336,9 @@ export default function ArtistExplorer({
         const response = await apiFetch("/api/artists/images", {
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error(`Artist image lookup failed (${response.status})`);
+        if (!response.ok) {
+          throw new Error(t("Artist image lookup failed ({status})").replace("{status}", String(response.status)));
+        }
         const payload = (await response.json()) as {
           artists?: Record<string, ArtistImageInfo>;
         };
@@ -360,7 +362,7 @@ export default function ArtistExplorer({
       controller?.abort();
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [shouldLoadArtistImages]);
+  }, [shouldLoadArtistImages, t]);
 
   useEffect(() => {
     if (!currentArtist) return;
@@ -377,7 +379,9 @@ export default function ArtistExplorer({
         const response = await apiFetch(`/api/artists/profile?${query}`, {
           signal: activeController.signal,
         });
-        if (!response.ok) throw new Error(`Profile lookup failed (${response.status})`);
+        if (!response.ok) {
+          throw new Error(t("Profile lookup failed ({status})").replace("{status}", String(response.status)));
+        }
         const { profile: nextProfile } = (await response.json()) as {
           profile: Record<string, unknown> | null;
         };
@@ -406,7 +410,7 @@ export default function ArtistExplorer({
       activeController?.abort();
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [currentArtist, language, loadedProfiles]);
+  }, [currentArtist, language, loadedProfiles, t]);
 
   if (view === "artists") {
     if (tracks.length === 0) {
@@ -545,7 +549,7 @@ export default function ArtistExplorer({
         },
       }));
     } catch (error) {
-      setPhotoError(error instanceof Error ? error.message : t("Could not update artist photo."));
+      setPhotoError(translateError(error instanceof Error ? error.message : "", "Could not update artist photo."));
     } finally {
       setPhotoPending(false);
     }
@@ -582,7 +586,7 @@ export default function ArtistExplorer({
         },
       }));
     } catch (error) {
-      setPhotoError(error instanceof Error ? error.message : t("Could not remove artist photo."));
+      setPhotoError(translateError(error instanceof Error ? error.message : "", "Could not remove artist photo."));
     } finally {
       setPhotoPending(false);
     }

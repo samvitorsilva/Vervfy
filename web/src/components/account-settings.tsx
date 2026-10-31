@@ -10,7 +10,7 @@ import { usePlayerStore, type LibraryView } from "@/store/player-store";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 
 function dateLabel(timestamp: number, language: string): string {
-  if (!timestamp) return "—";
+  if (!timestamp) return "Not available";
   return new Date(timestamp * 1000).toLocaleDateString(language, {
     year: "numeric",
     month: "long",
@@ -41,7 +41,7 @@ export default function AccountSettings({
   onToast: (message: string) => void;
   onPhotoChange: (photoUrl: string | null) => void;
 }) {
-  const { language, t } = useLanguage();
+  const { language, t, translateError } = useLanguage();
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
   const setView = usePlayerStore((state) => state.setView);
@@ -108,12 +108,12 @@ export default function AccountSettings({
         }
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : t("Could not load account."));
+        if (!cancelled) setError(translateError(reason instanceof Error ? reason.message : "", "Could not load account."));
       });
     return () => {
       cancelled = true;
     };
-  }, [account, active, onPhotoChange, t]);
+  }, [account, active, onPhotoChange, translateError]);
 
   async function saveEmail(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -129,7 +129,7 @@ export default function AccountSettings({
       setEmailPassword("");
       setEmailMessage(nextEmail ? t("Email saved to your account.") : t("Email removed."));
     } catch (reason) {
-      setEmailMessage(reason instanceof Error ? reason.message : t("Could not update email."));
+      setEmailMessage(translateError(reason instanceof Error ? reason.message : "", "Could not update email."));
     }
   }
 
@@ -146,7 +146,7 @@ export default function AccountSettings({
       form.reset();
       setPasswordMessage(t("Password updated."));
     } catch (reason) {
-      setPasswordMessage(reason instanceof Error ? reason.message : t("Could not update password."));
+      setPasswordMessage(translateError(reason instanceof Error ? reason.message : "", "Could not update password."));
     }
   }
 
@@ -298,7 +298,7 @@ export default function AccountSettings({
       closePhotoEditor();
       onToast(t("Profile photo saved."));
     } catch (reason) {
-      setPhotoMessage(reason instanceof Error ? reason.message : t("Could not save profile photo."));
+      setPhotoMessage(translateError(reason instanceof Error ? reason.message : "", "Could not save profile photo."));
     } finally {
       setPhotoSaving(false);
     }
@@ -311,7 +311,7 @@ export default function AccountSettings({
       window.location.assign("/login");
     } catch (reason) {
       setPending(false);
-      onToast(reason instanceof Error ? reason.message : t("Could not sign out of all devices."));
+      onToast(translateError(reason instanceof Error ? reason.message : "", "Could not sign out of all devices."));
     }
   }
 
@@ -328,7 +328,7 @@ export default function AccountSettings({
       window.location.assign("/login?account_deleted=1");
     } catch (reason) {
       setPending(false);
-      setDeleteMessage(reason instanceof Error ? reason.message : t("Could not delete account."));
+      setDeleteMessage(translateError(reason instanceof Error ? reason.message : "", "Could not delete account."));
     }
   }
 

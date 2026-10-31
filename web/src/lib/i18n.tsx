@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { languageFromLocale, type Language } from "@/lib/language";
 
 export type { Language } from "@/lib/language";
@@ -242,6 +243,10 @@ const translations: Record<string, string> = {
   Preferences: "Preferências",
   "Sign-in & security": "Entrada e segurança",
   "View credits": "Ver créditos",
+  "Privacy Policy": "Política de Privacidade",
+  "Terms and Conditions": "Termos e Condições",
+  "Not playing": "Nada tocando",
+  "Not available": "Indisponível",
   "Member since": "Membro desde",
   "tracks in your library": "faixas na sua biblioteca",
   "Liked songs": "Músicas curtidas",
@@ -420,6 +425,99 @@ const translations: Record<string, string> = {
   "LRCLIB lookup is disabled.": "A busca no LRCLIB está desativada.",
   "LRCLIB disabled": "LRCLIB desativado",
   "Only your own pasted lyrics are shown.": "Somente as letras que você colou são exibidas.",
+  "Playback failed. Press play to retry.": "A reprodução falhou. Pressione play para tentar novamente.",
+  "Last updated: {date}": "Última atualização: {date}",
+  "Draft for legal review. The operator details and terms must be confirmed before launch.": "Rascunho para revisão jurídica. Os dados do responsável e os termos devem ser confirmados antes do lançamento.",
+  "Who operates Vervfy": "Quem opera o Vervfy",
+  "Vervfy is operated by Sam Vitor. This operator identification is provisional and must be confirmed before launch. For privacy questions or requests, email": "O Vervfy é operado por Sam Vitor. Essa identificação é provisória e deve ser confirmada antes do lançamento. Para dúvidas ou solicitações sobre privacidade, escreva para",
+  "Information handled by the service": "Informações tratadas pelo serviço",
+  "Vervfy processes the information needed to provide your account and music library. This can include your username, password verifier, optional email address, profile photo, uploaded audio, audio tags, cover art, lyrics you save, playlists, favorites, and listening history.": "O Vervfy trata as informações necessárias para oferecer sua conta e biblioteca de música. Isso pode incluir seu nome de usuário, verificador de senha, e-mail opcional, foto de perfil, áudio enviado, tags de áudio, capas, letras salvas, playlists, favoritos e histórico de reprodução.",
+  "The service also receives standard request information, such as your IP address, when needed to operate sessions, protect the service, and apply rate limits.": "O serviço também recebe informações comuns das solicitações, como seu endereço IP, quando necessário para manter sessões, proteger o serviço e aplicar limites de uso.",
+  "How information is used and shared": "Como as informações são usadas e compartilhadas",
+  "Account and library information is used to authenticate you, store and play your library, sync it across your devices, and provide library features such as listening history.": "As informações da conta e da biblioteca são usadas para autenticar você, armazenar e reproduzir sua biblioteca, sincronizá-la entre seus dispositivos e oferecer recursos como o histórico de reprodução.",
+  "Vervfy uses database and file-storage infrastructure to operate accounts and store uploaded files. When you use optional lyrics and artwork features, relevant track or artist search terms may be sent to LRCLIB, TheAudioDB, MusicBrainz, Cover Art Archive, or Wikipedia. Images hosted by third parties may be loaded directly from those providers. Your audio files are not sent to these lookup providers.": "O Vervfy usa infraestrutura de banco de dados e armazenamento de arquivos para manter contas e guardar arquivos enviados. Ao usar os recursos opcionais de letras e capas, termos de busca relacionados à faixa ou ao artista podem ser enviados ao LRCLIB, TheAudioDB, MusicBrainz, Cover Art Archive ou Wikipédia. Imagens hospedadas por terceiros podem ser carregadas diretamente desses provedores. Seus arquivos de áudio não são enviados a esses serviços de busca.",
+  "Lyrics returned by LRCLIB are cached in your browser for up to three days. Interface preferences and language settings may also be stored in your browser. Vervfy uses a session cookie to keep you signed in and a language preference cookie when you select a language.": "As letras fornecidas pelo LRCLIB ficam armazenadas em cache no navegador por até três dias. Preferências da interface e do idioma também podem ser armazenadas no navegador. O Vervfy usa um cookie de sessão para manter seu acesso e um cookie de preferência de idioma quando você escolhe um idioma.",
+  "Retention and deletion": "Armazenamento e exclusão",
+  "Account information and library content are retained while your account is active. You can request deletion using Delete account in account settings. The deletion flow removes the account and its associated library records and stored files. Browser caches can be cleared separately through your browser settings.": "As informações da conta e o conteúdo da biblioteca são mantidos enquanto sua conta estiver ativa. Você pode solicitar a exclusão usando Excluir conta nas configurações. O processo remove a conta, os registros associados da biblioteca e os arquivos armazenados. O cache do navegador pode ser apagado separadamente nas configurações do navegador.",
+  "Your choices and requests": "Suas opções e solicitações",
+  "You can update or remove account information in account settings, delete your account, and clear local browser storage through your browser. For privacy requests, contact": "Você pode atualizar ou remover informações da conta nas configurações, excluir sua conta e limpar o armazenamento local nas configurações do navegador. Para solicitações sobre privacidade, entre em contato com",
+  "Changes to this policy": "Alterações nesta política",
+  "This draft may change before launch. The published policy should show its effective date and explain material changes.": "Este rascunho pode mudar antes do lançamento. A política publicada deve informar a data de vigência e explicar alterações relevantes.",
+  "Draft and operator details": "Rascunho e dados do responsável",
+  "These terms are a draft pending legal review. Vervfy is operated by Sam Vitor, subject to confirmation before launch. Questions about these terms can be sent to": "Estes termos são um rascunho pendente de revisão jurídica. O Vervfy é operado por Sam Vitor, sujeito a confirmação antes do lançamento. Dúvidas sobre estes termos podem ser enviadas para",
+  "Your account": "Sua conta",
+  "Keep your sign-in details secure and provide accurate account information. You are responsible for activity carried out through your account. You may delete your account in account settings.": "Mantenha seus dados de acesso seguros e forneça informações corretas. Você é responsável pelas atividades realizadas em sua conta. Você pode excluir a conta nas configurações.",
+  "Your music and other content": "Suas músicas e outros conteúdos",
+  "You retain responsibility for the audio, artwork, and lyrics you upload, add, or save. Only add content you are allowed to use and store. You must not use Vervfy to infringe another person’s rights or to break applicable law.": "Você continua responsável pelos áudios, capas e letras que envia, adiciona ou salva. Adicione somente conteúdo que tenha autorização para usar e armazenar. Não use o Vervfy para violar direitos de terceiros ou a legislação aplicável.",
+  "Vervfy does not claim ownership of your content or grant you rights to third-party content. Lyrics and externally hosted artwork remain subject to the rights and terms of their respective owners and providers.": "O Vervfy não reivindica a propriedade do seu conteúdo nem concede direitos sobre conteúdo de terceiros. Letras e capas hospedadas externamente continuam sujeitas aos direitos e termos de seus respectivos titulares e provedores.",
+  "Acceptable use": "Uso aceitável",
+  "Do not attempt to disrupt, damage, reverse engineer, or gain unauthorized access to Vervfy or its infrastructure. Do not use the service to upload malicious content or interfere with another person’s use of the service.": "Não tente interromper, danificar, fazer engenharia reversa ou obter acesso não autorizado ao Vervfy ou à sua infraestrutura. Não use o serviço para enviar conteúdo malicioso ou prejudicar o uso do serviço por outra pessoa.",
+  "Service availability": "Disponibilidade do serviço",
+  "Vervfy may change, suspend, or discontinue features to maintain or protect the service. Third-party lookup and media services are outside Vervfy’s control and may be unavailable or change their responses.": "O Vervfy pode alterar, suspender ou descontinuar recursos para manter ou proteger o serviço. Serviços de busca e mídia de terceiros estão fora do controle do Vervfy e podem ficar indisponíveis ou alterar suas respostas.",
+  "Governing law": "Legislação aplicável",
+  "Brazil, State of Pernambuco, is the proposed governing jurisdiction, subject to legal review and confirmation before launch.": "Brasil, Estado de Pernambuco, é a jurisdição proposta, sujeita à revisão jurídica e confirmação antes do lançamento.",
+  "Changes to these terms": "Alterações nestes termos",
+  "These draft terms may change before launch. The published version should include an effective date. Continued use after a material change will be addressed in the final terms.": "Estes termos preliminares podem mudar antes do lançamento. A versão publicada deve incluir uma data de vigência. Os termos finais explicarão as consequências de continuar usando o serviço após uma alteração relevante.",
+  "Log in to your Vervfy account to access your music library.": "Entre na sua conta Vervfy para acessar sua biblioteca de música.",
+  "Create a Vervfy account to organize and listen to your music library.": "Crie uma conta Vervfy para organizar e ouvir sua biblioteca de música.",
+  "Listen to and organize your personal music library with Vervfy.": "Ouça e organize sua biblioteca pessoal de música com o Vervfy.",
+  "Attribution, licenses, and data sources used by Vervfy.": "Atribuições, licenças e fontes de dados usadas pelo Vervfy.",
+  "How Vervfy handles account, library, and device information.": "Como o Vervfy trata informações da conta, da biblioteca e dos dispositivos.",
+  "Terms for using the Vervfy music library service.": "Termos de uso do serviço de biblioteca de música Vervfy.",
+  "The requested Vervfy page could not be found.": "Não foi possível encontrar a página solicitada do Vervfy.",
+  "Page not found": "Página não encontrada",
+  "The page you’re looking for doesn’t exist or may have moved.": "A página que você procura não existe ou pode ter sido movida.",
+  "Your music library": "Sua biblioteca de música",
+  "Could not save lyrics.": "Não foi possível salvar as letras.",
+  "Could not save synced lyrics.": "Não foi possível salvar as letras sincronizadas.",
+  "Lyrics provider is temporarily unavailable.": "O serviço de letras está temporariamente indisponível.",
+  "Listening history could not be loaded. Recaps may be out of date.": "Não foi possível carregar o histórico de reprodução. Os resumos podem estar desatualizados.",
+  "Could not save this track offline.": "Não foi possível salvar esta faixa para ouvir offline.",
+  "Could not remove the track.": "Não foi possível remover a faixa.",
+  "Could not load your library.": "Não foi possível carregar sua biblioteca.",
+  "Upload failed.": "Não foi possível enviar o arquivo.",
+  "Upload processing failed.": "Não foi possível processar o envio.",
+  "Upload completed but the track is not available yet.": "O envio foi concluído, mas a faixa ainda não está disponível.",
+  "Upload is still processing; refresh the library shortly.": "O envio ainda está sendo processado. Atualize a biblioteca em instantes.",
+  "The upload response was not recognized.": "A resposta do envio não foi reconhecida.",
+  "The downloaded track was empty.": "A faixa baixada está vazia.",
+  "The backend returned an invalid CSRF token response.": "O servidor retornou uma resposta inválida para o token CSRF.",
+  "The backend is unavailable.": "O servidor está indisponível.",
+  "Feature configuration returned HTTP {status}": "A configuração do recurso retornou HTTP {status}",
+  "Artist image lookup failed ({status})": "A busca de imagens do artista falhou (HTTP {status})",
+  "Profile lookup failed ({status})": "A busca do perfil falhou (HTTP {status})",
+  "Library changes could not be synced: {error}": "Não foi possível sincronizar as alterações da biblioteca: {error}",
+  "No audio files found in that selection.": "Nenhum arquivo de áudio foi encontrado nessa seleção.",
+  "Uploading {completed}/{total}…": "Enviando {completed}/{total}…",
+  "{count} tracks uploaded; the rest were rate limited. Try again later.": "Faixas enviadas: {count}; as demais atingiram o limite de solicitações. Tente novamente mais tarde.",
+  "Saved {added} tracks; {failed} failed: {error}": "Faixas salvas: {added}; {failed} falharam: {error}",
+  "Saved {count} track to your library.": "{count} faixa salva na sua biblioteca.",
+  "Saved {count} tracks to your library.": "{count} faixas salvas na sua biblioteca.",
+  "Upload failed: {error}": "O envio falhou: {error}",
+  "{count} uploads failed: {error}": "{count} envios falharam: {error}",
+  "Those tracks were already in your library.": "Essas faixas já estavam na sua biblioteca.",
+  "Updated your Rediscover playlist.": "Playlist Redescobrir atualizada.",
+  "Created your Rediscover playlist.": "Playlist Redescobrir criada.",
+  "Saved offline tracks could not be loaded from this browser.": "Não foi possível carregar neste navegador as faixas salvas para ouvir offline.",
+  "Renamed playlist to “{name}”.": "Playlist renomeada para “{name}”.",
+  "Created “{name}”.": "“{name}” criada.",
+  "Your account is still loading. Try again shortly.": "Sua conta ainda está carregando. Tente novamente em instantes.",
+  "Removed “{name}” from offline storage.": "“{name}” removida do armazenamento offline.",
+  "Downloaded “{name}” for offline listening.": "“{name}” baixada para ouvir offline.",
+  "Remove “{name}” from your library? This deletes the file.": "Remover “{name}” da sua biblioteca? Isso excluirá o arquivo.",
+  "Could not share this song.": "Não foi possível compartilhar esta música.",
+  "Song details copied to clipboard.": "Detalhes da música copiados.",
+  "Sharing is not available in this browser.": "O compartilhamento não está disponível neste navegador.",
+  "“{name}” will play next.": "“{name}” será a próxima faixa.",
+  "Added “{name}” to the queue.": "“{name}” adicionada à fila.",
+  "Delete “{name}”?": "Excluir “{name}”?",
+  "Added to “{name}”.": "Adicionada a “{name}”.",
+  "Added “{name}” to the playlist.": "“{name}” adicionada à playlist.",
+  "Removed “{name}” from your library.": "“{name}” removida da sua biblioteca.",
+  "Removed “{name}” from your library, but its local offline copy could not be cleared.": "“{name}” foi removida da biblioteca, mas não foi possível apagar a cópia offline local.",
+  "Removed “{track}” from “{playlist}”.": "“{track}” removida de “{playlist}”.",
+  "Added {count} songs to the playlist.": "{count} faixas adicionadas à playlist.",
+  "Library changes could not be synced. Please try again.": "Não foi possível sincronizar as alterações da biblioteca. Tente novamente.",
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
@@ -658,6 +756,10 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "Sign-in & security": ["Connexion et sécurité", "Inicio de sesión y seguridad"],
   Edit: ["Modifier", "Editar"],
   "View credits": ["Voir les crédits", "Ver créditos"],
+  "Privacy Policy": ["Politique de confidentialité", "Política de privacidad"],
+  "Terms and Conditions": ["Conditions générales", "Términos y condiciones"],
+  "Not playing": ["Aucun morceau en cours", "No se está reproduciendo"],
+  "Not available": ["Indisponible", "No disponible"],
   "Member since": ["Membre depuis", "Miembro desde"],
   "tracks in your library": ["morceaux dans votre bibliothèque", "canciones en tu biblioteca"],
   "Liked songs": ["Morceaux aimés", "Canciones favoritas"],
@@ -837,22 +939,125 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "LRCLIB lookup is disabled.": ["La recherche LRCLIB est désactivée.", "La búsqueda de LRCLIB está desactivada."],
   "LRCLIB disabled": ["LRCLIB désactivé", "LRCLIB desactivado"],
   "Only your own pasted lyrics are shown.": ["Seules les paroles que vous avez collées sont affichées.", "Solo se muestran las letras que has pegado."],
+  "Playback failed. Press play to retry.": ["La lecture a échoué. Appuyez sur Lecture pour réessayer.", "No se pudo reproducir. Pulsa Reproducir para intentarlo de nuevo."],
+  "Last updated: {date}": ["Dernière mise à jour : {date}", "Última actualización: {date}"],
+  "Draft for legal review. The operator details and terms must be confirmed before launch.": ["Projet soumis à une vérification juridique. L’identité de l’exploitant et les conditions doivent être confirmées avant le lancement.", "Borrador pendiente de revisión legal. La identidad del responsable y las condiciones deben confirmarse antes del lanzamiento."],
+  "Who operates Vervfy": ["Qui exploite Vervfy", "Quién opera Vervfy"],
+  "Vervfy is operated by Sam Vitor. This operator identification is provisional and must be confirmed before launch. For privacy questions or requests, email": ["Vervfy est exploité par Sam Vitor. Cette identification est provisoire et doit être confirmée avant le lancement. Pour toute question ou demande relative à la confidentialité, écrivez à", "Vervfy está operado por Sam Vitor. Esta identificación es provisional y debe confirmarse antes del lanzamiento. Para consultas o solicitudes sobre privacidad, escribe a"],
+  "Information handled by the service": ["Informations traitées par le service", "Información que trata el servicio"],
+  "Vervfy processes the information needed to provide your account and music library. This can include your username, password verifier, optional email address, profile photo, uploaded audio, audio tags, cover art, lyrics you save, playlists, favorites, and listening history.": ["Vervfy traite les informations nécessaires au fonctionnement de votre compte et de votre bibliothèque musicale. Cela peut inclure votre nom d’utilisateur, le vérificateur de votre mot de passe, votre adresse e-mail facultative, votre photo de profil, les fichiers audio importés, leurs métadonnées, les pochettes, les paroles enregistrées, les playlists, les favoris et l’historique d’écoute.", "Vervfy trata la información necesaria para ofrecer tu cuenta y tu biblioteca musical. Puede incluir tu nombre de usuario, el verificador de tu contraseña, tu correo electrónico opcional, foto de perfil, archivos de audio subidos, sus etiquetas, portadas, letras guardadas, listas, favoritos e historial de reproducción."],
+  "The service also receives standard request information, such as your IP address, when needed to operate sessions, protect the service, and apply rate limits.": ["Le service reçoit également des informations techniques sur les requêtes, comme votre adresse IP, lorsque cela est nécessaire pour gérer les sessions, protéger le service et appliquer des limites d’utilisation.", "El servicio también recibe información técnica de las solicitudes, como tu dirección IP, cuando es necesario para gestionar sesiones, proteger el servicio y aplicar límites de uso."],
+  "How information is used and shared": ["Utilisation et partage des informations", "Cómo se usa y comparte la información"],
+  "Account and library information is used to authenticate you, store and play your library, sync it across your devices, and provide library features such as listening history.": ["Les informations du compte et de la bibliothèque servent à vous authentifier, à stocker et lire votre bibliothèque, à la synchroniser entre vos appareils et à fournir des fonctions comme l’historique d’écoute.", "La información de la cuenta y la biblioteca se usa para autenticarte, guardar y reproducir tu biblioteca, sincronizarla entre tus dispositivos y ofrecer funciones como el historial de reproducción."],
+  "Vervfy uses database and file-storage infrastructure to operate accounts and store uploaded files. When you use optional lyrics and artwork features, relevant track or artist search terms may be sent to LRCLIB, TheAudioDB, MusicBrainz, Cover Art Archive, or Wikipedia. Images hosted by third parties may be loaded directly from those providers. Your audio files are not sent to these lookup providers.": ["Vervfy utilise une infrastructure de bases de données et de stockage de fichiers pour gérer les comptes et conserver les fichiers importés. Lorsque vous utilisez les fonctions facultatives de recherche de paroles et de pochettes, des termes liés au morceau ou à l’artiste peuvent être transmis à LRCLIB, TheAudioDB, MusicBrainz, Cover Art Archive ou Wikipédia. Les images hébergées par des tiers peuvent être chargées directement depuis ces services. Vos fichiers audio ne leur sont pas transmis.", "Vervfy utiliza infraestructura de bases de datos y almacenamiento de archivos para gestionar cuentas y guardar los archivos subidos. Al usar las funciones opcionales de búsqueda de letras y portadas, se pueden enviar a LRCLIB, TheAudioDB, MusicBrainz, Cover Art Archive o Wikipedia términos de búsqueda relacionados con la canción o el artista. Las imágenes alojadas por terceros pueden cargarse directamente desde esos servicios. Tus archivos de audio no se envían a estos proveedores."],
+  "Lyrics returned by LRCLIB are cached in your browser for up to three days. Interface preferences and language settings may also be stored in your browser. Vervfy uses a session cookie to keep you signed in and a language preference cookie when you select a language.": ["Les paroles fournies par LRCLIB sont mises en cache dans votre navigateur pendant trois jours au maximum. Vos préférences d’interface et de langue peuvent également y être enregistrées. Vervfy utilise un cookie de session pour maintenir votre connexion et un cookie de préférence linguistique lorsque vous choisissez une langue.", "Las letras de LRCLIB se guardan en la caché de tu navegador durante un máximo de tres días. Tus preferencias de interfaz e idioma también pueden almacenarse allí. Vervfy utiliza una cookie de sesión para mantener tu acceso y una cookie de idioma cuando eliges uno."],
+  "Retention and deletion": ["Conservation et suppression", "Conservación y eliminación"],
+  "Account information and library content are retained while your account is active. You can request deletion using Delete account in account settings. The deletion flow removes the account and its associated library records and stored files. Browser caches can be cleared separately through your browser settings.": ["Les informations du compte et le contenu de la bibliothèque sont conservés tant que votre compte est actif. Vous pouvez demander leur suppression avec l’option Supprimer le compte dans les paramètres. La procédure supprime le compte, les données associées à la bibliothèque et les fichiers stockés. Le cache du navigateur peut être effacé séparément dans ses paramètres.", "La información de la cuenta y el contenido de la biblioteca se conservan mientras tu cuenta esté activa. Puedes solicitar su eliminación con la opción Eliminar cuenta en los ajustes. El proceso elimina la cuenta, los datos asociados de la biblioteca y los archivos almacenados. Puedes borrar la caché del navegador desde sus ajustes."],
+  "Your choices and requests": ["Vos choix et vos demandes", "Tus opciones y solicitudes"],
+  "You can update or remove account information in account settings, delete your account, and clear local browser storage through your browser. For privacy requests, contact": ["Vous pouvez modifier ou supprimer les informations de votre compte dans les paramètres, supprimer votre compte et effacer le stockage local depuis votre navigateur. Pour toute demande relative à la confidentialité, contactez", "Puedes actualizar o eliminar la información de tu cuenta desde los ajustes, eliminar tu cuenta y borrar el almacenamiento local desde el navegador. Para solicitudes sobre privacidad, contacta con"],
+  "Changes to this policy": ["Modifications de cette politique", "Cambios en esta política"],
+  "This draft may change before launch. The published policy should show its effective date and explain material changes.": ["Ce projet peut être modifié avant le lancement. La politique publiée devra indiquer sa date d’entrée en vigueur et expliquer les changements importants.", "Este borrador puede cambiar antes del lanzamiento. La política publicada deberá indicar su fecha de entrada en vigor y explicar los cambios importantes."],
+  "Draft and operator details": ["Projet et identité de l’exploitant", "Borrador e identidad del responsable"],
+  "These terms are a draft pending legal review. Vervfy is operated by Sam Vitor, subject to confirmation before launch. Questions about these terms can be sent to": ["Ces conditions sont un projet en attente d’une vérification juridique. Vervfy est exploité par Sam Vitor, sous réserve de confirmation avant le lancement. Les questions relatives à ces conditions peuvent être envoyées à", "Estas condiciones son un borrador pendiente de revisión legal. Vervfy está operado por Sam Vitor, sujeto a confirmación antes del lanzamiento. Puedes enviar tus preguntas sobre estas condiciones a"],
+  "Your account": ["Votre compte", "Tu cuenta"],
+  "Keep your sign-in details secure and provide accurate account information. You are responsible for activity carried out through your account. You may delete your account in account settings.": ["Protégez vos identifiants et fournissez des informations exactes. Vous êtes responsable des activités effectuées depuis votre compte. Vous pouvez supprimer votre compte dans les paramètres.", "Mantén seguros tus datos de acceso y proporciona información correcta. Eres responsable de la actividad realizada desde tu cuenta. Puedes eliminarla en los ajustes."],
+  "Your music and other content": ["Votre musique et vos autres contenus", "Tu música y otros contenidos"],
+  "You retain responsibility for the audio, artwork, and lyrics you upload, add, or save. Only add content you are allowed to use and store. You must not use Vervfy to infringe another person’s rights or to break applicable law.": ["Vous restez responsable des fichiers audio, des images et des paroles que vous importez, ajoutez ou enregistrez. N’ajoutez que des contenus que vous êtes autorisé à utiliser et à stocker. Vous ne devez pas utiliser Vervfy pour porter atteinte aux droits d’autrui ou enfreindre la loi applicable.", "Sigues siendo responsable del audio, las imágenes y las letras que subas, añadas o guardes. Añade solo contenido que tengas permiso para usar y almacenar. No debes utilizar Vervfy para infringir derechos ajenos ni incumplir la legislación aplicable."],
+  "Vervfy does not claim ownership of your content or grant you rights to third-party content. Lyrics and externally hosted artwork remain subject to the rights and terms of their respective owners and providers.": ["Vervfy ne revendique pas la propriété de vos contenus et ne vous accorde aucun droit sur les contenus de tiers. Les paroles et les images hébergées à l’extérieur restent soumises aux droits et conditions de leurs propriétaires et fournisseurs respectifs.", "Vervfy no reclama la propiedad de tu contenido ni te concede derechos sobre contenido de terceros. Las letras y las imágenes alojadas externamente siguen sujetas a los derechos y condiciones de sus respectivos titulares y proveedores."],
+  "Acceptable use": ["Utilisation autorisée", "Uso aceptable"],
+  "Do not attempt to disrupt, damage, reverse engineer, or gain unauthorized access to Vervfy or its infrastructure. Do not use the service to upload malicious content or interfere with another person’s use of the service.": ["Ne tentez pas de perturber ou d’endommager Vervfy ou son infrastructure, d’en faire l’ingénierie inverse ou d’y accéder sans autorisation. N’utilisez pas le service pour importer du contenu malveillant ou gêner son utilisation par autrui.", "No intentes interrumpir o dañar Vervfy o su infraestructura, aplicar ingeniería inversa ni obtener acceso no autorizado. No utilices el servicio para subir contenido malicioso ni interferir en el uso que otras personas hagan de él."],
+  "Service availability": ["Disponibilité du service", "Disponibilidad del servicio"],
+  "Vervfy may change, suspend, or discontinue features to maintain or protect the service. Third-party lookup and media services are outside Vervfy’s control and may be unavailable or change their responses.": ["Vervfy peut modifier, suspendre ou interrompre certaines fonctions pour maintenir ou protéger le service. Les services de recherche et de médias tiers échappent au contrôle de Vervfy et peuvent être indisponibles ou modifier leurs réponses.", "Vervfy puede modificar, suspender o retirar funciones para mantener o proteger el servicio. Los servicios externos de búsqueda y contenido multimedia están fuera del control de Vervfy y pueden dejar de estar disponibles o cambiar sus respuestas."],
+  "Governing law": ["Droit applicable", "Legislación aplicable"],
+  "Brazil, State of Pernambuco, is the proposed governing jurisdiction, subject to legal review and confirmation before launch.": ["Le Brésil, État de Pernambuco, est la juridiction proposée, sous réserve d’une vérification juridique et d’une confirmation avant le lancement.", "Se propone Brasil, estado de Pernambuco, como jurisdicción aplicable, sujeto a revisión legal y confirmación antes del lanzamiento."],
+  "Changes to these terms": ["Modifications de ces conditions", "Cambios en estas condiciones"],
+  "These draft terms may change before launch. The published version should include an effective date. Continued use after a material change will be addressed in the final terms.": ["Ce projet de conditions peut être modifié avant le lancement. La version publiée devra inclure une date d’entrée en vigueur. La version définitive précisera les conséquences d’une utilisation continue après une modification importante.", "Estas condiciones provisionales pueden cambiar antes del lanzamiento. La versión publicada deberá incluir una fecha de entrada en vigor. Las condiciones definitivas explicarán qué implica seguir utilizando el servicio tras un cambio importante."],
+  "Log in to your Vervfy account to access your music library.": ["Connectez-vous à votre compte Vervfy pour accéder à votre bibliothèque musicale.", "Inicia sesión en tu cuenta de Vervfy para acceder a tu biblioteca musical."],
+  "Create a Vervfy account to organize and listen to your music library.": ["Créez un compte Vervfy pour organiser et écouter votre bibliothèque musicale.", "Crea una cuenta de Vervfy para organizar y escuchar tu biblioteca musical."],
+  "Listen to and organize your personal music library with Vervfy.": ["Écoutez et organisez votre bibliothèque musicale personnelle avec Vervfy.", "Escucha y organiza tu biblioteca musical personal con Vervfy."],
+  "Attribution, licenses, and data sources used by Vervfy.": ["Attributions, licences et sources de données utilisées par Vervfy.", "Atribuciones, licencias y fuentes de datos utilizadas por Vervfy."],
+  "How Vervfy handles account, library, and device information.": ["Comment Vervfy traite les informations relatives au compte, à la bibliothèque et aux appareils.", "Cómo trata Vervfy la información de la cuenta, la biblioteca y los dispositivos."],
+  "Terms for using the Vervfy music library service.": ["Conditions d’utilisation du service de bibliothèque musicale Vervfy.", "Condiciones de uso del servicio de biblioteca musical de Vervfy."],
+  "The requested Vervfy page could not be found.": ["La page Vervfy demandée est introuvable.", "No se encontró la página solicitada de Vervfy."],
+  "Page not found": ["Page introuvable", "Página no encontrada"],
+  "The page you’re looking for doesn’t exist or may have moved.": ["La page recherchée n’existe pas ou a peut-être été déplacée.", "La página que buscas no existe o puede que se haya movido."],
+  "Your music library": ["Votre bibliothèque musicale", "Tu biblioteca musical"],
+  "Could not save lyrics.": ["Impossible d’enregistrer les paroles.", "No se pudieron guardar las letras."],
+  "Could not save synced lyrics.": ["Impossible d’enregistrer les paroles synchronisées.", "No se pudieron guardar las letras sincronizadas."],
+  "Lyrics provider is temporarily unavailable.": ["Le service de paroles est temporairement indisponible.", "El servicio de letras no está disponible temporalmente."],
+  "Listening history could not be loaded. Recaps may be out of date.": ["Impossible de charger l’historique d’écoute. Les récapitulatifs peuvent être obsolètes.", "No se pudo cargar el historial de reproducción. Los resúmenes pueden estar desactualizados."],
+  "Could not save this track offline.": ["Impossible d’enregistrer ce morceau hors ligne.", "No se pudo guardar esta canción para escucharla sin conexión."],
+  "Could not remove the track.": ["Impossible de supprimer le morceau.", "No se pudo eliminar la canción."],
+  "Could not load your library.": ["Impossible de charger votre bibliothèque.", "No se pudo cargar tu biblioteca."],
+  "Upload failed.": ["Échec de l’importation.", "No se pudo subir el archivo."],
+  "Upload processing failed.": ["Le traitement de l’importation a échoué.", "No se pudo procesar la subida."],
+  "Upload completed but the track is not available yet.": ["L’importation est terminée, mais le morceau n’est pas encore disponible.", "La subida terminó, pero la canción aún no está disponible."],
+  "Upload is still processing; refresh the library shortly.": ["L’importation est toujours en cours. Actualisez la bibliothèque dans quelques instants.", "La subida aún se está procesando. Actualiza la biblioteca dentro de un momento."],
+  "The upload response was not recognized.": ["La réponse de l’importation n’a pas été reconnue.", "No se reconoció la respuesta de la subida."],
+  "The downloaded track was empty.": ["Le fichier du morceau téléchargé est vide.", "El archivo de la canción descargada está vacío."],
+  "The backend returned an invalid CSRF token response.": ["Le serveur a renvoyé une réponse invalide pour le jeton CSRF.", "El servidor devolvió una respuesta no válida para el token CSRF."],
+  "The backend is unavailable.": ["Le serveur est indisponible.", "El servidor no está disponible."],
+  "Feature configuration returned HTTP {status}": ["La configuration de la fonctionnalité a renvoyé HTTP {status}", "La configuración de la función devolvió HTTP {status}"],
+  "Artist image lookup failed ({status})": ["La recherche d’images de l’artiste a échoué (HTTP {status})", "La búsqueda de imágenes del artista falló (HTTP {status})"],
+  "Profile lookup failed ({status})": ["La recherche du profil a échoué (HTTP {status})", "La búsqueda del perfil falló (HTTP {status})"],
+  "Library changes could not be synced: {error}": ["Impossible de synchroniser les modifications de la bibliothèque : {error}", "No se pudieron sincronizar los cambios de la biblioteca: {error}"],
+  "No audio files found in that selection.": ["Aucun fichier audio n’a été trouvé dans cette sélection.", "No se encontraron archivos de audio en esa selección."],
+  "Uploading {completed}/{total}…": ["Importation {completed}/{total}…", "Subiendo {completed}/{total}…"],
+  "{count} tracks uploaded; the rest were rate limited. Try again later.": ["Morceaux importés : {count} ; les autres ont atteint la limite de requêtes. Réessayez plus tard.", "Canciones subidas: {count}; el resto alcanzó el límite de solicitudes. Inténtalo más tarde."],
+  "Saved {added} tracks; {failed} failed: {error}": ["Morceaux enregistrés : {added} ; échecs : {failed} ({error})", "Canciones guardadas: {added}; fallidas: {failed} ({error})"],
+  "Saved {count} track to your library.": ["{count} morceau enregistré dans votre bibliothèque.", "{count} canción guardada en tu biblioteca."],
+  "Saved {count} tracks to your library.": ["{count} morceaux enregistrés dans votre bibliothèque.", "{count} canciones guardadas en tu biblioteca."],
+  "Upload failed: {error}": ["Échec de l’importation : {error}", "No se pudo subir el archivo: {error}"],
+  "{count} uploads failed: {error}": ["Échec de {count} importations : {error}", "Fallaron {count} subidas: {error}"],
+  "Those tracks were already in your library.": ["Ces morceaux étaient déjà dans votre bibliothèque.", "Esas canciones ya estaban en tu biblioteca."],
+  "Updated your Rediscover playlist.": ["Votre playlist À réécouter a été mise à jour.", "Se actualizó tu lista Para redescubrir."],
+  "Created your Rediscover playlist.": ["Votre playlist À réécouter a été créée.", "Se creó tu lista Para redescubrir."],
+  "Saved offline tracks could not be loaded from this browser.": ["Impossible de charger depuis ce navigateur les morceaux enregistrés hors ligne.", "No se pudieron cargar desde este navegador las canciones guardadas sin conexión."],
+  "Renamed playlist to “{name}”.": ["Playlist renommée en « {name} ».", "Se cambió el nombre de la lista a «{name}»."],
+  "Created “{name}”.": ["« {name} » a été créée.", "Se creó «{name}»."],
+  "Your account is still loading. Try again shortly.": ["Votre compte est encore en cours de chargement. Réessayez dans un instant.", "Tu cuenta aún se está cargando. Inténtalo de nuevo en un momento."],
+  "Removed “{name}” from offline storage.": ["« {name} » a été supprimée du stockage hors ligne.", "Se eliminó «{name}» del almacenamiento sin conexión."],
+  "Downloaded “{name}” for offline listening.": ["« {name} » a été téléchargée pour une écoute hors ligne.", "Se descargó «{name}» para escucharla sin conexión."],
+  "Remove “{name}” from your library? This deletes the file.": ["Supprimer « {name} » de votre bibliothèque ? Le fichier sera supprimé.", "¿Quitar «{name}» de tu biblioteca? Se eliminará el archivo."],
+  "Could not share this song.": ["Impossible de partager ce morceau.", "No se pudo compartir esta canción."],
+  "Song details copied to clipboard.": ["Les informations du morceau ont été copiées.", "Se copiaron los detalles de la canción."],
+  "Sharing is not available in this browser.": ["Le partage n’est pas disponible dans ce navigateur.", "La función para compartir no está disponible en este navegador."],
+  "“{name}” will play next.": ["« {name} » sera lu ensuite.", "«{name}» se reproducirá a continuación."],
+  "Added “{name}” to the queue.": ["« {name} » a été ajouté à la file d’attente.", "Se añadió «{name}» a la cola."],
+  "Delete “{name}”?": ["Supprimer « {name} » ?", "¿Eliminar «{name}»?"],
+  "Added to “{name}”.": ["Ajouté à « {name} ».", "Se añadió a «{name}»."],
+  "Added “{name}” to the playlist.": ["« {name} » a été ajouté à la playlist.", "Se añadió «{name}» a la lista."],
+  "Removed “{name}” from your library.": ["« {name} » a été supprimé de votre bibliothèque.", "Se quitó «{name}» de tu biblioteca."],
+  "Removed “{name}” from your library, but its local offline copy could not be cleared.": ["« {name} » a été supprimé de votre bibliothèque, mais sa copie hors ligne locale n’a pas pu être effacée.", "Se quitó «{name}» de tu biblioteca, pero no se pudo borrar su copia local sin conexión."],
+  "Removed “{track}” from “{playlist}”.": ["« {track} » a été supprimé de « {playlist} ».", "Se quitó «{track}» de «{playlist}»."],
+  "Added {count} songs to the playlist.": ["{count} morceaux ont été ajoutés à la playlist.", "Se añadieron {count} canciones a la lista."],
+  "Library changes could not be synced. Please try again.": ["Impossible de synchroniser les modifications de la bibliothèque. Réessayez.", "No se pudieron sincronizar los cambios de la biblioteca. Inténtalo de nuevo."],
 };
 
 interface LanguageContextValue {
   language: Language;
   setLanguage: (language: Language) => void;
   t: (text: string) => string;
+  translateError: (message: string, fallback: string) => string;
 }
 
 const LanguageContext = createContext<LanguageContextValue>({
   language: "en",
   setLanguage: () => undefined,
   t: (text) => text,
+  translateError: (message, fallback) => message || fallback,
 });
 
 let activeLanguage: Language | null = null;
 const languageListeners = new Set<() => void>();
+const pageMetadata: Record<string, readonly [string, string]> = {
+  "/": ["Your music library", "Listen to and organize your personal music library with Vervfy."],
+  "/login": ["Log in", "Log in to your Vervfy account to access your music library."],
+  "/register": ["Create an account", "Create a Vervfy account to organize and listen to your music library."],
+  "/credits": ["Credits and data sources", "Attribution, licenses, and data sources used by Vervfy."],
+  "/privacy": ["Privacy Policy", "How Vervfy handles account, library, and device information."],
+  "/terms": ["Terms and Conditions", "Terms for using the Vervfy music library service."],
+};
 
 function subscribeLanguage(listener: () => void): () => void {
   languageListeners.add(listener);
@@ -885,6 +1090,7 @@ export function LanguageProvider({
   children: ReactNode;
   initialLanguage: Language;
 }) {
+  const pathname = usePathname();
   const getLanguage = useCallback(
     () => currentLanguage(initialLanguage),
     [initialLanguage],
@@ -916,14 +1122,33 @@ export function LanguageProvider({
     },
     [language],
   );
+  const translateError = useCallback(
+    (message: string, fallback: string) => {
+      const hasTranslation = Boolean(message) && (
+        language === "pt-BR"
+          ? Object.hasOwn(translations, message)
+          : language === "fr" || language === "es"
+            ? Object.hasOwn(frenchSpanishTranslations, message)
+            : true
+      );
+      return hasTranslation ? t(message) : t(fallback);
+    },
+    [language, t],
+  );
 
   useEffect(() => {
     document.documentElement.lang = language;
-  }, [language]);
+    const [title, description] =
+      pageMetadata[pathname] ?? ["Page not found", "The requested Vervfy page could not be found."];
+    document.title = `${t(title)} | Vervfy`;
+    document
+      .querySelector('meta[name="description"]')
+      ?.setAttribute("content", t(description));
+  }, [language, pathname, t]);
 
   const value = useMemo<LanguageContextValue>(
-    () => ({ language, setLanguage, t }),
-    [language, setLanguage, t],
+    () => ({ language, setLanguage, t, translateError }),
+    [language, setLanguage, t, translateError],
   );
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

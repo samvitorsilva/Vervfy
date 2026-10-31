@@ -75,7 +75,7 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
       ctx.save();
       ctx.translate(centerX, centerY);
       const glow = ctx.createRadialGradient(0, 0, baseRadius * 0.3, 0, 0, baseRadius * 2.2);
-      glow.addColorStop(0, "rgba(139,127,255,.18)");
+      glow.addColorStop(0, "rgba(93,174,199,.18)");
       glow.addColorStop(0.6, "rgba(84,232,212,.06)");
       glow.addColorStop(1, "rgba(8,10,16,0)");
       ctx.fillStyle = glow;
@@ -97,7 +97,7 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
         const y2 = Math.sin(angle) * endRadius;
         const gradient = ctx.createLinearGradient(x1, y1, x2, y2);
         gradient.addColorStop(0, "rgba(84,232,212,.9)");
-        gradient.addColorStop(1, "rgba(139,127,255,.75)");
+        gradient.addColorStop(1, "rgba(93,174,199,.75)");
         ctx.strokeStyle = gradient;
         ctx.lineWidth = Math.max(2, width * 0.004);
         ctx.lineCap = "round";
@@ -110,7 +110,7 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
       ctx.arc(0, 0, baseRadius, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(242,243,247,.06)";
       ctx.fill();
-      ctx.strokeStyle = "rgba(212,208,255,.36)";
+      ctx.strokeStyle = "rgba(181,220,229,.36)";
       ctx.lineWidth = Math.max(1, width * 0.002);
       ctx.stroke();
       ctx.restore();

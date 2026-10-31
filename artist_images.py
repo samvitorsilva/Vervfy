@@ -200,6 +200,58 @@ def fetch_track_cover(
     if not artist_key or not title_key:
         raise ValueError("Track artist and title are required")
 
+    album_name = album.strip()
+    has_album_name = bool(
+        album_name
+        and normalize_artist_name(album_name) not in {"unknownalbum", "unknown"}
+    )
+
+    def matching_album_cover(payload: dict) -> dict[str, str | None] | None:
+        albums = payload.get("album") if isinstance(payload, dict) else None
+        if not isinstance(albums, list):
+            return None
+        album_key = normalize_artist_name(album_name)
+        for result in albums:
+            if not isinstance(result, dict):
+                continue
+            if (
+                normalize_artist_name(
+                    clean_artist_name(str(result.get("strArtist") or ""))
+                )
+                != artist_key
+                or normalize_artist_name(str(result.get("strAlbum") or ""))
+                != album_key
+            ):
+                continue
+            cover_url = _validated_image_url(result.get("strAlbumThumb"))
+            if cover_url:
+                candidate_id = result.get("idAlbum")
+                return {
+                    "audiodb_album_id": (
+                        str(candidate_id) if candidate_id is not None else None
+                    ),
+                    "cover_url": cover_url,
+                    "status": "found",
+                }
+        return None
+
+    if has_album_name:
+        try:
+            album_payload = _fetch_json(
+                "searchalbum.php",
+                {"s": cleaned_artist, "a": album_name},
+                request_json,
+            )
+            album_match = matching_album_cover(album_payload)
+            if album_match:
+                return album_match
+        except httpx.HTTPError as exc:
+            log.info(
+                "TheAudioDB album search failed for %r (%s)",
+                album_name,
+                _safe_error_summary(exc),
+            )
+
     album_id: str | None = None
     track_search_error: httpx.HTTPError | None = None
 
@@ -297,43 +349,6 @@ def fetch_track_cover(
                         "status": "found",
                     }
 
-    album_name = album.strip()
-    has_album_name = bool(
-        album_name
-        and normalize_artist_name(album_name) not in {"unknownalbum", "unknown"}
-    )
-    if has_album_name:
-        album_payload = _fetch_json(
-            "searchalbum.php",
-            {"s": cleaned_artist, "a": album_name},
-            request_json,
-        )
-        albums = album_payload.get("album") if isinstance(album_payload, dict) else None
-        if isinstance(albums, list):
-            album_key = normalize_artist_name(album_name)
-            for result in albums:
-                if not isinstance(result, dict):
-                    continue
-                if (
-                    normalize_artist_name(
-                        clean_artist_name(str(result.get("strArtist") or ""))
-                    )
-                    != artist_key
-                    or normalize_artist_name(str(result.get("strAlbum") or ""))
-                    != album_key
-                ):
-                    continue
-                cover_url = _validated_image_url(result.get("strAlbumThumb"))
-                if cover_url:
-                    candidate_id = result.get("idAlbum")
-                    return {
-                        "audiodb_album_id": (
-                            str(candidate_id) if candidate_id is not None else None
-                        ),
-                        "cover_url": cover_url,
-                        "status": "found",
-                    }
-
     if track_search_error is not None and not has_album_name:
         raise track_search_error
 
@@ -376,6 +391,8 @@ class TheAudioDBQueue:
             maxsize=AUDIODB_MAX_QUEUE_SIZE
         )
         self._lock = threading.Lock()
+        self._request_start_lock = threading.Lock()
+        self._last_request_started = 0.0
         self._pending: set[str] = set()
         self._retry_after: dict[str, float] = {}
         self._worker_started = False
@@ -471,32 +488,38 @@ class TheAudioDBQueue:
             session.commit()
 
     def _request_json(self, endpoint: str, params: dict[str, str]) -> dict:
+        api_key = os.environ.get("AUDIODB_API_KEY", AUDIODB_DEFAULT_API_KEY).strip()
+        if not api_key or not re.fullmatch(r"[A-Za-z0-9_-]+", api_key):
+            raise ValueError("AUDIODB_API_KEY must be a non-empty path-safe key")
+
         while True:
-            try:
-                allowed = self._rate_limiter("theaudiodb:global", 25, 60)
-            except RuntimeError:
-                log.exception("TheAudioDB lookup skipped: rate limiter unavailable")
-                raise
+            with self._request_start_lock:
+                delay = AUDIODB_MIN_REQUEST_INTERVAL_SECONDS - (
+                    time.monotonic() - self._last_request_started
+                )
+                if delay > 0:
+                    time.sleep(delay)
+                try:
+                    allowed = self._rate_limiter("theaudiodb:global", 25, 60)
+                except RuntimeError:
+                    log.exception("TheAudioDB lookup skipped: rate limiter unavailable")
+                    raise
+                if allowed:
+                    self._last_request_started = time.monotonic()
             if allowed:
                 break
             time.sleep(60)
 
-        api_key = os.environ.get("AUDIODB_API_KEY", AUDIODB_DEFAULT_API_KEY).strip()
-        if not api_key or not re.fullmatch(r"[A-Za-z0-9_-]+", api_key):
-            raise ValueError("AUDIODB_API_KEY must be a non-empty path-safe key")
-        try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0)) as client:
-                response = client.get(
-                    f"{AUDIODB_BASE_URL}/{api_key}/{endpoint}",
-                    params=params,
-                )
-                response.raise_for_status()
-                payload = _decode_json_response(response, endpoint)
-            if not isinstance(payload, dict):
-                return {}
-            return payload
-        finally:
-            time.sleep(AUDIODB_MIN_REQUEST_INTERVAL_SECONDS)
+        with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0)) as client:
+            response = client.get(
+                f"{AUDIODB_BASE_URL}/{api_key}/{endpoint}",
+                params=params,
+            )
+            response.raise_for_status()
+            payload = _decode_json_response(response, endpoint)
+        if not isinstance(payload, dict):
+            return {}
+        return payload
 
     def _run(self) -> None:
         while True:

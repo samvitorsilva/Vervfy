@@ -7,9 +7,18 @@ import "./styles.css";
 import "./auth.css";
 
 export const metadata: Metadata = {
-  title: "Vervfy",
-  description: "Your personal music library.",
-  icons: { icon: "/gemini-svg.svg" },
+  title: {
+    default: "Vervfy",
+    template: "%s | Vervfy",
+  },
+  description: "Listen to and organize your personal music library with Vervfy.",
+  icons: {
+    icon: [
+      { url: "/gemini-svg.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: "/apple-icon.png",
+  },
   applicationName: "Vervfy",
   appleWebApp: {
     capable: true,

@@ -67,11 +67,11 @@ const AUDIO_FILE_ACCEPT = "audio/*,.mp3,.m4a,.wav,.flac,.ogg,.oga,.aac,.opus,.we
 const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|wav|flac|ogg|oga|aac|opus|weba)$/i;
 
 const AURA_PALETTE = [
-  ["#8b7fff", "#54e8d4"],
-  ["#ff8fb1", "#8b7fff"],
+  ["#5daec7", "#54e8d4"],
+  ["#ff8fb1", "#5daec7"],
   ["#54e8d4", "#3aa0ff"],
   ["#ffb86b", "#ff6b9d"],
-  ["#6bd6ff", "#8b7fff"],
+  ["#6bd6ff", "#5daec7"],
   ["#c084fc", "#54e8d4"],
 ] as const;
 
@@ -415,6 +415,13 @@ function PlaybackSeek({
     setScrubbingTime(null);
     if (drag.wasPlaying) onResume();
   }
+  function cancelSeek(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setScrubbingTime(null);
+    if (drag.wasPlaying) onResume();
+  }
   const seekBar = (
     <div
       className={`seek${variant === "mobile" ? " mobile-seek" : ""}`}
@@ -428,7 +435,7 @@ function PlaybackSeek({
       onPointerDown={beginSeek}
       onPointerMove={continueSeek}
       onPointerUp={finishSeek}
-      onPointerCancel={finishSeek}
+      onPointerCancel={cancelSeek}
       onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
         if (!audioElement || !duration) return;
         const offsets: Record<string, number> = {
@@ -925,7 +932,7 @@ function TrackMenuPortal({
 }
 
 export default function LibraryApp() {
-  const { t, language } = useLanguage();
+  const { t, language, translateError } = useLanguage();
   const audioElement = usePlayerStore((state) => state.audioElement);
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
@@ -1402,7 +1409,7 @@ export default function LibraryApp() {
       if (payload.pending && trackCoverPollAttemptsRef.current < 5) {
         trackCoverPollRef.current = setTimeout(
           () => void refreshTrackCoversRef.current(),
-          12_000,
+          Math.min(trackCoverPollAttemptsRef.current * 3_000, 12_000),
         );
       }
     } catch (error) {
@@ -1411,7 +1418,7 @@ export default function LibraryApp() {
       if (trackCoverPollAttemptsRef.current < 5) {
         trackCoverPollRef.current = setTimeout(
           () => void refreshTrackCoversRef.current(),
-          30_000,
+          Math.min(trackCoverPollAttemptsRef.current * 3_000, 12_000),
         );
       }
     }
@@ -1479,7 +1486,7 @@ export default function LibraryApp() {
       notify(t("Cover updated."));
       closeCoverEditor();
     } catch (error) {
-      setCoverError(error instanceof Error ? error.message : t("Could not update cover."));
+      setCoverError(translateError(error instanceof Error ? error.message : "", "Could not update cover."));
     } finally {
       setCoverPending(false);
     }
@@ -1501,7 +1508,7 @@ export default function LibraryApp() {
       notify(t("Cover removed."));
       closeCoverEditor();
     } catch (error) {
-      setCoverError(error instanceof Error ? error.message : t("Could not remove cover."));
+      setCoverError(translateError(error instanceof Error ? error.message : "", "Could not remove cover."));
     } finally {
       setCoverPending(false);
     }
@@ -1533,7 +1540,7 @@ export default function LibraryApp() {
       notify(t("Track details saved."));
     } catch (error) {
       setMetadataError(
-        error instanceof Error ? error.message : t("Could not update track details."),
+        translateError(error instanceof Error ? error.message : "", "Could not update track details."),
       );
     } finally {
       setMetadataPending(false);
@@ -1549,7 +1556,7 @@ export default function LibraryApp() {
             AUDIO_FILE_EXTENSION.test(file.name)),
       );
       if (files.length === 0) {
-        notify("No audio files found in that selection.");
+        notify(t("No audio files found in that selection."));
         return;
       }
 
@@ -1562,7 +1569,7 @@ export default function LibraryApp() {
       const knownTrackIds = new Set(
         usePlayerStore.getState().tracks.map((track) => track.id),
       );
-      setUploadStatus(`Uploading 0/${files.length}…`);
+      setUploadStatus(t("Uploading {completed}/{total}…").replace("{completed}", "0").replace("{total}", String(files.length)));
       const uploadNext = async () => {
         while (!rateLimited) {
           const index = nextFileIndex;
@@ -1630,7 +1637,7 @@ export default function LibraryApp() {
             failed += 1;
             firstFailure =
               firstFailure ||
-              (error instanceof Error ? error.message : "Upload failed.");
+              translateError(error instanceof Error ? error.message : "", "Upload failed.");
             if (
               error &&
               typeof error === "object" &&
@@ -1643,7 +1650,7 @@ export default function LibraryApp() {
           } finally {
             completedFiles += 1;
             if (completedFiles % 4 === 0 || completedFiles === files.length) {
-              setUploadStatus(`Uploading ${completedFiles}/${files.length}…`);
+              setUploadStatus(t("Uploading {completed}/{total}…").replace("{completed}", String(completedFiles)).replace("{total}", String(files.length)));
             }
           }
         }
@@ -1655,18 +1662,20 @@ export default function LibraryApp() {
       if (added > 0) await reloadTracks();
       setUploadStatus("");
       if (rateLimited) {
-        notify(`${added} uploaded; the rest were rate limited. Try again later.`);
+        notify(t("{count} tracks uploaded; the rest were rate limited. Try again later.").replace("{count}", String(added)));
       } else if (added > 0 && failed > 0) {
-        notify(`Saved ${added}; ${failed} failed: ${firstFailure}`);
+        notify(t("Saved {added} tracks; {failed} failed: {error}").replace("{added}", String(added)).replace("{failed}", String(failed)).replace("{error}", firstFailure));
       } else if (added > 0) {
-        notify(`Saved ${added} track${added === 1 ? "" : "s"} to your library.`);
+        notify(t(added === 1 ? "Saved {count} track to your library." : "Saved {count} tracks to your library.").replace("{count}", String(added)));
       } else if (failed > 0) {
-        notify(`${files.length === 1 ? "Upload failed" : `${failed} uploads failed`}: ${firstFailure}`);
+        notify(files.length === 1
+          ? t("Upload failed: {error}").replace("{error}", firstFailure)
+          : t("{count} uploads failed: {error}").replace("{count}", String(failed)).replace("{error}", firstFailure));
       } else {
-        notify("Those tracks were already in your library.");
+        notify(t("Those tracks were already in your library."));
       }
     },
-    [notify, reloadTracks],
+    [notify, reloadTracks, t, translateError],
   );
 
   async function retryCoverLookup(track: TrackRecord) {
@@ -1684,7 +1693,7 @@ export default function LibraryApp() {
         void reloadTracks();
       }, 2500);
     } catch (error) {
-      notify(error instanceof Error ? error.message : t("Could not retry cover lookup."));
+      notify(translateError(error instanceof Error ? error.message : "", "Could not retry cover lookup."));
     }
   }
 
@@ -1752,12 +1761,18 @@ export default function LibraryApp() {
       dirtyRef.current = true;
       notify(
         error instanceof Error
-          ? `Library changes could not be synced: ${error.message}`
-          : "Library changes could not be synced. Please try again.",
+          ? t("Library changes could not be synced: {error}").replace(
+              "{error}",
+              translateError(error.message, "Could not load your library."),
+            )
+          : t("Library changes could not be synced: {error}").replace(
+              "{error}",
+              t("Could not load your library."),
+            ),
       );
     });
     return saveQueueRef.current;
-  }, [applyMeta, notify]);
+  }, [applyMeta, notify, t, translateError]);
 
   const createRediscoveryPlaylist = useCallback(() => {
     if (rediscoveryTracks.length === 0) return;
@@ -1776,8 +1791,8 @@ export default function LibraryApp() {
         : [...state.playlists, playlist],
     );
     void saveMeta();
-    notify(existing ? "Updated your Rediscover playlist." : "Created your Rediscover playlist.");
-  }, [notify, rediscoveryTracks, saveMeta, setPlaylists]);
+    notify(t(existing ? "Updated your Rediscover playlist." : "Created your Rediscover playlist."));
+  }, [notify, rediscoveryTracks, saveMeta, setPlaylists, t]);
 
   const startTrack = useCallback(
     (trackId: string, debounceSkip = false, automaticTransition = false) => {
@@ -2016,7 +2031,7 @@ export default function LibraryApp() {
           offlineRecords = await readOfflineTracks(account.id);
         } catch (error) {
           console.error("Could not load saved offline tracks.", error);
-          notify("Saved offline tracks could not be loaded from this browser.");
+          notify(t("Saved offline tracks could not be loaded from this browser."));
         }
         const offlineById = new Map(offlineRecords.map((record) => [record.trackId, record]));
         for (const track of nextTracks) {
@@ -2080,7 +2095,7 @@ export default function LibraryApp() {
         }
       } catch (error) {
         if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : "Could not load your library.");
+          setLoadError(translateError(error instanceof Error ? error.message : "", "Could not load your library."));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -2090,7 +2105,7 @@ export default function LibraryApp() {
     return () => {
       cancelled = true;
     };
-  }, [applyMeta, notify, saveMeta, setTracks]);
+  }, [applyMeta, notify, saveMeta, setTracks, t, translateError]);
 
   useEffect(() => {
     if (!audioElement) return;
@@ -2147,7 +2162,7 @@ export default function LibraryApp() {
       nextPlaylists = state.playlists.map((playlist) =>
         playlist.id === playlistModal.playlist?.id ? { ...playlist, name } : playlist,
       );
-      notify(`Renamed playlist to “${name}”.`);
+      notify(t("Renamed playlist to “{name}”.").replace("{name}", name));
     } else {
       const playlist: PlaylistRecord = {
         id: crypto.randomUUID().replaceAll("-", ""),
@@ -2156,7 +2171,7 @@ export default function LibraryApp() {
       };
       nextPlaylists = [...state.playlists, playlist];
       setView(`playlist:${playlist.id}`);
-      notify(`Created “${name}”.`);
+      notify(t("Created “{name}”.").replace("{name}", name));
     }
     setPlaylists(nextPlaylists);
     setPlaylistModal(null);
@@ -2178,7 +2193,7 @@ export default function LibraryApp() {
 
   async function toggleOfflineDownload(track: TrackRecord) {
     if (!profile?.id) {
-      notify("Your account is still loading. Try again shortly.");
+      notify(t("Your account is still loading. Try again shortly."));
       return;
     }
     setTrackMenu(null);
@@ -2199,7 +2214,7 @@ export default function LibraryApp() {
               : item,
           ),
         );
-        notify(`Removed “${track.title}” from offline storage.`);
+        notify(t("Removed “{name}” from offline storage.").replace("{name}", track.title));
         return;
       }
 
@@ -2244,17 +2259,17 @@ export default function LibraryApp() {
             : item,
         ),
       );
-      notify(`Downloaded “${track.title}” for offline listening.`);
+      notify(t("Downloaded “{name}” for offline listening.").replace("{name}", track.title));
     } catch (error) {
       console.error("Could not save the offline track.", error);
-      notify(error instanceof Error ? error.message : "Could not save this track offline.");
+      notify(translateError(error instanceof Error ? error.message : "", "Could not save this track offline."));
     } finally {
       setOfflinePendingId(null);
     }
   }
 
   async function removeTrack(track: TrackRecord) {
-    if (!window.confirm(`Remove “${track.title}” from your library? This deletes the file.`)) {
+    if (!window.confirm(t("Remove “{name}” from your library? This deletes the file.").replace("{name}", track.title))) {
       return;
     }
     setTrackMenu(null);
@@ -2267,7 +2282,7 @@ export default function LibraryApp() {
         ),
       );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Could not remove the track.");
+      notify(translateError(error instanceof Error ? error.message : "", "Could not remove the track."));
       return;
     }
 
@@ -2309,8 +2324,8 @@ export default function LibraryApp() {
     void saveMeta();
     notify(
       offlineCleanupFailed
-        ? `Removed “${track.title}” from your library, but its local offline copy could not be cleared.`
-        : `Removed “${track.title}” from your library.`,
+        ? t("Removed “{name}” from your library, but its local offline copy could not be cleared.").replace("{name}", track.title)
+        : t("Removed “{name}” from your library.").replace("{name}", track.title),
     );
   }
 
@@ -2327,7 +2342,7 @@ export default function LibraryApp() {
     );
     setTrackMenu(null);
     void saveMeta();
-    notify(`Removed “${track.title}” from “${playlist.name}”.`);
+    notify(t("Removed “{track}” from “{playlist}”.").replace("{track}", track.title).replace("{playlist}", playlist.name));
   }
 
   function openArtist(name: string) {
@@ -2347,21 +2362,21 @@ export default function LibraryApp() {
   }
 
   async function shareTrack(track: TrackRecord) {
-    const text = `${track.title} — ${track.artist}`;
+    const text = `${track.title} · ${track.artist}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: track.title, text });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        notify("Could not share this song.");
+        notify(t("Could not share this song."));
       }
       return;
     }
     try {
       await navigator.clipboard.writeText(`${text}\n${window.location.href}`);
-      notify("Song details copied to clipboard.");
+      notify(t("Song details copied to clipboard."));
     } catch {
-      notify("Sharing is not available in this browser.");
+      notify(t("Sharing is not available in this browser."));
     }
     setTrackMenu(null);
   }
@@ -2373,11 +2388,11 @@ export default function LibraryApp() {
       const insertAt = state.queueIndex < 0 ? nextQueue.length : state.queueIndex + 1;
       nextQueue.splice(insertAt, 0, track.id);
       setQueue(nextQueue, state.queueIndex < 0 ? 0 : state.queueIndex);
-      notify(`“${track.title}” will play next.`);
+      notify(t("“{name}” will play next.").replace("{name}", track.title));
     } else {
       nextQueue.push(track.id);
       setQueue(nextQueue, state.queueIndex < 0 ? 0 : state.queueIndex);
-      notify(`Added “${track.title}” to the queue.`);
+      notify(t("Added “{name}” to the queue.").replace("{name}", track.title));
     }
   }
 
@@ -2407,13 +2422,13 @@ export default function LibraryApp() {
   function toggleShuffle() {
     setShuffle(!shuffle);
     getPlaybackController()?.clearShuffleHistory();
-    notify(!shuffle ? "Shuffle on" : "Shuffle off");
+    notify(t(!shuffle ? "Shuffle on" : "Shuffle off"));
   }
 
   function toggleRepeat() {
     const next = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
     setRepeat(next);
-    notify(`Repeat: ${next}`);
+    notify(t(`Repeat: ${next}`));
   }
 
   function reorderQueue(fromIndex: number, targetIndex: number) {
@@ -2886,10 +2901,10 @@ export default function LibraryApp() {
         void uploadFiles(event.dataTransfer.files);
       }}>
         <nav className="rail" aria-label={t("Main navigation")}>
-          <div className="logo-mark">
+          <Link className="logo-mark" href="/" onClick={() => setView("library")}>
             <div className="logo-squircle"><img className="brand-logo" src="/gemini-svg.svg" alt="" /></div>
             <div className="logo-word">Vervfy</div>
-          </div>
+          </Link>
           <button className={`rail-btn${view === "library" ? " active" : ""}`} type="button" data-view="library" data-tip={t("Library")} aria-label={t("Library")} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Icon name="library" /></button>
           <button className={`rail-btn${view === "offline" ? " active" : ""}`} type="button" data-view="offline" data-tip={t("Offline")} aria-label={t("Offline")} aria-current={view === "offline" ? "page" : undefined} onClick={() => setView("offline")}><Icon name="offline" /></button>
           <button className={`rail-btn${view === "playlists" || view.startsWith("playlist:") ? " active" : ""}`} type="button" data-view="playlists" data-tip={t("Playlists")} aria-label={t("Playlists")} aria-current={view === "playlists" || view.startsWith("playlist:") ? "page" : undefined} onClick={() => setView("playlists")}><Icon name="playlists" /></button>
@@ -3196,7 +3211,7 @@ export default function LibraryApp() {
                           <button className="btn" type="button" onClick={() => openPlaylistAdd(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
                           <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
                           <button className="btn btn-danger" type="button" onClick={() => {
-                            if (!window.confirm(`Delete “${playlistForView.name}”?`)) return;
+                            if (!window.confirm(t("Delete “{name}”?").replace("{name}", playlistForView.name))) return;
                             setPlaylists(playlists.filter((item) => item.id !== playlistForView.id));
                             setView("playlists");
                             void saveMeta();
@@ -3253,7 +3268,7 @@ export default function LibraryApp() {
                 }
               }}
             >
-              <span className="now-title">{currentTrack?.title ?? "—"}</span>
+              <span className="now-title">{currentTrack?.title ?? "Not playing"}</span>
             </button>
             <span className="now-artist">
               {currentTrack
@@ -3265,7 +3280,7 @@ export default function LibraryApp() {
                       </button>
                     </Fragment>
                   ))
-                : "—"}
+                : "Not playing"}
             </span>
           </span>
           {currentTrack ? <button className={`now-fav${currentTrack.favorite ? " on" : ""}`} type="button" aria-label={t(currentTrack.favorite ? "Remove favorite" : "Favorite")} aria-pressed={currentTrack.favorite} onClick={() => toggleFavoriteFor(currentTrack)}><Icon name="heart" /></button> : null}
@@ -3701,7 +3716,7 @@ export default function LibraryApp() {
             return <button className={`qp-row${inPlaylist ? " in-playlist" : ""}`} type="button" key={playlist.id} disabled={inPlaylist} onClick={() => {
               if (trackId) addTrackToPlaylist(playlist.id, trackId);
               setPlaylistPicker(null);
-              notify(`Added to “${playlist.name}”.`);
+              notify(t("Added to “{name}”.").replace("{name}", playlist.name));
             }}><span className="qp-meta"><span className="qp-title">{playlist.name}</span><span className="qp-artist">{playlist.trackIds.length} {t("tracks")}</span></span><span className="qp-add">{inPlaylist ? "✓" : <Icon name="plus" />}</span></button>;
           }) : <div className="queue-picker-empty">{t("Create a playlist first.")}</div>}</div>
           <div className="playlist-name-actions"><button className="btn btn-primary" type="button" onClick={() => { setPlaylistPicker(null); setPlaylistName(""); setPlaylistModal({ trackId: playlistPicker ?? undefined }); }}>{t("New playlist")}</button></div>
@@ -3724,7 +3739,7 @@ export default function LibraryApp() {
           <div className="queue-picker-list">
             {filteredTracksAvailableToAdd.length ? filteredTracksAvailableToAdd.map((track) => <button className="qp-row" type="button" key={track.id} onClick={() => {
               if (playlistAddTarget) addTrackToPlaylist(playlistAddTarget, track.id);
-              notify(`Added “${track.title}” to the playlist.`);
+              notify(t("Added “{name}” to the playlist.").replace("{name}", track.title));
             }}><TrackImage track={track} thumbnail /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracksAvailableToAdd.length ? t("No tracks match your search.") : tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
           </div>
         </div>

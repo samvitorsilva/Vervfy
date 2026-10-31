@@ -160,10 +160,9 @@ export async function fetchWithRetry(
       });
       redirectToLoginOnUnauthorized(input, response);
       if (
-        response.ok ||
-        response.status === 401 ||
-        response.status === 403 ||
-        response.status === 404
+        response.status !== 408 &&
+        response.status !== 429 &&
+        response.status < 500
       ) {
         return response;
       }

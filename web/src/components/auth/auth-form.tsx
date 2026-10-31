@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
+import SiteFooter from "@/components/site-footer";
 
 type AuthMode = "login" | "register";
 
 export default function AuthForm({ mode }: { mode: AuthMode }) {
-  const { t } = useLanguage();
+  const { t, translateError } = useLanguage();
   const isLogin = mode === "login";
   const endpoint = `/backend-auth/${mode}`;
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
@@ -47,7 +48,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       .catch((reason: unknown) => {
         if (active) {
           setCsrfError(
-            reason instanceof Error ? reason.message : t("Could not load the form."),
+            translateError(reason instanceof Error ? reason.message : "", "Could not load the form."),
           );
         }
       });
@@ -55,7 +56,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
     return () => {
       active = false;
     };
-  }, [t]);
+  }, [translateError]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -94,13 +95,14 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
         : `Could not ${isLogin ? "log in" : "create the account"} (${response.status}).`;
       const incorrectPassword = isLogin && detail === "Incorrect username or password";
       setPasswordIncorrect(incorrectPassword);
-      setError(t(detail));
+      setError(translateError(detail, "The authentication request could not be completed."));
       if (incorrectPassword) passwordInputRef.current?.focus();
     } catch (reason) {
       setError(
-        reason instanceof Error
-          ? reason.message
-          : t("The authentication request could not be completed."),
+        translateError(
+          reason instanceof Error ? reason.message : "",
+          "The authentication request could not be completed.",
+        ),
       );
     } finally {
       setPending(false);
@@ -215,6 +217,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
             {t(isLogin ? "Create one" : "Log in")}
           </Link>
         </div>
+        <SiteFooter showLanguage={false} />
       </section>
     </main>
   );

@@ -11,6 +11,36 @@ import artist_images
 
 
 class ArtistImageLookupTests(unittest.TestCase):
+    def test_album_lookup_returns_cover_without_track_lookup(self) -> None:
+        calls: list[tuple[str, dict[str, str]]] = []
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            calls.append((endpoint, params))
+            return {
+                "album": [
+                    {
+                        "idAlbum": "1234",
+                        "strArtist": "Coldplay",
+                        "strAlbum": "Parachutes",
+                        "strAlbumThumb": "https://r2.theaudiodb.com/parachutes.jpg",
+                    }
+                ]
+            }
+
+        result = artist_images.fetch_track_cover(
+            "Coldplay", "Yellow", "Parachutes", request_json
+        )
+
+        self.assertEqual(result["status"], "found")
+        self.assertEqual(result["audiodb_album_id"], "1234")
+        self.assertEqual(
+            result["cover_url"], "https://r2.theaudiodb.com/parachutes.jpg"
+        )
+        self.assertEqual(
+            calls,
+            [("searchalbum.php", {"s": "Coldplay", "a": "Parachutes"})],
+        )
+
     def test_album_lookup_failure_does_not_log_api_key_from_request_url(self) -> None:
         api_key = "private-api-key"
         request = httpx.Request(
@@ -228,7 +258,7 @@ class ArtistImageLookupTests(unittest.TestCase):
             }
 
         result = artist_images.fetch_track_cover(
-            "Coldplay feat. Guest", "Yellow", "Ignored Album", request_json
+            "Coldplay feat. Guest", "Yellow", "", request_json
         )
         self.assertEqual(result["status"], "found")
         self.assertEqual(result["audiodb_album_id"], "1234")
@@ -266,11 +296,7 @@ class ArtistImageLookupTests(unittest.TestCase):
         )
         self.assertEqual(
             calls,
-            [
-                ("searchtrack.php", {"s": "Coldplay", "t": "Yellow"}),
-                ("searchtrack.php", {"s": "Coldplay"}),
-                ("searchalbum.php", {"s": "Coldplay", "a": "Parachutes"}),
-            ],
+            [("searchalbum.php", {"s": "Coldplay", "a": "Parachutes"})],
         )
         self.assertEqual(result["audiodb_album_id"], "2109615")
         self.assertEqual(result["cover_url"], "https://r2.theaudiodb.com/right.jpg")
@@ -423,7 +449,7 @@ class ArtistImageLookupTests(unittest.TestCase):
                     **kwargs,
                 ),
             ),
-            patch.object(artist_images.time, "sleep"),
+            patch.object(artist_images.time, "sleep") as sleep,
         ):
             queue._request_json("searchtrack.php", {"s": "Artist", "t": "Title"})
             queue._request_json("album.php", {"m": "42"})
@@ -431,6 +457,7 @@ class ArtistImageLookupTests(unittest.TestCase):
             decisions,
             [("theaudiodb:global", 25, 60), ("theaudiodb:global", 25, 60)],
         )
+        sleep.assert_called_once()
 
 
 if __name__ == "__main__":

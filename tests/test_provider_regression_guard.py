@@ -95,11 +95,14 @@ FORBIDDEN_CATALOG_HOSTS = (
 
 def source_files():
     for path in ROOT.rglob("*"):
+        relative_parts = path.relative_to(ROOT).parts
         if (
             not path.is_file()
             or path.suffix.lower() not in SOURCE_SUFFIXES
             or path.name == Path(__file__).name
-            or any(part in EXCLUDED_PARTS for part in path.relative_to(ROOT).parts)
+            or path.name == ".env.example"
+            or relative_parts[:2] == (".github", "skills")
+            or any(part in EXCLUDED_PARTS for part in relative_parts)
         ):
             continue
         yield path

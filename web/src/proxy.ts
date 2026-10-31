@@ -8,7 +8,7 @@ export function proxy(request: NextRequest) {
       ? new URL(process.env.BACKEND_URL).origin
       : null;
   const mediaSources = ["'self'", "blob:", "https://*.supabase.co"];
-  const connectSources = ["'self'", "https://lrclib.net", "https://*.supabase.co"];
+  const connectSources = ["'self'", "https://*.supabase.co"];
   if (developmentBackendOrigin) {
     mediaSources.push(developmentBackendOrigin);
     connectSources.push(developmentBackendOrigin);
