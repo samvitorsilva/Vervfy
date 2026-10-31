@@ -27,6 +27,7 @@ for (let index = 0; index < sampleCount; index += 1) {
 
 let playlists = [];
 let tracks = [];
+let listens = [];
 let rateLimitedUploads = 1;
 let artistPhotoSource = "none";
 let signedAudioUrlVersion = 0;
@@ -70,6 +71,31 @@ function trackPayload(id, title) {
     cover_url: `/api/tracks/${id}/cover`,
     stream_url: `/api/tracks/${id}/stream`,
     custom_lyrics: null,
+  };
+}
+
+function listeningPeriod(start, end) {
+  const countsByTrack = new Map();
+  for (const listen of listens) {
+    if (listen.playedAt < start || listen.playedAt > end) continue;
+    countsByTrack.set(listen.trackId, (countsByTrack.get(listen.trackId) ?? 0) + 1);
+  }
+
+  const topTracks = [...countsByTrack]
+    .map(([trackId, playCount]) => ({ trackId, playCount }))
+    .sort((left, right) => right.playCount - left.playCount);
+  const countsByArtist = new Map();
+  for (const { trackId, playCount } of topTracks) {
+    const artist = tracks.find((track) => track.id === trackId)?.artist;
+    if (artist) countsByArtist.set(artist, (countsByArtist.get(artist) ?? 0) + playCount);
+  }
+
+  return {
+    playCount: listens.filter((listen) => listen.playedAt >= start && listen.playedAt <= end).length,
+    topTracks,
+    topArtists: [...countsByArtist]
+      .map(([artist, playCount]) => ({ artist, playCount }))
+      .sort((left, right) => right.playCount - left.playCount),
   };
 }
 
@@ -171,6 +197,7 @@ const server = createServer(async (request, response) => {
     }
     playlists = [];
     tracks = [];
+    listens = [];
     rateLimitedUploads = 1;
     artistPhotoSource = "none";
     signedAudioUrlVersion = 0;
@@ -297,6 +324,62 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/api/tracks/covers" && request.method === "GET") {
     json(response, 200, { covers: {}, pending: false });
+    return;
+  }
+
+  if (url.pathname === "/api/library/listening" && request.method === "GET") {
+    const asOf = Date.now() / 1000;
+    const now = new Date(asOf * 1000);
+    const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000;
+    const yearStart = Date.UTC(now.getUTCFullYear(), 0, 1) / 1000;
+    const lastPlayedAt = {};
+    for (const { trackId, playedAt } of listens) {
+      lastPlayedAt[trackId] = Math.max(lastPlayedAt[trackId] ?? 0, playedAt);
+    }
+    json(response, 200, {
+      lastPlayedAt,
+      month: listeningPeriod(monthStart, asOf),
+      year: listeningPeriod(yearStart, asOf),
+      monthStart,
+      yearLabel: String(now.getUTCFullYear()),
+      asOf,
+    });
+    return;
+  }
+
+  if (url.pathname === "/api/library/listening" && request.method === "POST") {
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "CSRF verification failed" });
+      return;
+    }
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    const trackId = typeof payload.trackId === "string" ? payload.trackId : "";
+    if (!trackId) {
+      json(response, 400, { detail: "Track ID is required" });
+      return;
+    }
+    listens.push({ trackId, playedAt: Date.now() / 1000 });
+    json(response, 200, { trackId });
+    return;
+  }
+
+  const playlistListening = url.pathname.match(/^\/api\/library\/playlists\/([^/]+)\/listening$/);
+  if (playlistListening && request.method === "POST") {
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "CSRF verification failed" });
+      return;
+    }
+    const playlistId = decodeURIComponent(playlistListening[1]);
+    const playlist = playlists.find((item) => item.id === playlistId);
+    if (!playlist) {
+      json(response, 404, { detail: "Playlist not found" });
+      return;
+    }
+    const lastPlayedAt = Date.now() / 1000;
+    playlist.lastPlayedAt = lastPlayedAt;
+    json(response, 200, { playlistId, lastPlayedAt });
     return;
   }
 

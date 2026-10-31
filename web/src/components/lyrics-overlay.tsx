@@ -189,7 +189,7 @@ const LYRICS_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const LYRICS_CACHE_PREFIX = "vervfy:lrclib:v4:";
 let lyricsProviderEnabledPromise: Promise<boolean> | null = null;
 const LRCLIB_SYNC_CORRECTIONS_MS = new Map([
-  ["the chainsmokers|dont let me down", 1800],
+  ["the chainsmokers|don t let me down", 1800],
   ["tate mcrae|just keep watching", 1800],
 ]);
 

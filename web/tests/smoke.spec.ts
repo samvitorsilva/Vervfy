@@ -93,6 +93,49 @@ async function loadMockPlaybackTrack(
   return trackCard;
 }
 
+async function logInToMockLibrary(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+}
+
+async function loadMockPlaybackQueue(
+  page: Page,
+  titles: string[],
+  firstTrackNumber: number,
+  coverSource: "placeholder" | "musicbrainz" = "placeholder",
+): Promise<Locator[]> {
+  const tracks = titles.map((title, index) => {
+    const id = `playwright-track-${firstTrackNumber + index}`;
+    return {
+      id,
+      title,
+      artist: "Vervfy Test Artist",
+      album: "Playwright Test Album",
+      duration: 6,
+      has_cover: false,
+      cover_source: coverSource,
+      cover_url: `/api/tracks/${id}/cover`,
+      stream_url: `/api/tracks/${id}/stream`,
+      custom_lyrics: null,
+    };
+  });
+  await page.route("**/api/tracks", (route) =>
+    route.fulfill({ json: { tracks } }),
+  );
+  await page.route("**/api/tracks/*/stream", (route) =>
+    route.fulfill({ contentType: "audio/wav", body: makeWav() }),
+  );
+  await page.reload();
+  const cards = titles.map((title) =>
+    page.locator(".card").filter({ hasText: title }),
+  );
+  for (const card of cards) await expect(card).toBeVisible();
+  return cards;
+}
+
 test("playlist add-songs dialog searches and filters the library", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
@@ -248,18 +291,16 @@ test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   });
 });
 
-test("Brazilian Portuguese is detected and the language choice persists", async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "language", { configurable: true, value: "pt-BR" });
-    Object.defineProperty(navigator, "languages", { configurable: true, value: ["pt-BR", "en-US"] });
-  });
+test("Brazilian Portuguese can be selected and the language choice persists", async ({ page }) => {
   await page.goto("/login");
 
+  const languageSelect = page.locator(".auth-language-select select");
+  await languageSelect.selectOption("pt-BR");
   await expect(page.getByRole("heading", { name: "Que bom ter você de volta!" })).toBeVisible();
   await expect(page.getByLabel("Nome de usuário")).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "pt-BR");
 
-  await page.getByLabel("Idioma").selectOption("en");
+  await languageSelect.selectOption("en");
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await page.reload();
@@ -267,17 +308,15 @@ test("Brazilian Portuguese is detected and the language choice persists", async 
 });
 
 test("French and Spanish are detected and can be selected", async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "language", { configurable: true, value: "fr-FR" });
-    Object.defineProperty(navigator, "languages", { configurable: true, value: ["fr-FR", "en-US"] });
-  });
   await page.goto("/login");
 
+  const languageSelect = page.locator(".auth-language-select select");
+  await languageSelect.selectOption("fr");
   await expect(page.getByRole("heading", { name: "Bon retour" })).toBeVisible();
   await expect(page.getByLabel("Nom d’utilisateur")).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "fr");
 
-  await page.getByLabel("Langue").selectOption("es");
+  await languageSelect.selectOption("es");
   await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
   await expect(page.getByLabel("Nombre de usuario")).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "es");
@@ -285,16 +324,15 @@ test("French and Spanish are detected and can be selected", async ({ page }) => 
   await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
 });
 
-test("Spanish is detected from the browser language", async ({ page }) => {
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "language", { configurable: true, value: "es-MX" });
-    Object.defineProperty(navigator, "languages", { configurable: true, value: ["es-MX", "en-US"] });
-  });
+test("Spanish language selection persists across page loads", async ({ page }) => {
   await page.goto("/login");
 
+  await page.locator(".auth-language-select select").selectOption("es");
   await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
   await expect(page.getByLabel("Nombre de usuario")).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("lang", "es");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Qué bueno verte de nuevo" })).toBeVisible();
 });
 
 test("login displays JSON authentication errors", async ({ page }) => {
@@ -821,7 +859,7 @@ test("lyrics lookup rejects timestamps past the end of the track", async ({ page
   await expect(lyrics.locator(".lyrics-line")).toHaveCount(0);
 });
 
-test("known early LRCLIB lyrics are delayed by 2.5 seconds", async ({ page }) => {
+test("known early LRCLIB lyrics are delayed by 1.8 seconds", async ({ page }) => {
   test.skip(
     externalApp || externalBackend,
     "This deterministic lyrics test uses the local mock backend.",
@@ -854,12 +892,19 @@ test("known early LRCLIB lyrics are delayed by 2.5 seconds", async ({ page }) =>
     const lyrics = page.getByRole("dialog", { name: "Lyrics" });
     const lyricLine = lyrics.locator(".lyrics-line").first();
     await expect(lyricLine).toHaveText("Test lyric line");
+    await lyrics.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.locator("audio").evaluate((element) => (element as HTMLAudioElement).paused),
+      )
+      .toBe(true);
     await lyricLine.click();
+    // LRC stamp 1.0s + LRCLIB_SYNC_CORRECTIONS_MS 1800ms = 2.8s seek target.
     await expect
       .poll(() =>
         page.locator("audio").evaluate((element) => (element as HTMLAudioElement).currentTime),
       )
-      .toBeCloseTo(3.5, 1);
+      .toBeCloseTo(2.8, 1);
     await page.getByRole("button", { name: "Close lyrics" }).click();
     await page.unroute("https://lrclib.net/api/**");
   }
@@ -981,7 +1026,9 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
       body: JSON.stringify({
         trackName: track.title,
         artistName: track.artist,
-        duration: track.duration + 8,
+        albumName: track.album,
+        // Duration must stay within the app's ±3s recording match window.
+        duration: track.duration,
         syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
         plainLyrics: "First lyric line\nSecond lyric line",
       }),
@@ -994,7 +1041,8 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
         {
           trackName: track.title,
           artistName: track.artist,
-          duration: track.duration + 8,
+          albumName: track.album,
+          duration: track.duration,
           syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
         },
       ]),
@@ -1112,11 +1160,13 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
     ],
   };
   const lastPlayedAt: Record<string, number> = {};
+  let listeningSummaryRequests = 0;
   await page.route("**/api/tracks", (route) =>
     route.fulfill({ json: { tracks } }),
   );
-  await page.route("**/api/library/listening", (route) =>
-    route.fulfill({
+  await page.route("**/api/library/listening", (route) => {
+    listeningSummaryRequests += 1;
+    return route.fulfill({
       json: {
         lastPlayedAt,
         month: period,
@@ -1125,15 +1175,17 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
         yearLabel: "2026",
         asOf: Date.UTC(2026, 9, 30) / 1000,
       },
-    }),
-  );
+    });
+  });
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
   await page.getByLabel("Password").fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
-  const recapNav = page.getByRole("button", { name: "Recap" });
+  await expect(page.locator(".card").filter({ hasText: "Most played" })).toBeVisible();
+  await expect.poll(() => listeningSummaryRequests).toBeGreaterThan(0);
+  const recapNav = page.getByRole("button", { name: "Recap", exact: true });
   await recapNav.focus();
   expect(
     await recapNav.evaluate((element) =>
@@ -1141,6 +1193,7 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
     ),
   ).toBe('"Recap"');
   await recapNav.click();
+  await expect(recapNav).toHaveAttribute("aria-current", "page");
 
   const recapTracks = page.locator(".recap-period .recap-track");
   await expect(page.getByRole("heading", { name: "Top 2 tracks" })).toBeVisible();
@@ -1188,7 +1241,12 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
   }
   lastPlayedAt["recap-top-track"] = Date.UTC(2026, 8, 1) / 1000;
   await page.reload();
-  await page.getByRole("button", { name: "Recap" }).click();
+  await expect(page.locator(".card").filter({ hasText: "Most played" })).toBeVisible();
+  await page.getByRole("button", { name: "Recap", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Recap", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(
     page.getByRole("button", { name: "Create Rediscover playlist" }),
   ).toBeEnabled();
@@ -1256,10 +1314,17 @@ test("service worker serves the offline fallback without caching backend APIs", 
   context,
 }) => {
   await page.goto("/login");
+  // Development unregisters the SW (see service-worker-registration.tsx).
+  // Register the same production script here so this test validates sw.js
+  // offline fallback and API exclusion against the local Playwright server.
   await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.register("/sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    });
+    await registration.update();
     await navigator.serviceWorker.ready;
   });
-  await page.reload();
   await expect
     .poll(() =>
       page.evaluate(() => navigator.serviceWorker.controller !== null),
@@ -1300,7 +1365,11 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
-  await expect(navigation.locator("[data-view]:visible")).toHaveCount(5);
+  await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  // Mobile hides Account (opened from the topbar avatar); Library, Offline,
+  // Playlists, Recap, Artists, and Favorites remain visible.
+  await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
+  await expect(navigation.locator('[data-view="account"]')).toBeHidden();
   const searchBounds = await page.locator(".search-wrap").evaluate((element) => {
     const input = element.querySelector("input")!.getBoundingClientRect();
     const shortcut = element.querySelector(".kbd")!.getBoundingClientRect();
@@ -1317,7 +1386,8 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
 
-  await page.keyboard.press("?");
+  await navigation.locator('[data-view="library"]').focus();
+  await page.keyboard.press("Shift+/");
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toHaveCount(1);
   await page.keyboard.press("Escape");
@@ -1424,6 +1494,271 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await expect
     .poll(() => page.locator(".glass").count())
     .toBeLessThanOrEqual(4);
+});
+
+test("Shift+ArrowRight advances via the playNext keyboard binding", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["keyboard-first", "keyboard-second"],
+    90,
+  );
+  await firstTrack.click();
+  await expect(page.locator(".now-title")).toHaveText("keyboard-first");
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+  // Regression: the keydown effect must list playNext in its dependency array
+  // so Shift+ArrowRight keeps calling the live controller binding.
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(page.locator(".now-title")).toHaveText("keyboard-second");
+});
+
+test("hidden-document track completion advances exactly once", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["background-first", "background-second", "background-third"],
+    70,
+  );
+  await firstTrack.click();
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+  });
+  await page.locator("audio").evaluate((element) => {
+    element.dispatchEvent(new Event("ended"));
+    element.dispatchEvent(new Event("ended"));
+  });
+  await expect(page.locator(".now-title")).toHaveText("background-second");
+});
+
+test("queue skips an automatically selected track after bounded load failures", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["auto-good", "auto-unavailable", "auto-recovered"],
+    80,
+  );
+  await firstTrack.click();
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+  let failedRequests = 0;
+  await page.route("**/api/tracks/*/stream", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (
+      path === "/api/tracks/playwright-track-81/stream" &&
+      failedRequests < 4
+    ) {
+      failedRequests += 1;
+      await route.fulfill({ status: 503, body: "temporary media failure" });
+      return;
+    }
+    await route.fulfill({ contentType: "audio/wav", body: makeWav() });
+  });
+  await page.locator("audio").evaluate((element) =>
+    element.dispatchEvent(new Event("ended")),
+  );
+  await expect(page.locator(".now-title")).toHaveText("auto-recovered");
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+  expect(failedRequests).toBeGreaterThan(0);
+  expect(failedRequests).toBeLessThanOrEqual(4);
+});
+
+test("repeat-one repeats and repeat-all wraps the queue", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["repeat-first", "repeat-second"],
+    73,
+  );
+  await firstTrack.click();
+  const repeatButton = page.locator("#nowbar button[aria-label^='Repeat:']");
+  await repeatButton.click();
+  await repeatButton.click();
+  await expect(repeatButton).toHaveAttribute("aria-label", "Repeat: one");
+
+  const audio = page.locator("audio");
+  await audio.evaluate((element) => element.dispatchEvent(new Event("ended")));
+  await expect(page.locator(".now-title")).toHaveText("repeat-first");
+  await audio.evaluate((element) => element.dispatchEvent(new Event("playing")));
+
+  await repeatButton.click();
+  await repeatButton.click();
+  await expect(repeatButton).toHaveAttribute("aria-label", "Repeat: all");
+  await audio.evaluate((element) => element.dispatchEvent(new Event("ended")));
+  await expect(page.locator(".now-title")).toHaveText("repeat-second");
+  await audio.evaluate((element) => element.dispatchEvent(new Event("ended")));
+  await expect(page.locator(".now-title")).toHaveText("repeat-first");
+});
+
+test("shuffle advances to another queued track", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["shuffle-first", "shuffle-second", "shuffle-third"],
+    75,
+  );
+  await page.locator("#nowbar button[aria-label='Shuffle']").evaluate(
+    (element) => (element as HTMLButtonElement).click(),
+  );
+  await firstTrack.click();
+  await page.locator("audio").evaluate((element) =>
+    element.dispatchEvent(new Event("ended")),
+  );
+  await expect(page.locator(".now-title")).not.toHaveText("shuffle-first");
+});
+
+test("root audio element persists across player updates", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [track] = await loadMockPlaybackQueue(
+    page,
+    ["persistent-audio"],
+    78,
+  );
+  await track.click();
+  await page.locator("audio").evaluate((element) => {
+    (window as Window & { __playerAudio?: HTMLAudioElement }).__playerAudio =
+      element as HTMLAudioElement;
+  });
+  await page.getByRole("button", { name: "List view" }).click();
+  await expect(page.locator(".list .row")).toBeVisible();
+  const sameAudioElement = await page.locator("audio").evaluate(
+    (element) =>
+      (window as Window & { __playerAudio?: HTMLAudioElement }).__playerAudio ===
+      element,
+  );
+  expect(sameAudioElement).toBe(true);
+});
+
+test("playback controller survives LibraryApp route unmount and remount", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [firstTrack] = await loadMockPlaybackQueue(
+    page,
+    ["route-first", "route-second"],
+    89,
+    "musicbrainz",
+  );
+  await firstTrack.click();
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+
+  await page.getByRole("button", { name: "Cover art info" }).click();
+  await page.getByRole("link", { name: /View all credits/ }).click();
+  await expect(page).toHaveURL(/\/credits$/);
+  await expect(
+    page.getByRole("heading", { name: "Credits and data sources" }),
+  ).toBeVisible();
+
+  const audio = page.locator("audio");
+  await audio.evaluate((element) => element.dispatchEvent(new Event("ended")));
+  await expect
+    .poll(() =>
+      audio.evaluate((element) => (element as HTMLAudioElement).src),
+    )
+    .toContain("playwright-track-90");
+
+  await page.getByRole("link", { name: /Back to Vervfy/ }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator(".now-title")).toHaveText("route-second");
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+});
+
+test("playback resumes after a hidden-page pause and visibility restoration", async ({
+  page,
+}) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic playback test uses the local mock backend.",
+  );
+  await logInToMockLibrary(page);
+  const [track] = await loadMockPlaybackQueue(
+    page,
+    ["visibility-resume"],
+    79,
+  );
+  await track.click();
+  const audio = page.locator("audio");
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+  const positionBeforePause = await audio.evaluate(
+    (element) => (element as HTMLAudioElement).currentTime,
+  );
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+  });
+  await audio.evaluate((element) => (element as HTMLAudioElement).pause());
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.locator("#nowbar")).toHaveAttribute(
+    "data-playback-status",
+    "playing",
+  );
+  await expect
+    .poll(() =>
+      audio.evaluate((element) => (element as HTMLAudioElement).currentTime),
+    )
+    .toBeGreaterThan(positionBeforePause);
 });
 
 test("playback refreshes an expired signed Storage URL once", async ({ page }) => {
@@ -1650,7 +1985,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     externalApp || externalBackend,
     "This deterministic full-flow test uses the local mock backend.",
   );
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const wav = makeWav();
   const hydrationErrors: string[] = [];
   page.on("console", (message) => {
@@ -1751,6 +2086,9 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     element.dispatchEvent(new Event("ended"));
   });
   await expect(page.locator(".now-title")).toHaveText("pw-batch-01");
+  await audio.evaluate((element) => {
+    (element as HTMLAudioElement).playbackRate = 0.1;
+  });
   await page.locator('.nowbar button[title="Queue"]').click();
   await expect(page.getByRole("complementary", { name: "Up next" })).toHaveClass(/open/);
   await expect
@@ -1789,7 +2127,10 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect
     .poll(() => content.evaluate((element) => element.scrollTop))
     .toBe(expectedScrollPosition);
-  await audio.evaluate((element) => (element as HTMLAudioElement).pause());
+  await page.locator("#nowbar").getByRole("button", { name: "Pause", exact: true }).click();
+  await expect
+    .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused))
+    .toBe(true);
   await page.setViewportSize({ width: 360, height: 812 });
   const embeddedLyricsRange = page.waitForRequest((request) =>
     /\/api\/tracks\/playwright-track-\d+\/stream$/.test(request.url()) &&

@@ -23,6 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    make_url,
 )
 from sqlalchemy import event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -42,7 +43,16 @@ def database_url() -> str:
     value = os.environ.get("DATABASE_URL", "").strip()
     if not value:
         raise RuntimeError("DATABASE_URL must be set (use your Supabase PostgreSQL connection string).")
-    return normalize_database_url(value)
+    value = normalize_database_url(value)
+    if os.environ.get("VERVFY_ENVIRONMENT", "").strip().lower() == "production":
+        parsed_url = make_url(value)
+        if parsed_url.get_backend_name() == "postgresql" and parsed_url.query.get(
+            "sslmode"
+        ) not in {"require", "verify-ca", "verify-full"}:
+            value = parsed_url.set(
+                query={**parsed_url.query, "sslmode": "require"}
+            ).render_as_string(hide_password=False)
+    return value
 
 
 DATABASE_URL = database_url()

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { usePlayerStore } from "@/store/player-store";
+import { installPlaybackController } from "@/lib/playback-controller";
 import LiquidGlass from "@/components/liquid-glass";
 import ServiceWorkerRegistration from "@/components/service-worker-registration";
 import { LanguageProvider, type Language } from "@/lib/i18n";
@@ -20,7 +21,11 @@ export default function RootProviders({
     const audioElement = audioRef.current;
     if (!audioElement) return;
     setAudioElement(audioElement);
-    return () => setAudioElement(null);
+    const disposePlaybackController = installPlaybackController(audioElement);
+    return () => {
+      disposePlaybackController();
+      setAudioElement(null);
+    };
   }, [setAudioElement]);
 
   return (
@@ -28,7 +33,7 @@ export default function RootProviders({
       <ServiceWorkerRegistration />
       <LiquidGlass />
       {children}
-      <audio ref={audioRef} crossOrigin="anonymous" preload="metadata" hidden />
+      <audio ref={audioRef} crossOrigin="anonymous" preload="metadata" playsInline hidden />
     </LanguageProvider>
   );
 }

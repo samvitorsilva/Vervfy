@@ -32,13 +32,13 @@ Vervfy checks embedded ID3 lyrics first (plain and synced), then can look up lyr
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
 
 **Accounts**
-Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is account information only and is not used for sign-in or password recovery. Every user gets their own isolated library.
+Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is optional account information; it is not used for sign-in, and email verification and email-based password recovery are not implemented. Every user gets their own isolated library.
 
 **Artist info**
 Artist profiles use manually maintained entries or a matching Wikipedia summary. Wikipedia-derived text links to its article and the CC BY-SA 4.0 license, with shortened or adapted text identified. Artist cards and profiles prefer a photo you upload, then an eligible Wikimedia Commons image with on-screen attribution, then a locally generated avatar. Commons images are copied to Vervfy storage only after license and metadata checks; Vervfy does not hotlink them. 
 
 **As a web app**
-It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. Audio and online lyrics require an active connection.
+It's built to feel like an app, not a website: responsive on desktop, tablet, and mobile, a mini player, account-backed sync, and full keyboard navigation. The keyboard-shortcuts button is hidden on touch-sized layouts, while physical keyboards still work. The service worker caches the app shell and offline fallback, not streamed audio or library data. Tracks explicitly downloaded in a browser can be played offline from that browser's local storage; unsaved tracks, library/account requests, and online lyrics require a connection.
 
 ---
 
@@ -66,7 +66,7 @@ vervfy/
 │   ├── src/components/
 │   └── public/
 │
-├── render.yaml        # Separate Next.js Render web service
+├── render.yaml        # Render services for Redis, FastAPI, and Next.js
 ├── data/
 │
 └── README.md
@@ -77,8 +77,9 @@ vervfy/
 ## Hosted app
 
 The FastAPI backend is deployed at
-https://vervfy-app.onrender.com. The Next.js frontend is deployed as a separate
-Render web service and proxies browser API requests to that backend.
+https://vervfy.onrender.com. The Next.js frontend is a separate Render web
+service (defined in `render.yaml`) and proxies browser API requests to that
+backend.
 
 ---
 
@@ -122,8 +123,8 @@ Things I'd like to get to eventually:
 - [x] Artist detail view and attributed profile links
 - [x] Responsive desktop, tablet, and mobile layouts
 - [ ] Smarter playlists
-- [ ] Better offline support
-- [ ] Installable PWA
+- [ ] Broader offline application support
+- [x] Offline app shell (service worker and manifest)
 - [x] Wider format support
 - [ ] Better library sorting/filtering
 - [ ] Some way to share a library publicly

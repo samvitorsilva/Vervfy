@@ -11,6 +11,66 @@ import artist_images
 
 
 class ArtistImageLookupTests(unittest.TestCase):
+    def test_album_lookup_failure_does_not_log_api_key_from_request_url(self) -> None:
+        api_key = "private-api-key"
+        request = httpx.Request(
+            "GET",
+            f"https://www.theaudiodb.com/api/v1/json/{api_key}/album.php",
+        )
+        response = httpx.Response(500, request=request)
+        error = httpx.HTTPStatusError(
+            "TheAudioDB request failed", request=request, response=response
+        )
+
+        def request_json(endpoint: str, params: dict[str, str]) -> dict:
+            if endpoint == "searchtrack.php":
+                return {
+                    "track": [
+                        {
+                            "strArtist": "Coldplay",
+                            "strTrack": "Yellow",
+                            "idAlbum": "1234",
+                        }
+                    ]
+                }
+            raise error
+
+        with self.assertLogs("vervfy.artist_images", level="INFO") as captured:
+            result = artist_images.fetch_track_cover(
+                "Coldplay", "Yellow", "", request_json
+            )
+
+        self.assertEqual(result["status"], "not_found")
+        output = "\n".join(captured.output)
+        self.assertNotIn(api_key, output)
+        self.assertIn("status 500", output)
+
+    def test_queued_lookup_failure_does_not_log_api_key_from_request_url(self) -> None:
+        api_key = "private-api-key"
+        request = httpx.Request(
+            "GET",
+            f"https://www.theaudiodb.com/api/v1/json/{api_key}/search.php",
+        )
+        response = httpx.Response(500, request=request)
+        error = httpx.HTTPStatusError(
+            "TheAudioDB request failed", request=request, response=response
+        )
+        lookup_queue = artist_images.TheAudioDBQueue(lambda *_: True)
+        job = ("artist", "coldplay", "Coldplay", "", "")
+
+        with (
+            patch.object(lookup_queue._queue, "get", side_effect=[job, StopIteration]),
+            patch.object(lookup_queue._queue, "task_done"),
+            patch.object(artist_images, "fetch_artist_image", side_effect=error),
+            self.assertLogs("vervfy.artist_images", level="WARNING") as captured,
+        ):
+            with self.assertRaises(StopIteration):
+                lookup_queue._run()
+
+        output = "\n".join(captured.output)
+        self.assertNotIn(api_key, output)
+        self.assertIn("status 500", output)
+
     def test_cleans_featured_and_compound_artist_credits(self) -> None:
         self.assertEqual(artist_images.clean_artist_name("  Beyoncé feat. Guest "), "Beyoncé")
         self.assertEqual(artist_images.clean_artist_name("Lead & Guest"), "Lead")

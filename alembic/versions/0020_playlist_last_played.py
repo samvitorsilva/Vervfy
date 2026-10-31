@@ -10,11 +10,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "playlists",
-        sa.Column("last_played_at", sa.Float(), nullable=True),
-    )
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("playlists")}
+    if "last_played_at" not in columns:
+        op.add_column(
+            "playlists",
+            sa.Column("last_played_at", sa.Float(), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("playlists", "last_played_at")
+    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("playlists")}
+    if "last_played_at" in columns:
+        op.drop_column("playlists", "last_played_at")

@@ -9,6 +9,7 @@ import type {
   ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { apiFetch, expectOk, fetchWithRetry, uploadWithRetry } from "@/lib/api/client";
 import type { Account, LibraryState } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
@@ -18,6 +19,7 @@ import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyric
 import ResilientImage from "@/components/resilient-image";
 import VisualizerOverlay from "@/components/visualizer-overlay";
 import { useLanguage } from "@/lib/i18n";
+import { getPlaybackController } from "@/lib/playback-controller";
 import {
   usePlayerStore,
   type CachedLyrics,
@@ -81,27 +83,6 @@ function hashCoverSeed(seed: string): number {
   return Math.abs(hash);
 }
 
-interface PlaybackAttempt {
-  trackId: string;
-  src: string;
-  retrySource: string | null;
-  retryCount: number;
-  retryTimer: number | null;
-  stallTimer: number | null;
-  restoreMetadataListener: (() => void) | null;
-  requestId: number;
-  loading: boolean;
-  failed: boolean;
-  hasPlayed: boolean;
-  wantsPlayback: boolean;
-  recovering: boolean;
-  recoveryPosition: number | null;
-  signedUrlRefreshed: boolean;
-  listenedSeconds: number;
-  lastListenPosition: number | null;
-  listenRecorded: boolean;
-}
-
 interface ListeningPeriodSummary {
   playCount: number;
   topTracks: Array<{ trackId: string; playCount: number }>;
@@ -115,26 +96,6 @@ interface ListeningSummary {
   monthStart: number;
   yearLabel: string;
   asOf: number;
-}
-
-const MAX_PLAYBACK_RETRIES = 3;
-const PLAYBACK_STALL_TIMEOUT_MS = 5_000;
-const PLAYBACK_START_TIMEOUT_MS = 15_000;
-const SKIP_DEBOUNCE_MS = 400;
-
-function logAudioFailure(context: string, audio: HTMLAudioElement, error: unknown): void {
-  const errorName =
-    error instanceof Error
-      ? error.name
-      : error && typeof error === "object" && "name" in error && typeof error.name === "string"
-        ? error.name
-        : "UnknownError";
-  console.warn(`[audio] ${context}`, {
-    name: errorName,
-    code: audio.error?.code ?? null,
-    networkState: audio.networkState,
-    readyState: audio.readyState,
-  });
 }
 
 function generateAura(seed: string): string {
@@ -981,7 +942,6 @@ export default function LibraryApp() {
   const setTracks = usePlayerStore((state) => state.setTracks);
   const setLibraryMeta = usePlayerStore((state) => state.setLibraryMeta);
   const setQueue = usePlayerStore((state) => state.setQueue);
-  const setQueueIndex = usePlayerStore((state) => state.setQueueIndex);
   const setView = usePlayerStore((state) => state.setView);
   const setListMode = usePlayerStore((state) => state.setListMode);
   const setRepeat = usePlayerStore((state) => state.setRepeat);
@@ -993,9 +953,6 @@ export default function LibraryApp() {
   const setCachedLyrics = usePlayerStore((state) => state.setCachedLyrics);
   const toggleFavorite = usePlayerStore((state) => state.toggleFavorite);
   const setPlaylists = usePlayerStore((state) => state.setPlaylists);
-  const playbackAttemptRef = useRef<PlaybackAttempt | null>(null);
-  const runPlaybackAttemptRef = useRef<(attempt: PlaybackAttempt) => void>(() => {});
-  const skipStartTimerRef = useRef<number | null>(null);
   const coverInfoButtonRef = useRef<HTMLButtonElement>(null);
   const coverInfoPopoverRef = useRef<HTMLElement>(null);
   const coverInfoReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -1003,7 +960,6 @@ export default function LibraryApp() {
   const mobilePlayerMenuButtonRef = useRef<HTMLButtonElement>(null);
   const sleepTimerControlRef = useRef<HTMLDivElement>(null);
   const sleepTimerPopoverRef = useRef<HTMLElement>(null);
-  const playlistPlaybackRef = useRef<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1073,22 +1029,11 @@ export default function LibraryApp() {
   const etagRef = useRef<string | null>(null);
   const dirtyRef = useRef(false);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const shufflePlayedRef = useRef(new Set<number>());
-  const nextRef = useRef<(automatic: boolean) => void>(() => undefined);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineObjectUrlsRef = useRef(new Set<string>());
   const trackCoverPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
-
-  useEffect(
-    () => () => {
-      if (skipStartTimerRef.current !== null) {
-        window.clearTimeout(skipStartTimerRef.current);
-      }
-    },
-    [],
-  );
 
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
     setProfile((current) => current ? { ...current, photo_url: photoUrl } : current);
@@ -1101,28 +1046,6 @@ export default function LibraryApp() {
     setListeningSummary((await response.json()) as ListeningSummary);
     setListeningError(null);
   }, []);
-
-  const recordTrackListen = useCallback(
-    async (trackId: string) => {
-      try {
-        const response = await apiFetch(
-          "/api/library/listening",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ trackId }),
-          },
-          { csrf: true, retryCsrfOnForbidden: true },
-        );
-        await expectOk(response);
-        await loadListeningSummary();
-      } catch (error) {
-        console.error("Could not save listening history.", error);
-        setListeningError("Listening history could not be saved. Recaps may be out of date.");
-      }
-    },
-    [loadListeningSummary],
-  );
 
   useEffect(() => {
     if (!profile) return;
@@ -1373,42 +1296,22 @@ export default function LibraryApp() {
     toastTimeoutRef.current = setTimeout(() => setToast(""), 2600);
   }, []);
 
-  const recordPlaylistListen = useCallback(
-    async (playlistId: string) => {
-      try {
-        const response = await expectOk(
-          await apiFetch(
-            `/api/library/playlists/${encodeURIComponent(playlistId)}/listening`,
-            { method: "POST" },
-            { csrf: true, retryCsrfOnForbidden: true },
-          ),
-        );
-        const result = (await response.json()) as {
-          playlistId?: unknown;
-          lastPlayedAt?: unknown;
-        };
-        const lastPlayedAt = result.lastPlayedAt;
-        if (
-          result.playlistId !== playlistId ||
-          typeof lastPlayedAt !== "number" ||
-          !Number.isFinite(lastPlayedAt)
-        ) {
-          throw new Error("The server returned invalid playlist listening data.");
-        }
-        setPlaylists(
-          usePlayerStore.getState().playlists.map((playlist) =>
-            playlist.id === playlistId
-              ? { ...playlist, lastPlayedAt }
-              : playlist,
-          ),
-        );
-      } catch (error) {
-        console.error("Could not save playlist listening history.", error);
-        notify("Playlist listening history could not be saved.");
-      }
-    },
-    [notify, setPlaylists],
-  );
+  const refreshListeningAfterPlayback = useCallback(() => {
+    void loadListeningSummary().catch((error: unknown) => {
+      console.error("Could not load listening history.", error);
+      setListeningError("Listening history could not be loaded. Recaps may be out of date.");
+    });
+  }, [loadListeningSummary]);
+
+  useEffect(() => {
+    const controller = getPlaybackController();
+    if (!controller) return;
+    controller.setUiCallbacks({
+      notify,
+      listeningUpdated: refreshListeningAfterPlayback,
+    });
+    return () => controller.setUiCallbacks(null);
+  }, [audioElement, notify, refreshListeningAfterPlayback]);
 
   const reloadTracks = useCallback(async () => {
     trackCoverPollAttemptsRef.current = 0;
@@ -1876,328 +1779,21 @@ export default function LibraryApp() {
     notify(existing ? "Updated your Rediscover playlist." : "Created your Rediscover playlist.");
   }, [notify, rediscoveryTracks, saveMeta, setPlaylists]);
 
-  const handlePlaybackFailure = useCallback(
-    (
-      attempt: PlaybackAttempt,
-      audio: HTMLAudioElement,
-      error: unknown,
-      message: string,
-      failureKind: "media" | "stalled" = "media",
-    ) => {
-      if (
-        playbackAttemptRef.current !== attempt ||
-        attempt.failed ||
-        attempt.retryTimer !== null ||
-        !attempt.wantsPlayback
-      ) {
-        return;
-      }
-      attempt.loading = false;
-
-      const errorName =
-        error && typeof error === "object" && "name" in error && typeof error.name === "string"
-          ? error.name
-          : "";
-      const mediaErrorCode = audio.error?.code;
-      const retryableNetworkError =
-        failureKind === "stalled" ||
-        errorName === "NetworkError" ||
-        mediaErrorCode === MediaError.MEDIA_ERR_ABORTED ||
-        mediaErrorCode === MediaError.MEDIA_ERR_NETWORK;
-      const unsupportedMediaError =
-        errorName === "NotSupportedError" ||
-        mediaErrorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
-      const retryable =
-        retryableNetworkError ||
-        (unsupportedMediaError && !attempt.signedUrlRefreshed);
-
-      if (!retryable || attempt.retryCount >= MAX_PLAYBACK_RETRIES) {
-        attempt.failed = true;
-        attempt.wantsPlayback = false;
-        attempt.recovering = false;
-        if (attempt.retryTimer !== null) {
-          window.clearTimeout(attempt.retryTimer);
-          attempt.retryTimer = null;
-        }
-        if (attempt.restoreMetadataListener) {
-          audio.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
-          attempt.restoreMetadataListener = null;
-        }
-        if (attempt.stallTimer !== null) {
-          window.clearTimeout(attempt.stallTimer);
-          attempt.stallTimer = null;
-        }
-        audio.pause();
-        setPlaying(false);
-        setPlaybackStatus("failed");
-        notify(errorName === "NotAllowedError" ? "Press play to start." : message);
-        return;
-      }
-
-      if (attempt.restoreMetadataListener) {
-        audio.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
-        attempt.restoreMetadataListener = null;
-      }
-      attempt.recoveryPosition = Number.isFinite(audio.currentTime)
-        ? audio.currentTime
-        : null;
-      attempt.recovering = true;
-      const reusableSignedSource =
-        [audio.currentSrc, attempt.retrySource].find(
-          (source) => source && source !== attempt.src,
-        ) ?? null;
-      const refreshSignedUrl =
-        !attempt.signedUrlRefreshed &&
-        (attempt.retryCount > 0 || reusableSignedSource === null);
-      if (refreshSignedUrl) attempt.signedUrlRefreshed = true;
-      attempt.retrySource = refreshSignedUrl
-        ? null
-        : reusableSignedSource;
-      attempt.retryCount += 1;
-      setPlaybackStatus("buffering");
-      logAudioFailure("retrying playback", audio, error);
-
-      const delay = Math.min(500 * 2 ** (attempt.retryCount - 1), 4_000);
-      attempt.retryTimer = window.setTimeout(() => {
-        attempt.retryTimer = null;
-        if (
-          playbackAttemptRef.current !== attempt ||
-          !attempt.wantsPlayback
-        ) {
-          return;
-        }
-        audio.pause();
-        runPlaybackAttemptRef.current(attempt);
-      }, delay);
-    },
-    [notify, setPlaybackStatus, setPlaying],
-  );
-
-  const runPlaybackAttempt = useCallback(
-    (attempt: PlaybackAttempt) => {
-      const audio = usePlayerStore.getState().audioElement;
-      if (!audio || playbackAttemptRef.current !== attempt) return;
-      const requestId = ++attempt.requestId;
-      const source = attempt.retrySource ?? attempt.src;
-      attempt.loading = true;
-      const needsLoad =
-        audio.src !== source ||
-        audio.error !== null ||
-        audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
-      if (needsLoad) {
-        attempt.recovering = true;
-        if (audio.src !== source) {
-          audio.pause();
-          audio.removeAttribute("src");
-          audio.load();
-        }
-        audio.src = source;
-        audio.load();
-      }
-      setPlaying(true);
-      setPlaybackStatus("buffering");
-
-      const startPlayback = () => {
-        attempt.restoreMetadataListener = null;
-        if (
-          playbackAttemptRef.current !== attempt ||
-          attempt.requestId !== requestId ||
-          !attempt.wantsPlayback
-        ) {
-          return;
-        }
-        if (attempt.recoveryPosition !== null && attempt.recoveryPosition > 0) {
-          const position = attempt.recoveryPosition;
-          const duration = audio.duration;
-          audio.currentTime =
-            Number.isFinite(duration) && duration > 0
-              ? Math.min(position, duration)
-              : position;
-        }
-        attempt.recoveryPosition = null;
-        void audio.play().then(
-          () => {
-            if (playbackAttemptRef.current === attempt && attempt.requestId === requestId) {
-              attempt.loading = false;
-            }
-          },
-          (error: unknown) => {
-            if (
-              playbackAttemptRef.current !== attempt ||
-              attempt.requestId !== requestId
-            ) {
-              return;
-            }
-            attempt.loading = false;
-            if (
-              error &&
-              typeof error === "object" &&
-              "name" in error &&
-              error.name === "AbortError" &&
-              !attempt.wantsPlayback
-            ) {
-              return;
-            }
-            logAudioFailure("play() rejected", audio, error);
-            handlePlaybackFailure(
-              attempt,
-              audio,
-              error,
-              "The track could not start. Please try again.",
-            );
-          },
-        );
-      };
-
-      if (
-        attempt.recoveryPosition !== null &&
-        attempt.recoveryPosition > 0 &&
-        audio.readyState < HTMLMediaElement.HAVE_METADATA
-      ) {
-        const onMetadata = () => {
-          if (attempt.restoreMetadataListener === onMetadata) {
-            attempt.restoreMetadataListener = null;
-          }
-          startPlayback();
-        };
-        attempt.restoreMetadataListener = onMetadata;
-        audio.addEventListener("loadedmetadata", onMetadata, { once: true });
-        return;
-      }
-      startPlayback();
-    },
-    [handlePlaybackFailure, setPlaybackStatus, setPlaying],
-  );
-  const beginTrack = useCallback(
-    (trackId: string) => {
-      const track = usePlayerStore.getState().tracks.find((item) => item.id === trackId);
-      const audio = usePlayerStore.getState().audioElement;
-      if (!track || !audio) return;
-
-      const src = new URL(track.offlineUrl || track.streamUrl, window.location.href).href;
-      const currentAttempt = playbackAttemptRef.current;
-      if (
-        currentAttempt?.src === src &&
-        !currentAttempt.failed &&
-        currentAttempt.wantsPlayback &&
-        (currentAttempt.loading || !audio.paused)
-      ) {
-        return;
-      }
-
-      const previousAttempt = playbackAttemptRef.current;
-      if (previousAttempt?.retryTimer !== null && previousAttempt?.retryTimer !== undefined) {
-        window.clearTimeout(previousAttempt.retryTimer);
-      }
-      if (previousAttempt?.stallTimer !== null && previousAttempt?.stallTimer !== undefined) {
-        window.clearTimeout(previousAttempt.stallTimer);
-      }
-      if (previousAttempt?.restoreMetadataListener) {
-        audio.removeEventListener(
-          "loadedmetadata",
-          previousAttempt.restoreMetadataListener,
-        );
-      }
-      const attempt: PlaybackAttempt = {
-        trackId,
-        src,
-        retrySource: null,
-        retryCount: 0,
-        retryTimer: null,
-        stallTimer: null,
-        restoreMetadataListener: null,
-        requestId: 0,
-        loading: false,
-        failed: false,
-        hasPlayed: false,
-        wantsPlayback: true,
-        recovering: false,
-        recoveryPosition: null,
-        signedUrlRefreshed: false,
-        listenedSeconds: 0,
-        lastListenPosition: null,
-        listenRecorded: false,
-      };
-      playbackAttemptRef.current = attempt;
-      runPlaybackAttemptRef.current = runPlaybackAttempt;
-      runPlaybackAttempt(attempt);
-    },
-    [runPlaybackAttempt],
-  );
   const startTrack = useCallback(
-    (trackId: string, debounceSkip = false) => {
-      if (skipStartTimerRef.current !== null) {
-        window.clearTimeout(skipStartTimerRef.current);
-        skipStartTimerRef.current = null;
-      }
-
-      if (debounceSkip) {
-        const audio = usePlayerStore.getState().audioElement;
-        const previousAttempt = playbackAttemptRef.current;
-        if (previousAttempt) {
-          previousAttempt.wantsPlayback = false;
-          previousAttempt.requestId += 1;
-          if (previousAttempt.retryTimer !== null) {
-            window.clearTimeout(previousAttempt.retryTimer);
-          }
-          if (previousAttempt.stallTimer !== null) {
-            window.clearTimeout(previousAttempt.stallTimer);
-          }
-          if (previousAttempt.restoreMetadataListener && audio) {
-            audio.removeEventListener(
-              "loadedmetadata",
-              previousAttempt.restoreMetadataListener,
-            );
-          }
-          playbackAttemptRef.current = null;
-        }
-        if (audio) {
-          audio.pause();
-          audio.removeAttribute("src");
-          audio.load();
-        }
-        skipStartTimerRef.current = window.setTimeout(() => {
-          skipStartTimerRef.current = null;
-          beginTrack(trackId);
-        }, SKIP_DEBOUNCE_MS);
-        return;
-      }
-
-      beginTrack(trackId);
+    (trackId: string, debounceSkip = false, automaticTransition = false) => {
+      getPlaybackController()?.startTrack(trackId, debounceSkip, automaticTransition);
     },
-    [beginTrack],
+    [],
   );
-
-  const handleAudioError = useCallback(
-    (audio: HTMLAudioElement) => {
-      const error = new Error("Audio element emitted a media error");
-      error.name =
-        audio.error?.code === MediaError.MEDIA_ERR_NETWORK
-          ? "NetworkError"
-          : audio.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-            ? "NotSupportedError"
-            : "MediaError";
-      logAudioFailure("audio error event", audio, error);
-
-      const attempt = playbackAttemptRef.current;
-      if (
-        !attempt ||
-        (audio.src !== attempt.src && audio.src !== attempt.retrySource) ||
-        (attempt.recovering &&
-          audio.error?.code === MediaError.MEDIA_ERR_ABORTED)
-      ) {
-        return;
-      }
-      handlePlaybackFailure(
-        attempt,
-        audio,
-        error,
-        "This track could not be played. Check the file format or your connection.",
-      );
+  const playQueueIndex = useCallback(
+    (index: number, debounceSkip = false, automaticTransition = false) => {
+      getPlaybackController()?.playQueueIndex(index, debounceSkip, automaticTransition);
     },
-    [handlePlaybackFailure],
+    [],
   );
-
+  const playNext = useCallback((automatic: boolean) => {
+    getPlaybackController()?.playNext(automatic);
+  }, []);
   const playFromList = useCallback(
     (list: TrackRecord[], trackId: string, playlistId?: string) => {
       const ids = list.map((track) => track.id);
@@ -2205,70 +1801,14 @@ export default function LibraryApp() {
       if (index < 0) return;
       const sourcePlaylistId =
         playlistId ?? (view.startsWith("playlist:") ? view.slice("playlist:".length) : null);
-      playlistPlaybackRef.current = sourcePlaylistId;
+      getPlaybackController()?.setPlaylistContext(sourcePlaylistId);
       setPlayingFromView(sourcePlaylistId ? `playlist:${sourcePlaylistId}` : view);
-      shufflePlayedRef.current = new Set([index]);
+      getPlaybackController()?.setInitialShuffleHistory(index);
       setQueue(ids, index);
       startTrack(trackId);
     },
     [setQueue, startTrack, view],
   );
-
-  const playQueueIndex = useCallback(
-    (index: number, debounceSkip = false) => {
-      const state = usePlayerStore.getState();
-      const trackId = state.queue[index];
-      if (!trackId) return;
-      setQueueIndex(index);
-      startTrack(trackId, debounceSkip);
-    },
-    [setQueueIndex, startTrack],
-  );
-
-  const playNext = useCallback(
-    (automatic: boolean) => {
-      const state = usePlayerStore.getState();
-      const audio = state.audioElement;
-      if (!audio || state.queue.length === 0) return;
-
-      if (automatic && state.repeat === "one") {
-        audio.currentTime = 0;
-        void audio.play().catch(() => notify("The track could not restart. Please try again."));
-        return;
-      }
-
-      let nextIndex = state.queueIndex + 1;
-      if (state.shuffle) {
-        shufflePlayedRef.current.add(state.queueIndex);
-        let choices = state.queue
-          .map((_, index) => index)
-          .filter((index) => index !== state.queueIndex);
-        if (automatic && state.repeat === "off") {
-          choices = choices.filter((index) => !shufflePlayedRef.current.has(index));
-          if (choices.length === 0) {
-            audio.pause();
-            return;
-          }
-        } else if (
-          automatic &&
-          state.repeat === "all" &&
-          !choices.some((index) => !shufflePlayedRef.current.has(index))
-        ) {
-          shufflePlayedRef.current = new Set([state.queueIndex]);
-        }
-        if (choices.length === 0) choices = [state.queueIndex];
-        nextIndex = choices[Math.floor(Math.random() * choices.length)];
-        shufflePlayedRef.current.add(nextIndex);
-      } else if (nextIndex >= state.queue.length) {
-        nextIndex = 0;
-      }
-      playQueueIndex(nextIndex, !automatic);
-    },
-    [notify, playQueueIndex],
-  );
-  useEffect(() => {
-    nextRef.current = playNext;
-  }, [playNext]);
 
   useEffect(() => {
     const panel = queuePanelRef.current;
@@ -2280,24 +1820,14 @@ export default function LibraryApp() {
 
   useEffect(() => {
     if (!sleepTimerEndsAt) return;
-    let completed = false;
     const updateRemaining = () => {
       const remaining = Math.ceil((sleepTimerEndsAt - Date.now()) / 1000);
-      if (remaining <= 0) {
-        if (completed) return;
-        completed = true;
-        usePlayerStore.getState().audioElement?.pause();
-        setSleepTimer(null, null);
-        setPlaying(false);
-        setPlaybackStatus("paused");
-        setSleepTimerRemaining(0);
-        return;
-      }
-      setSleepTimerRemaining(remaining);
+      setSleepTimerRemaining(Math.max(0, remaining));
     };
+    updateRemaining();
     const interval = window.setInterval(updateRemaining, 1000);
     return () => window.clearInterval(interval);
-  }, [setPlaybackStatus, setPlaying, setSleepTimer, sleepTimerEndsAt]);
+  }, [sleepTimerEndsAt]);
 
   useEffect(() => {
     if (!sleepTimerOpen) return;
@@ -2342,15 +1872,8 @@ export default function LibraryApp() {
   }, [playlistModal]);
 
   const playPrevious = useCallback(() => {
-    const state = usePlayerStore.getState();
-    const audio = state.audioElement;
-    if (!audio || state.queue.length === 0) return;
-    if (audio.currentTime > 3) {
-      audio.currentTime = 0;
-      return;
-    }
-    playQueueIndex(Math.max(0, state.queueIndex - 1), true);
-  }, [playQueueIndex]);
+    getPlaybackController()?.playPrevious();
+  }, []);
 
   const togglePlayback = useCallback(() => {
     if (!audioElement) return;
@@ -2358,35 +1881,11 @@ export default function LibraryApp() {
       if (visibleTracks[0]) playFromList(visibleTracks, visibleTracks[0].id);
       return;
     }
-    if (isPlaying) {
-      const attempt = playbackAttemptRef.current;
-      if (attempt) {
-        attempt.wantsPlayback = false;
-        attempt.recovering = false;
-        attempt.requestId += 1;
-        if (attempt.retryTimer !== null) {
-          window.clearTimeout(attempt.retryTimer);
-          attempt.retryTimer = null;
-        }
-        if (attempt.stallTimer !== null) {
-          window.clearTimeout(attempt.stallTimer);
-          attempt.stallTimer = null;
-        }
-      }
-      audioElement.pause();
-      setPlaying(false);
-      setPlaybackStatus("paused");
-    } else {
-      startTrack(currentTrack.id);
-    }
+    getPlaybackController()?.togglePlayback(currentTrack.id);
   }, [
     audioElement,
     currentTrack,
-    isPlaying,
     playFromList,
-    setPlaybackStatus,
-    setPlaying,
-    startTrack,
     visibleTracks,
   ]);
 
@@ -2399,77 +1898,6 @@ export default function LibraryApp() {
   }, [saveMeta]);
 
   useEffect(() => {
-    const mediaSession = navigator.mediaSession;
-    if (!mediaSession) return;
-    const active = usePlayerStore.getState().tracks.find(
-      (track) => track.id === usePlayerStore.getState().queue[usePlayerStore.getState().queueIndex],
-    );
-    if (!active) {
-      mediaSession.metadata = null;
-      mediaSession.playbackState = "none";
-      return;
-    }
-    mediaSession.playbackState = usePlayerStore.getState().audioElement?.paused
-      ? "paused"
-      : "playing";
-    if ("MediaMetadata" in window) {
-      try {
-        mediaSession.metadata = new MediaMetadata({
-          title: active.title || "Unknown title",
-          artist: active.artist || "Unknown artist",
-          album: active.album || "",
-          artwork: [96, 128, 192, 256, 384, 512].map((size) => ({
-            src: new URL(active.coverUrl, window.location.href).href,
-            sizes: `${size}x${size}`,
-            type: "image/jpeg",
-          })),
-        });
-      } catch (error) {
-        console.warn("Could not set system media metadata", error);
-      }
-    }
-
-    const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
-      ["play", () => togglePlayback()],
-      ["pause", () => usePlayerStore.getState().audioElement?.pause()],
-      ["previoustrack", () => playPrevious()],
-      ["nexttrack", () => nextRef.current(false)],
-      ["seekbackward", (details) =>
-        seekAudio(
-          usePlayerStore.getState().audioElement,
-          -(Number(details.seekOffset) || 10),
-        )],
-      ["seekforward", (details) =>
-        seekAudio(
-          usePlayerStore.getState().audioElement,
-          Number(details.seekOffset) || 10,
-        )],
-      ["seekto", (details) => {
-        const audio = usePlayerStore.getState().audioElement;
-        if (audio && Number.isFinite(details.seekTime)) {
-          audio.currentTime = Math.max(0, Math.min(audio.duration || Infinity, details.seekTime ?? 0));
-        }
-      }],
-    ];
-    for (const [action, handler] of actions) {
-      try {
-        mediaSession.setActionHandler(action, handler);
-      } catch {
-        // Unsupported actions are ignored by the browser.
-      }
-    }
-    return () => {
-      for (const [action] of actions) {
-        try {
-          mediaSession.setActionHandler(action, null);
-        } catch {
-          // Unsupported actions are ignored by the browser.
-        }
-      }
-    };
-  }, [activeTrackId, playPrevious, togglePlayback]);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
       if (
@@ -2480,7 +1908,13 @@ export default function LibraryApp() {
         if (event.key === "Escape") target.blur();
         return;
       }
-      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (
+        event.key === "/" &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
         event.preventDefault();
         document.querySelector<HTMLInputElement>(".search-wrap input")?.focus();
         return;
@@ -2498,7 +1932,7 @@ export default function LibraryApp() {
         setTrackMenu(null);
         return;
       }
-      if (event.key === "?") {
+      if (event.key === "?" || (event.key === "/" && event.shiftKey)) {
         setShortcutsOpen((current) => !current);
         return;
       }
@@ -2508,7 +1942,7 @@ export default function LibraryApp() {
           togglePlayback();
           break;
         case "ArrowRight":
-          if (event.shiftKey) nextRef.current(false);
+          if (event.shiftKey) playNext(false);
           else seekAudio(usePlayerStore.getState().audioElement, 5);
           break;
         case "ArrowLeft":
@@ -2543,7 +1977,7 @@ export default function LibraryApp() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [coverInfoOpen, playPrevious, toggleCurrentFavorite, togglePlayback]);
+  }, [coverInfoOpen, playNext, playPrevious, toggleCurrentFavorite, togglePlayback]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2660,216 +2094,27 @@ export default function LibraryApp() {
 
   useEffect(() => {
     if (!audioElement) return;
-    const updatePlayback = () => {
+    const updatePosition = () => {
+      setCurrentTime(audioElement.currentTime || 0);
       const nextDuration = Number.isFinite(audioElement.duration)
         ? audioElement.duration
         : 0;
       setDuration((currentDuration) =>
         currentDuration === nextDuration ? currentDuration : nextDuration,
       );
-      const session = navigator.mediaSession;
-      if (
-        session?.setPositionState &&
-        Number.isFinite(audioElement.duration) &&
-        audioElement.duration > 0 &&
-        Number.isFinite(audioElement.currentTime)
-      ) {
-        try {
-          session.setPositionState({
-            duration: audioElement.duration,
-            position: Math.max(0, Math.min(audioElement.currentTime, audioElement.duration)),
-            playbackRate: audioElement.playbackRate || 1,
-          });
-        } catch {
-          // Browsers may reject position updates before media metadata is ready.
-        }
-      }
     };
-    const updatePlaybackPosition = () => {
-      setCurrentTime(audioElement.currentTime || 0);
-      updatePlayback();
-    };
-    let lastPlaybackTime = audioElement.currentTime;
-    const clearStallTimer = (attempt: PlaybackAttempt | null) => {
-      if (attempt?.stallTimer !== null && attempt?.stallTimer !== undefined) {
-        window.clearTimeout(attempt.stallTimer);
-        attempt.stallTimer = null;
-      }
-    };
-    const onPlaybackProgress = () => {
-      const currentTime = audioElement.currentTime;
-      const madeProgress = currentTime > lastPlaybackTime + 0.05;
-      lastPlaybackTime = currentTime;
-      if (!madeProgress) return;
-      const attempt = playbackAttemptRef.current;
-      if (attempt?.wantsPlayback && !audioElement.paused) {
-        const listenDelta =
-          attempt.lastListenPosition === null
-            ? 0
-            : currentTime - attempt.lastListenPosition;
-        if (listenDelta > 0 && listenDelta <= 5) {
-          attempt.listenedSeconds += listenDelta;
-        }
-        attempt.lastListenPosition = currentTime;
-        const listenThreshold =
-          audioElement.duration > 0
-            ? Math.min(30, audioElement.duration / 2)
-            : 30;
-        if (!attempt.listenRecorded && attempt.listenedSeconds >= listenThreshold) {
-          attempt.listenRecorded = true;
-          void recordTrackListen(attempt.trackId);
-          const playlistId = playlistPlaybackRef.current;
-          if (playlistId) {
-            playlistPlaybackRef.current = null;
-            void recordPlaylistListen(playlistId);
-          }
-        }
-      }
-      clearStallTimer(attempt);
-      if (
-        attempt?.wantsPlayback &&
-        !audioElement.paused &&
-        audioElement.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
-      ) {
-        setPlaybackStatus("playing");
-      }
-    };
-    const onLoadedMetadata = () => {
-      lastPlaybackTime = audioElement.currentTime;
-      updatePlaybackPosition();
-    };
-    const onSeeked = () => {
-      lastPlaybackTime = audioElement.currentTime;
-      const attempt = playbackAttemptRef.current;
-      if (attempt) attempt.lastListenPosition = audioElement.currentTime;
-      updatePlaybackPosition();
-    };
-    const onPlaying = () => {
-      const attempt = playbackAttemptRef.current;
-      if (attempt) {
-        attempt.hasPlayed = true;
-        attempt.lastListenPosition = audioElement.currentTime;
-        attempt.recovering = false;
-        attempt.retryCount = 0;
-        attempt.signedUrlRefreshed = false;
-        attempt.retrySource = audioElement.currentSrc || attempt.retrySource;
-      }
-      clearStallTimer(attempt);
-      setPlaying(true);
-      setPlaybackStatus("playing");
-      if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing";
-    };
-    const onBuffering = () => {
-      const attempt = playbackAttemptRef.current;
-      if (!attempt?.wantsPlayback || audioElement.paused) return;
-      setPlaybackStatus("buffering");
-      if (attempt.stallTimer !== null) return;
-
-      const stalledAt = audioElement.currentTime;
-      attempt.stallTimer = window.setTimeout(() => {
-        attempt.stallTimer = null;
-        if (
-          playbackAttemptRef.current === attempt &&
-          attempt.wantsPlayback &&
-          !audioElement.paused &&
-          !audioElement.ended &&
-          audioElement.currentTime <= stalledAt + 0.1
-        ) {
-          handlePlaybackFailure(
-            attempt,
-            audioElement,
-            new Error("Playback made no progress after a buffer event"),
-            "Playback stopped while buffering. Check your connection and try again.",
-            "stalled",
-          );
-        }
-      }, attempt.hasPlayed ? PLAYBACK_STALL_TIMEOUT_MS : PLAYBACK_START_TIMEOUT_MS);
-    };
-    const onPlay = () => {
-      setPlaying(true);
-      setPlaybackStatus("buffering");
-      if (navigator.mediaSession) navigator.mediaSession.playbackState = "playing";
-    };
-    const onPause = () => {
-      const attempt = playbackAttemptRef.current;
-      if (
-        attempt?.recovering ||
-        (attempt?.wantsPlayback &&
-          audioElement.error !== null &&
-          audioElement.error !== undefined)
-      ) {
-        return;
-      }
-      clearStallTimer(attempt);
-      if (attempt) {
-        attempt.wantsPlayback = false;
-        attempt.lastListenPosition = null;
-      }
-      updatePlaybackPosition();
-      setPlaying(false);
-      setPlaybackStatus(attempt?.failed ? "failed" : "paused");
-      if (navigator.mediaSession) navigator.mediaSession.playbackState = "paused";
-    };
-    const onEnded = () => {
-      const state = usePlayerStore.getState();
-      if (
-        state.sleepTimerEndTrackId &&
-        state.sleepTimerEndTrackId === state.queue[state.queueIndex]
-      ) {
-        state.setSleepTimer(null, null);
-        state.setPlaying(false);
-        state.setPlaybackStatus("paused");
-        return;
-      }
-      nextRef.current(true);
-    };
-    const onError = () => handleAudioError(audioElement);
-    audioElement.addEventListener("timeupdate", updatePlayback);
-    audioElement.addEventListener("timeupdate", onPlaybackProgress);
-    audioElement.addEventListener("loadedmetadata", onLoadedMetadata);
-    audioElement.addEventListener("durationchange", updatePlaybackPosition);
-    audioElement.addEventListener("seeked", onSeeked);
-    audioElement.addEventListener("playing", onPlaying);
-    audioElement.addEventListener("waiting", onBuffering);
-    audioElement.addEventListener("stalled", onBuffering);
-    audioElement.addEventListener("play", onPlay);
-    audioElement.addEventListener("pause", onPause);
-    audioElement.addEventListener("ended", onEnded);
-    audioElement.addEventListener("error", onError);
-    updatePlaybackPosition();
+    audioElement.addEventListener("timeupdate", updatePosition);
+    audioElement.addEventListener("loadedmetadata", updatePosition);
+    audioElement.addEventListener("durationchange", updatePosition);
+    audioElement.addEventListener("seeked", updatePosition);
+    updatePosition();
     return () => {
-      audioElement.removeEventListener("timeupdate", updatePlayback);
-      audioElement.removeEventListener("timeupdate", onPlaybackProgress);
-      audioElement.removeEventListener("loadedmetadata", onLoadedMetadata);
-      audioElement.removeEventListener("durationchange", updatePlaybackPosition);
-      audioElement.removeEventListener("seeked", onSeeked);
-      audioElement.removeEventListener("playing", onPlaying);
-      audioElement.removeEventListener("waiting", onBuffering);
-      audioElement.removeEventListener("stalled", onBuffering);
-      audioElement.removeEventListener("play", onPlay);
-      audioElement.removeEventListener("pause", onPause);
-      audioElement.removeEventListener("ended", onEnded);
-      audioElement.removeEventListener("error", onError);
-      const attempt = playbackAttemptRef.current;
-      clearStallTimer(attempt);
-      if (attempt?.retryTimer !== null && attempt?.retryTimer !== undefined) {
-        window.clearTimeout(attempt.retryTimer);
-        attempt.retryTimer = null;
-      }
-      if (attempt?.restoreMetadataListener) {
-        audioElement.removeEventListener("loadedmetadata", attempt.restoreMetadataListener);
-        attempt.restoreMetadataListener = null;
-      }
+      audioElement.removeEventListener("timeupdate", updatePosition);
+      audioElement.removeEventListener("loadedmetadata", updatePosition);
+      audioElement.removeEventListener("durationchange", updatePosition);
+      audioElement.removeEventListener("seeked", updatePosition);
     };
-  }, [
-    audioElement,
-    handleAudioError,
-    handlePlaybackFailure,
-    recordTrackListen,
-    recordPlaylistListen,
-    setPlaybackStatus,
-    setPlaying,
-  ]);
+  }, [audioElement]);
 
   useEffect(() => {
     const audio = usePlayerStore.getState().audioElement;
@@ -3043,32 +2288,7 @@ export default function LibraryApp() {
         setQueue(nextQueue, nextIndex);
         startTrack(nextQueue[nextIndex]);
       } else {
-        const attempt = playbackAttemptRef.current;
-        if (attempt) {
-          attempt.wantsPlayback = false;
-          attempt.recovering = false;
-          attempt.requestId += 1;
-          if (attempt.retryTimer !== null) {
-            window.clearTimeout(attempt.retryTimer);
-            attempt.retryTimer = null;
-          }
-          if (attempt.stallTimer !== null) {
-            window.clearTimeout(attempt.stallTimer);
-            attempt.stallTimer = null;
-          }
-          if (attempt.restoreMetadataListener && audioElement) {
-            audioElement.removeEventListener(
-              "loadedmetadata",
-              attempt.restoreMetadataListener,
-            );
-            attempt.restoreMetadataListener = null;
-          }
-        }
-        audioElement?.pause();
-        if (audioElement) {
-          audioElement.removeAttribute("src");
-          audioElement.load();
-        }
+        getPlaybackController()?.stop();
         setQueue([], -1);
         setPlaying(false);
         setPlaybackStatus("paused");
@@ -3186,7 +2406,7 @@ export default function LibraryApp() {
 
   function toggleShuffle() {
     setShuffle(!shuffle);
-    shufflePlayedRef.current.clear();
+    getPlaybackController()?.clearShuffleHistory();
     notify(!shuffle ? "Shuffle on" : "Shuffle off");
   }
 
@@ -4264,7 +3484,7 @@ export default function LibraryApp() {
             <a href="https://coverartarchive.org/" target="_blank" rel="noopener noreferrer">
               Cover Art Archive <span aria-hidden="true">↗</span>
             </a>
-            <a href="/credits">{t("View all credits")} <span aria-hidden="true">→</span></a>
+            <Link href="/credits">{t("View all credits")} <span aria-hidden="true">→</span></Link>
           </div>
           </section>,
           document.body,

@@ -473,6 +473,48 @@ class ResolveCoverChainTests(unittest.TestCase):
             "https://r2.theaudiodb.com/x.jpg",
         )
 
+    def test_audiodb_failure_does_not_log_api_key_from_request_url(self) -> None:
+        track = MagicMock(
+            id="track-audiodb-error",
+            title="Song",
+            artist="Artist",
+            album="",
+            cover_source="generated",
+            has_cover=False,
+        )
+        library = MagicMock()
+        library.get.return_value = track
+        api_key = "private-api-key"
+        request = httpx.Request(
+            "GET",
+            f"https://www.theaudiodb.com/api/v1/json/{api_key}/searchtrack.php",
+        )
+        response = httpx.Response(500, request=request)
+        error = httpx.HTTPStatusError(
+            "TheAudioDB request failed", request=request, response=response
+        )
+
+        with (
+            patch("library.Library", return_value=library),
+            patch.object(cover_art, "uploaded_cover", return_value=None),
+            patch.object(cover_art, "embedded_cover", return_value=None),
+            patch.object(cover_art, "generated_cover", return_value=_jpeg_bytes()),
+            self.assertLogs("vervfy.cover_art", level="WARNING") as logs,
+        ):
+            asyncio.run(
+                cover_art.resolve_cover(
+                    "user-1",
+                    "track-audiodb-error",
+                    audio_path="/tmp/missing.mp3",
+                    lookup_musicbrainz=AsyncMock(return_value=None),
+                    lookup_audiodb=MagicMock(side_effect=error),
+                )
+            )
+
+        output = "\n".join(logs.output)
+        self.assertNotIn(api_key, output)
+        self.assertIn("status=500", output)
+
     def test_generated_fallback_stores_image(self) -> None:
         track = MagicMock(
             id="track-3",

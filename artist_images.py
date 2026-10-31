@@ -102,6 +102,12 @@ def _validated_image_url(value: object) -> str | None:
     return url
 
 
+def _safe_error_summary(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"{type(exc).__name__} (status {exc.response.status_code})"
+    return type(exc).__name__
+
+
 def _fetch_json(
     endpoint: str,
     params: dict[str, str],
@@ -262,7 +268,11 @@ def fetch_track_cover(
         try:
             album_payload = _fetch_json("album.php", {"m": album_id}, request_json)
         except httpx.HTTPError as exc:
-            log.info("TheAudioDB album-ID lookup failed for %s: %s", album_id, exc)
+            log.info(
+                "TheAudioDB album-ID lookup failed for %s (%s)",
+                album_id,
+                _safe_error_summary(exc),
+            )
             album_payload = {}
         albums = album_payload.get("album") if isinstance(album_payload, dict) else None
         if isinstance(albums, list):
@@ -512,7 +522,12 @@ class TheAudioDBQueue:
                             ),
                         )
                 except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
-                    log.warning("TheAudioDB %s lookup failed for %r: %s", kind, first, exc)
+                    log.warning(
+                        "TheAudioDB %s lookup failed for %r (%s)",
+                        kind,
+                        first,
+                        _safe_error_summary(exc),
+                    )
                     with self._lock:
                         self._pending.discard(pending_key)
                         self._retry_after[pending_key] = time.monotonic() + 60

@@ -59,8 +59,7 @@ ALLOWED_EXTERNAL_HOSTS = {
     "r2.theaudiodb.com",
     "tidelift.com",
     "theaudiodb.com",
-    "vercel.com",
-    "vervfy-app.onrender.com",
+    "vervfy.onrender.com",
     "www.josephobrienmusic.com",
     "www.mielsanmarcos.org",
     "www.stringsandheart.com",
@@ -74,8 +73,8 @@ ALLOWED_EXTERNAL_HOSTS = {
     "commons.wikimedia.org",
     "upload.wikimedia.org",
     "wikipedia.org",
+    "vervfy.invalid",
     "127.0.0.1",
-    "your-public-app.example.com",
 }
 URL_HOST = re.compile(r"https?://([A-Za-z0-9._-]+)", re.IGNORECASE)
 FORBIDDEN_CATALOG_HOSTS = (

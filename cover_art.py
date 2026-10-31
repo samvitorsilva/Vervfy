@@ -345,8 +345,18 @@ async def resolve_cover(
             log.info("cover lookup track_id=%s step=audiodb result=hit", track_id)
             return
         log.info("cover lookup track_id=%s step=audiodb result=miss", track_id)
-    except Exception:
-        log.exception("cover lookup track_id=%s step=audiodb result=error", track_id)
+    except Exception as exc:
+        status = (
+            f" status={exc.response.status_code}"
+            if isinstance(exc, httpx.HTTPStatusError)
+            else ""
+        )
+        log.warning(
+            "cover lookup track_id=%s step=audiodb result=error type=%s%s",
+            track_id,
+            type(exc).__name__,
+            status,
+        )
 
     try:
         image = generated_cover(track.title)

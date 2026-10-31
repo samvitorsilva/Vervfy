@@ -18,28 +18,37 @@
   Require `MB_CONTACT_EMAIL` for the User-Agent `Vervfy/1.0 (<email>)`, keep
   at most one MusicBrainz request per second, use an 8s timeout, and retry once
   on HTTP 503. Show attribution when a playing track uses this source.
-- **TheAudioDB**: artist identifiers and artwork URLs only, from the official
-  official v1 endpoints. Artist records use `search.php?s=`; the global cache
-  keeps URL metadata (not image files) by normalized artist name. Track lookups
-  try `searchtrack.php?s=&t=`, retry `searchtrack.php?s=` when the exact-title
-  query has no match, and use `album.php?m=` for `strAlbumThumb`; if needed,
-  `searchalbum.php?s=&a=` matches tagged album data. Track cache rows contain
-  only album IDs, URLs, statuses, and timestamps, keyed by a versioned digest
-  of normalized artist plus title so lookup changes invalidate old misses. The shared background queue rate-limits all
-  provider calls to at most 25/minute and spaces them by 2.4 seconds.
-  The public docs use key `123` but also show `2` in an example. The free tier
-  is documented at 30 requests/minute; Premium is documented at 100/minute.
-  The docs label track-search parameter `t` Premium-only, although a live test
-  with key `123` returned a title-specific result. The app attempts that
-  endpoint and falls back to artist+album search; free-key title-only coverage
-  is not guaranteed. The docs/API pages mention an $8/month Premium price,
-  while the current home page advertises $10/month. Confirm key access and
-  current pricing before upgrading.
-  The API docs permit displaying returned image URLs directly and `strAlbumThumb`
-  is a thumbnail URL. The supplied `/terms.php` URL returned 404 during review,
-  and the API documentation does not specify a separate image copyright
-  license or commercial-use grant; verify current terms with TheAudioDB before
-  relying on a commercial license.
+- **TheAudioDB**: server-side v1 lookups for artist identifiers and artwork
+  URLs. Artist lookups send the cleaned artist name to `search.php?s=`. Track
+  cover lookups send artist and title to `searchtrack.php?s=&t=`, may retry
+  with artist only, and use a matched album ID with `album.php?m=`; when needed,
+  tagged artist and album names are sent to `searchalbum.php?s=&a=`. These
+  requests disclose those music tags to TheAudioDB, but do not send audio,
+  lyrics, account IDs, or uploaded files. The API key (`AUDIODB_API_KEY`,
+  defaulting to the public test key `123`) is sent in the server-side request
+  URL. Artist and track caches retain IDs, image URLs, status, and timestamps,
+  not TheAudioDB image files. The shared background queue caps requests at
+  25/minute and spaces them by 2.4 seconds.
+
+  The current [API guide](https://www.theaudiodb.com/free_music_api) describes
+  the free key `123`, a free limit of 30 requests/minute, and direct display of
+  image URLs returned by its API; it lists track metadata search as a Premium
+  feature. Vervfy still attempts the title-specific `t` query and falls back
+  to artist/album searches, so exact-title coverage is not guaranteed with the
+  free key. The guide's sample also shows key `2`; Vervfy uses `123` by
+  default. The current [pricing page](https://www.theaudiodb.com/pricing)
+  lists €8/month for Single Developer, €20/month for Small Business, and
+  separate request limits; verify current access and pricing before upgrading.
+
+  **API permission is not an image copyright license.** The API guide's
+  statement that returned image URLs may be displayed describes API use; it
+  does not establish an image-specific copyright license or commercial-reuse
+  grant. The [artwork guide](https://www.theaudiodb.com/docs_artwork) notes
+  that much of its artwork is fan-created but does not state a separate image
+  license. The old `/terms.php` endpoint returned 404 when checked on
+  2026-10-30. Do not treat API access or URL display as proof of image
+  licensing; obtain or verify the applicable rights before relying on
+  commercial reuse.
 - **User-owned content**: audio tags, embedded artwork, uploaded cover images,
   and lyrics the user pastes.
 - **Manual artist profiles**: curated in-app profile text with a source URL;
