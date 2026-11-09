@@ -5,14 +5,21 @@ Run once from a backup of the old deployment before switching Render. Browser
 IndexedDB favorites/playlists import themselves on each user's first login.
 """
 from __future__ import annotations
-import argparse, io, json, sqlite3, sys
+
+import argparse
+import io
+import json
+import sqlite3
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from PIL import Image
-from db import SessionLocal, User, TrackRecord
+
+from db import SessionLocal, TrackRecord, User
+
 
 def cover_bytes(path: Path, title: str) -> bytes:
-    cover = path / "covers"
     # The caller supplies a track-specific stem through its title only as a
     # fallback; a missing legacy cover is represented by a small placeholder.
     image = Image.new("RGB", (1, 1), (20, 24, 34)); out = io.BytesIO(); image.save(out, "JPEG"); return out.getvalue()

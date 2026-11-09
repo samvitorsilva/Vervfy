@@ -950,7 +950,13 @@ export default function LyricsOverlay({
               <div className="lyrics-editor-actions"><button className="btn" type="button" onClick={() => setEditorOpen(false)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit" disabled={savePending}>{savePending ? t("Saving…") : t("Save lyrics")}</button></div>
             </form>
           ) : loading && !lyrics?.lines?.length && !lyrics?.text ? (
-            <div className="lyrics-empty"><div className="empty-orb lyrics-loading-orb" /><h3>{t("Searching for lyrics…")}</h3><p>{t("Checking LRCLIB for a match.")}</p></div>
+            <div className="lyrics-empty lyrics-skeleton" aria-label={t("Searching for lyrics…")} aria-busy="true">
+              <div className="lyrics-skeleton-lines" aria-hidden="true">
+                {[94, 72, 86, 61, 78].map((width, index) => (
+                  <span className="app-skeleton-block" key={index} style={{ width: `${width}%` }} />
+                ))}
+              </div>
+            </div>
           ) : lyrics?.lines?.length ? (
             <div className="lyrics-track" ref={lyricsTrackRef}>
               {lyrics.lines.map((line, index) => <button className={`lyrics-line${index === lineIndex ? " active" : ""}${index < lineIndex ? " past" : ""}${startsNewVerse(lyrics.lines ?? [], index) ? " verse-start" : ""}`} type="button" key={`${line.time}-${index}`} onClick={() => {

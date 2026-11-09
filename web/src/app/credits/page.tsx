@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
 import CreditsPage from "@/components/credits-page";
+import { pageMetadata } from "@/lib/page-metadata";
 
-export const metadata: Metadata = {
-  title: "Credits and data sources",
-  description: "Attribution, licenses, and data sources used by Vervfy.",
-};
+export const generateMetadata = () => pageMetadata("/credits");
 
 export default function CreditsRoute() {
   return <CreditsPage />;

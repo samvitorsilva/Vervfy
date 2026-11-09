@@ -1,7 +1,6 @@
 """Shared TheAudioDB artist and track artwork lookups with paced background resolution."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import os
@@ -10,11 +9,11 @@ import re
 import threading
 import time
 import unicodedata
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import select
 
 from db import ArtistImage, SessionLocal, TrackCoverCache
 
@@ -56,9 +55,7 @@ def track_cover_cache_key(artist: str, title: str) -> tuple[str, str, str]:
     if not normalized_artist or not normalized_title:
         return "", normalized_artist, normalized_title
     key = hashlib.sha256(
-        f"{TRACK_COVER_LOOKUP_VERSION}\0{normalized_artist}\0{normalized_title}".encode(
-            "utf-8"
-        )
+        f"{TRACK_COVER_LOOKUP_VERSION}\0{normalized_artist}\0{normalized_title}".encode()
     ).hexdigest()
     return key, normalized_artist, normalized_title
 
@@ -366,8 +363,8 @@ def is_stale(record: dict[str, object] | None, now: datetime | None = None) -> b
     if not isinstance(fetched_at, datetime):
         return True
     if fetched_at.tzinfo is None:
-        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-    current = now or datetime.now(timezone.utc)
+        fetched_at = fetched_at.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
     max_age = (
         AUDIODB_NOT_FOUND_SECONDS
         if record.get("status") == "not_found"
@@ -405,9 +402,7 @@ class TheAudioDBQueue:
         return self._enqueue("artist", key, cleaned, "", "")
 
     def enqueue_track(self, artist: str, title: str, album: str) -> bool:
-        key, normalized_artist, normalized_title = track_cover_cache_key(
-            artist, title
-        )
+        key, _, _ = track_cover_cache_key(artist, title)
         if not key or normalize_artist_name(artist) in {"unknown", "unknownartist"}:
             return False
         cleaned_artist = clean_artist_name(artist)
@@ -451,7 +446,7 @@ class TheAudioDBQueue:
             return True
 
     def _save_artist(self, key: str, data: dict[str, str | None]) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with SessionLocal() as session:
             row = session.get(ArtistImage, key)
             if row is None:
@@ -471,7 +466,7 @@ class TheAudioDBQueue:
         normalized_title: str,
         data: dict[str, str | None],
     ) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with SessionLocal() as session:
             row = session.get(TrackCoverCache, key)
             if row is None:

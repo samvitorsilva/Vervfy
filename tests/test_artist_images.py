@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import unittest
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import httpx
@@ -93,9 +93,9 @@ class ArtistImageLookupTests(unittest.TestCase):
             patch.object(lookup_queue._queue, "task_done"),
             patch.object(artist_images, "fetch_artist_image", side_effect=error),
             self.assertLogs("vervfy.artist_images", level="WARNING") as captured,
+            self.assertRaises(StopIteration),
         ):
-            with self.assertRaises(StopIteration):
-                lookup_queue._run()
+            lookup_queue._run()
 
         output = "\n".join(captured.output)
         self.assertNotIn(api_key, output)
@@ -221,7 +221,7 @@ class ArtistImageLookupTests(unittest.TestCase):
         )
 
     def test_negative_cache_expires_after_thirty_days(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record = {"status": "not_found", "fetched_at": now - timedelta(days=29)}
         self.assertFalse(artist_images.is_stale(record, now))
         record["fetched_at"] = now - timedelta(days=31)
@@ -427,7 +427,7 @@ class ArtistImageLookupTests(unittest.TestCase):
         second = artist_images.track_cover_cache_key("Beyonce", "Halo")
         self.assertEqual(first, second)
         legacy_key = hashlib.sha256(
-            "beyonce\0halo".encode("utf-8")
+            b"beyonce\0halo"
         ).hexdigest()
         self.assertNotEqual(first[0], legacy_key)
 

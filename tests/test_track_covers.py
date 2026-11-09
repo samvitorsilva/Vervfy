@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
 import unittest
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -164,6 +164,16 @@ class TrackCoverApiTests(unittest.TestCase):
         self.assertEqual(oversized.status_code, 413)
         self.assertEqual(gif.status_code, 400)
         self.assertEqual(huge_dimensions.status_code, 400)
+
+    def test_rejects_executable_suffixes_and_extension_mismatch(self) -> None:
+        for filename in ("cover.php.png", "cover.jsp", "cover.jpg"):
+            with self.subTest(filename=filename):
+                response = self.client.put(
+                    "/api/tracks/owned-track/cover",
+                    files={"file": (filename, image_bytes("PNG"), "image/png")},
+                )
+                self.assertEqual(response.status_code, 400)
+        self.assertFalse(self.library.get("owned-track").has_cover)
 
     def test_cannot_change_another_users_track_and_delete_reverts(self) -> None:
         response = self.client.put(

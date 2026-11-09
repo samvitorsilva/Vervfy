@@ -1,7 +1,7 @@
 """Add the shared TheAudioDB URL cache and Storage paths for artist photos."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0016_audiodb_artist_images"
 down_revision = "0015_artist_photos"

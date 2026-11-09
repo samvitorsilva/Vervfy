@@ -58,10 +58,12 @@ def _wrap_errors(fn):
     def inner(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except StorageError:
-            raise
+        except StorageError as exc:
+            raise StorageError(_scrub(str(exc))[:300]) from None
         except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError) as exc:  # ValueError covers UnicodeError
-            raise StorageError(_scrub(f"{type(exc).__name__}: {exc}")[:300]) from exc
+            # Exception chains are logged by callers: never retain raw network
+            # errors, which can include credentials, signed URLs or response data.
+            raise StorageError(f"Storage request failed ({type(exc).__name__})") from None
 
     return inner
 
@@ -175,7 +177,7 @@ def upload(path: str, data: bytes | bytearray | memoryview, content_type: str = 
         },
     )
     if resp.status_code >= 300:
-        raise StorageError(f"upload failed ({resp.status_code}): {resp.text[:200]}")
+        raise StorageError(f"upload failed ({resp.status_code})")
 
 
 @_wrap_errors
@@ -204,7 +206,7 @@ def upload_file(path: str, file_path: str, content_type: str = "audio/mpeg") -> 
     )
     if response.status_code >= 300:
         raise StorageError(
-            f"upload failed ({response.status_code}): {response.text[:200]}"
+            f"upload failed ({response.status_code})"
         )
 
 
@@ -230,7 +232,7 @@ def create_signed_url(path: str, expires_in: int = 3600) -> str:
         )
         if response.status_code >= 300:
             raise StorageError(
-                f"signed URL creation failed ({response.status_code}): {response.text[:200]}"
+                f"signed URL creation failed ({response.status_code})"
             )
         payload = response.json()
         signed_path = payload.get("signedURL") if isinstance(payload, dict) else None
@@ -259,7 +261,7 @@ def delete(path: str) -> None:
     client = _client()
     resp = client.delete(_object_url(path))
     if resp.status_code >= 300 and resp.status_code != 404:
-        raise StorageError(f"delete failed ({resp.status_code}): {resp.text[:200]}")
+        raise StorageError(f"delete failed ({resp.status_code})")
 
 
 def delete_quietly(path: str | None) -> None:
@@ -268,7 +270,7 @@ def delete_quietly(path: str | None) -> None:
         return
     try:
         delete(path)
-    except Exception:  # noqa: BLE001 - cleanup must not break the request
+    except Exception:
         log.warning("could not delete storage object %s", path, exc_info=True)
 
 
@@ -289,7 +291,7 @@ def delete_many(paths: list[str]) -> None:
         )
         if resp.status_code >= 300:
             raise StorageError(
-                f"bulk delete failed ({resp.status_code}): {resp.text[:200]}"
+                f"bulk delete failed ({resp.status_code})"
             )
 
 
@@ -357,17 +359,13 @@ def download_to_file(path: str, destination: str, size: int) -> None:
 def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Response]:
     """Open a streaming ranged GET.  The caller must close both objects."""
     client = _client()
-    try:
-        request = client.build_request(
-            "GET", _object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"}
-        )
-        resp = client.send(request, stream=True)
-        if resp.status_code not in (200, 206):
-            body = resp.read()[:200]
-            resp.close()
-            raise StorageError(f"read failed ({resp.status_code}): {body!r}")
-    except Exception:
-        raise
+    request = client.build_request(
+        "GET", _object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"}
+    )
+    resp = client.send(request, stream=True)
+    if resp.status_code not in (200, 206):
+        resp.close()
+        raise StorageError(f"read failed ({resp.status_code})")
     return client, resp
 
 
@@ -383,7 +381,7 @@ def object_size(path: str) -> int | None:
         return int(match.group(1)) if match else None
     if resp.status_code == 200:
         return len(resp.content)
-    raise StorageError(f"stat failed ({resp.status_code}): {resp.text[:200]}")
+    raise StorageError(f"stat failed ({resp.status_code})")
 
 
 @_wrap_errors
@@ -392,3 +390,16 @@ def bucket_exists() -> bool:
     client = _client()
     resp = client.get(f"/bucket/{quote(bucket, safe='')}")
     return resp.status_code == 200
+
+
+@_wrap_errors
+def bucket_is_private() -> bool:
+    """Return whether the configured bucket is explicitly private."""
+    _, _, bucket = _settings()
+    response = _client().get(f"/bucket/{quote(bucket, safe='')}")
+    if response.status_code != 200:
+        raise StorageError(f"bucket verification failed ({response.status_code})")
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("public"), bool):
+        raise StorageError("bucket privacy could not be verified")
+    return not payload["public"]

@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
 import TermsContent from "@/components/terms-content";
+import { pageMetadata } from "@/lib/page-metadata";
 
-export const metadata: Metadata = {
-  title: "Terms and Conditions",
-  description: "Terms for using the Vervfy music library service.",
-};
+export const generateMetadata = () => pageMetadata("/terms");
 
 export default function TermsPage() {
   return <TermsContent />;

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -15,18 +16,26 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
-    Integer,
     Index,
+    Integer,
     LargeBinary,
     String,
     Text,
     UniqueConstraint,
     create_engine,
+    event,
     func,
     make_url,
+    text,
 )
-from sqlalchemy import event, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    mapped_column,
+    relationship,
+    sessionmaker,
+)
 
 
 def normalize_database_url(value: str) -> str:
@@ -103,7 +112,7 @@ class User(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     pending_email: Mapped[str | None] = mapped_column(String(320))
-    password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
     photo_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
     photo_mime: Mapped[str | None] = mapped_column(String(64))
@@ -112,6 +121,18 @@ class User(Base):
     # Preserve the existing route code's sqlite.Row-style access.
     def __getitem__(self, key: str):
         return getattr(self, key)
+
+
+class ProviderIdentity(Base):
+    """Authentication identity; email is deliberately not an identity key."""
+
+    __tablename__ = "provider_identities"
+    issuer: Mapped[str] = mapped_column(String(255), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class TrackRecord(Base):
@@ -230,7 +251,7 @@ class Playlist(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_played_at: Mapped[float | None] = mapped_column(Float, nullable=True)
-    tracks: Mapped[list["PlaylistTrack"]] = relationship(cascade="all, delete-orphan", order_by="PlaylistTrack.position")
+    tracks: Mapped[list[PlaylistTrack]] = relationship(cascade="all, delete-orphan", order_by="PlaylistTrack.position")
 
 
 class PlaylistTrack(Base):

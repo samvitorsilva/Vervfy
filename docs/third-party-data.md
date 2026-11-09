@@ -5,10 +5,13 @@
 - **Wikipedia**: artist biography summaries only. Show a link to the article,
   attribute the text to Wikipedia, link **CC BY-SA 4.0**, and identify text
   that has been shortened or adapted.
-- **LRCLIB**: optional lyrics lookup. The browser sends the `Lrclib-Client`
-  identifier, caches results locally for three days, and does not persist
-  fetched lyrics in the Vervfy database. Disable requests with
-  `LYRICS_PROVIDER_LRCLIB=0`. Lyrics may remain subject to rights held by their
+- **LRCLIB**: optional lyrics lookup. The browser calls the app's same-origin
+  proxy; the app server sends the `Lrclib-Client` identifier and track metadata
+  to LRCLIB. The browser caches results locally for three days, and fetched
+  lyrics are not persisted in the Vervfy database. Disable requests with
+  `LYRICS_PROVIDER_LRCLIB=0`. Commercial permission from LRCLIB has not been
+  confirmed; no response has been received. Do not treat API availability as
+  commercial authorization. Lyrics may remain subject to rights held by their
   respective owners; this integration does not grant a license to reproduce
   them commercially.
 - **MusicBrainz + Cover Art Archive**: track cover URLs only. Search recordings
@@ -39,6 +42,16 @@
   default. The current [pricing page](https://www.theaudiodb.com/pricing)
   lists €8/month for Single Developer, €20/month for Small Business, and
   separate request limits; verify current access and pricing before upgrading.
+
+  The maintainer reports this informal reply from TheAudioDB maintainer Zag:
+  “It's entirely up to you. Use our services as you like. Cheers, Zag.” The
+  date and channel were not supplied here. Preserve it as informal
+  correspondence, not a formal commercial licence, contractual grant, or
+  image-specific copyright clearance. The API guide permits direct display of
+  returned image URLs, but the reviewed guide does not state a clear
+  attribution requirement. Confirm applicable terms, attribution, commercial
+  use, and image rights with TheAudioDB and the relevant rights holders before
+  relying on the service commercially.
 
   **API permission is not an image copyright license.** The API guide's
   statement that returned image URLs may be displayed describes API use; it

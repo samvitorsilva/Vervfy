@@ -9,8 +9,8 @@ both import paths keep working.
 from __future__ import annotations
 
 from db import (
-    Base,
     DATABASE_URL,
+    Base,
     Favorite,
     Playlist,
     PlaylistTrack,
@@ -21,8 +21,8 @@ from db import (
 )
 
 __all__ = [
-    "Base",
     "DATABASE_URL",
+    "Base",
     "Favorite",
     "Playlist",
     "PlaylistTrack",

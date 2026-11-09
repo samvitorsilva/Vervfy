@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("VERVFY_SECRET_KEY", "test-only-vervfy-session-secret")
 
-import auth
 import library
 import server
 
@@ -181,10 +180,9 @@ class LazyAudioMigrationTests(unittest.TestCase):
                 library.audio_store,
                 "upload",
                 side_effect=library.audio_store.StorageError("storage failed"),
-            ),
+            ),self.assertRaises(library.audio_store.StorageError)
         ):
-            with self.assertRaises(library.audio_store.StorageError):
-                library.Library("user-a").ensure_audio_storage("track-id")
+            library.Library("user-a").ensure_audio_storage("track-id")
 
         self.assertEqual(session.execute.call_count, 1)
 

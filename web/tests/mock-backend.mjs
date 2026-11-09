@@ -77,7 +77,7 @@ function trackPayload(id, title) {
 function listeningPeriod(start, end) {
   const countsByTrack = new Map();
   for (const listen of listens) {
-    if (listen.playedAt < start || listen.playedAt > end) continue;
+    if (listen.playedAt < start || listen.playedAt >= end) continue;
     countsByTrack.set(listen.trackId, (countsByTrack.get(listen.trackId) ?? 0) + 1);
   }
 
@@ -220,6 +220,9 @@ const server = createServer(async (request, response) => {
       id: "playwright-user",
       username: "playwright",
       email: null,
+      has_password: true,
+      google_linked: false,
+      google_oauth_enabled: false,
       created_at: 1_700_000_000,
       photo_url: "/api/account/photo",
       track_count: tracks.length,
@@ -239,6 +242,11 @@ const server = createServer(async (request, response) => {
 
   if (!isAuthenticated(request)) {
     json(response, 401, { detail: "Not authenticated" });
+    return;
+  }
+
+  if (url.pathname === "/api/lyrics/authorize" && request.method === "GET") {
+    send(response, 204, "");
     return;
   }
 
@@ -331,6 +339,7 @@ const server = createServer(async (request, response) => {
     const asOf = Date.now() / 1000;
     const now = new Date(asOf * 1000);
     const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000;
+    const previousMonthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1) / 1000;
     const yearStart = Date.UTC(now.getUTCFullYear(), 0, 1) / 1000;
     const lastPlayedAt = {};
     for (const { trackId, playedAt } of listens) {
@@ -339,8 +348,10 @@ const server = createServer(async (request, response) => {
     json(response, 200, {
       lastPlayedAt,
       month: listeningPeriod(monthStart, asOf),
+      previousMonth: listeningPeriod(previousMonthStart, monthStart),
       year: listeningPeriod(yearStart, asOf),
       monthStart,
+      previousMonthStart,
       yearLabel: String(now.getUTCFullYear()),
       asOf,
     });

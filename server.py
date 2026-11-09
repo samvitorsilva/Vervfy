@@ -3,51 +3,84 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from io import BytesIO
-import json
 import asyncio
 import functools
 import hashlib
+import json
 import logging
-import mimetypes
 import os
 import re
 import secrets
-import time
 import tempfile
+import time
 import unicodedata
 import uuid
-from typing import Annotated, Literal
-from urllib.parse import quote, urlparse
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
+from typing import Annotated, Literal
+from urllib.parse import quote
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+import httpx
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import selectinload
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.sessions import SessionMiddleware
 
-from database import Base, engine
 import audio_store
 import auth
-from cover_art import schedule_cover_resolution
+import google_oauth
+import upload_queue
 from artist_images import (
     TheAudioDBQueue,
     artists_from_credit,
-    is_stale as artist_image_is_stale,
     normalize_artist_name,
 )
-from db import ArtistImage, ArtistPhoto, Favorite, Playlist, PlaylistTrack, SessionLocal, TrackListen, TrackRecord, UploadJob, User, tenant_session
-from library import AudioUnavailableError, Library, UploadQuotaExceeded, track_id_for_file
-import upload_queue
+from artist_images import (
+    is_stale as artist_image_is_stale,
+)
+from cover_art import schedule_cover_resolution
+from database import Base, engine
+from db import (
+    ArtistImage,
+    ArtistPhoto,
+    Favorite,
+    Playlist,
+    PlaylistTrack,
+    ProviderIdentity,
+    SessionLocal,
+    TrackListen,
+    TrackRecord,
+    UploadJob,
+    User,
+    tenant_session,
+)
+from library import (
+    AUDIO_EXTENSIONS,
+    EXECUTABLE_UPLOAD_SUFFIXES,
+    AudioUnavailableError,
+    Library,
+    UploadQuotaExceeded,
+    track_id_for_file,
+)
+from request_limits import RequestSizeLimitMiddleware
 
 ArtistProfileLanguage = Literal["en", "pt-BR", "fr", "es"]
 
@@ -105,6 +138,8 @@ app = FastAPI(
 
 def close_audio_store() -> None:
     audio_store.close_client()
+    if google_oauth_service is not None:
+        google_oauth_service.close()
 
 
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
@@ -143,6 +178,18 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
+MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
+MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
+MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
+# Keep the streaming guard inside the HTTP middleware so receive exceptions
+# reach FastAPI directly, without an intervening task-group exception wrapper.
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    audio_bytes=MAX_UPLOAD_BYTES,
+    image_bytes=MAX_TRACK_COVER_BYTES,
+    overhead=MULTIPART_UPLOAD_OVERHEAD_BYTES,
+)
+
 UPLOADS_PER_10MIN = int(os.environ.get("VERVFY_UPLOADS_PER_10MIN", "60"))
 UPLOAD_CONCURRENCY = max(1, int(os.environ.get("VERVFY_UPLOAD_CONCURRENCY", "2")))
 upload_processing_semaphore = asyncio.Semaphore(UPLOAD_CONCURRENCY)
@@ -158,10 +205,33 @@ def limit_upload_processing(handler):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
-        path = request.url.path
+    path = request.url.path
+    if path in {
+        "/api/auth/google/start",
+        "/api/auth/google/callback",
+    }:
+        try:
+            allowed = await run_in_threadpool(
+                request_throttle.allow,
+                f"auth:{auth.client_ip(request)}:{path}",
+                30,
+                15 * 60,
+            )
+        except RuntimeError:
+            return JSONResponse(
+                {"detail": "Rate-limit service unavailable"},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        if not allowed:
+            return JSONResponse(
+                {"detail": "Too many requests"},
+                status_code=429,
+                headers={"Retry-After": "900", "Cache-Control": "no-store"},
+            )
+    elif request.method in {"POST", "PUT", "DELETE", "PATCH"}:
         if path.startswith("/api/"):
-            is_upload = path == "/api/library/upload" or (
+            is_upload = path in {"/api/library/upload", "/api/account/photo"} or (
                 request.method == "PUT"
                 and (path.endswith("/cover") or path == "/api/artists/photo")
             )
@@ -183,7 +253,10 @@ async def add_security_headers(request: Request, call_next):
                     status_code=429,
                     headers={"Retry-After": str(window)},
                 )
-        elif path in {"/login", "/register"}:
+        elif path in {
+            "/login",
+            "/register",
+        }:
             try:
                 allowed = await run_in_threadpool(
                     request_throttle.allow,
@@ -235,17 +308,34 @@ audiodb_queue = TheAudioDBQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
+google_oauth_config = google_oauth.GoogleOAuthConfig.from_environment()
+if google_oauth_config is not None and configured_same_site != "lax":
+    raise RuntimeError("Google OAuth requires VERVFY_COOKIE_SAME_SITE=lax")
+google_oauth_service = (
+    google_oauth.GoogleOAuthService(google_oauth_config)
+    if google_oauth_config is not None
+    else None
+)
 log = logging.getLogger("vervfy")
-MAX_UPLOAD_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
-MULTIPART_UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_PROFILE_PHOTO_DIMENSION = 8192
 MAX_PROFILE_PHOTO_PIXELS = 12_000_000
-MAX_TRACK_COVER_BYTES = 5 * 1024 * 1024
 MAX_TRACK_COVER_DIMENSION = 8192
 MAX_TRACK_COVER_PIXELS = 12_000_000
+IMAGE_UPLOAD_FORMATS = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".png": "PNG",
+    ".webp": "WEBP",
+    ".gif": "GIF",
+}
+STATIC_IMAGE_UPLOAD_FORMATS = {
+    extension: image_format
+    for extension, image_format in IMAGE_UPLOAD_FORMATS.items()
+    if image_format != "GIF"
+}
 MAX_ARTIST_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_ARTIST_PHOTO_DIMENSION = 800
 MAX_ARTIST_PROFILE_CACHE_ENTRIES = 1024
@@ -849,7 +939,7 @@ _WIKI_TITLE_QUALIFIER = re.compile(
     r"\s*\((?:singer(?:-songwriter)?|rapper|band|musician|group|dj|composer|"
     r"vocalist|music(?:al)?\s+group|recording\s+artist|actor|actress|actriz|"
     r"ator|atriz|acteur|actrice)\)\s*$",
-    re.I,
+    re.IGNORECASE,
 )
 _WIKIPEDIA_ARTIST_TITLE_ALIASES = {
     "theneighborhood": {"theneighbourhood"},
@@ -860,28 +950,28 @@ _MUSIC_PERSON_HINT = re.compile(
     r"rappers?|bands?|groups?|vocalists?|composers?|djs?|producers?|"
     r"orchestras?|ensembles?|recording\s+artists?|hip[\s-]?hop|"
     r"r&b|rhythm\s+and\s+blues|pop\s+stars?|rock\s+bands?)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _MUSIC_PERSON_HINT_PT = re.compile(
     r"\b(?:m[uú]sic[oa]s?|cantor(?:a|as|es)?|compositor(?:a|as|es)?|"
     r"rapper(?:s)?|banda(?:s)?|grupo(?:s)?|vocalista(?:s)?|"
     r"produtor(?:a|es)?|artista(?:s)?|pop|rock|hip[\s-]?hop|"
     r"gospel|afrobeat|cantautores?)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _MUSIC_PERSON_HINT_FR = re.compile(
     r"\b(?:musicien(?:ne|s)?|chanteu(?:r|se|rs|ses)|compositeur(?:ice|s)?|"
     r"rappeur(?:se|s|ses)?|groupe(?:s)?|guitariste(?:s)?|artiste(?:s)?|"
     r"producteur(?:rice|s|rices)?|orchestre(?:s)?|ensemble(?:s)?|"
     r"hip[\s-]?hop|r&b|rock|pop)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _MUSIC_PERSON_HINT_ES = re.compile(
     r"\b(?:m[uú]sico(?:s)?|cantant(?:e|es)|compositor(?:a|es)?|"
     r"rapero(?:a|s|as)?|banda(?:s)?|grupo(?:s)?|vocalista(?:s)?|"
     r"productor(?:a|es)?|artista(?:s)?|orquesta(?:s)?|"
     r"hip[\s-]?hop|r&b|rock|pop)\b",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -1114,7 +1204,33 @@ def _delete_artist_photo(user_id: str, normalized_name: str) -> str | None:
     return storage_path
 
 
-def _normalize_artist_photo(data: bytes) -> tuple[bytes, bool]:
+def _has_executable_upload_suffix(filename: str) -> bool:
+    return any(
+        suffix.lower() in EXECUTABLE_UPLOAD_SUFFIXES
+        for suffix in Path(filename.replace("\\", "/")).suffixes
+    )
+
+
+def _image_upload_format(
+    filename: str,
+    allowed_formats: dict[str, str],
+) -> str:
+    safe_name = os.path.basename(filename.replace("\\", "/"))
+    suffixes = Path(safe_name).suffixes
+    if (
+        not safe_name
+        or len(safe_name) > 255
+        or _has_executable_upload_suffix(safe_name)
+        or not suffixes
+        or suffixes[-1].lower() not in allowed_formats
+    ):
+        raise HTTPException(status_code=400, detail="Unsupported image filename or format")
+    return allowed_formats[suffixes[-1].lower()]
+
+
+def _normalize_artist_photo(
+    data: bytes, expected_format: str | None = None
+) -> tuple[bytes, bool]:
     if not data:
         raise HTTPException(status_code=400, detail="Empty image upload")
     try:
@@ -1124,6 +1240,8 @@ def _normalize_artist_photo(data: bytes) -> tuple[bytes, bool]:
                     status_code=400,
                     detail="Artist photo must be a JPEG, PNG, or WebP image",
                 )
+            if expected_format is not None and image.format != expected_format:
+                raise HTTPException(status_code=400, detail="Image extension does not match its content")
             width, height = image.size
             if (
                 width <= 0
@@ -1233,84 +1351,57 @@ def _track_payload(track) -> dict:
     }
 
 
+def _require_migrated_schema() -> None:
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    missing_schema = {}
+    required_columns = {
+        "users": set(),
+        "tracks": {"cover_url"},
+        "upload_jobs": {"cover_data"},
+    }
+    for table, expected_columns in required_columns.items():
+        if not inspector.has_table(table):
+            missing_schema[table] = sorted(expected_columns) or ["<table>"]
+            continue
+        existing_columns = (
+            {column["name"] for column in inspector.get_columns(table)}
+        )
+        missing = expected_columns - existing_columns
+        if missing:
+            missing_schema[table] = sorted(missing)
+    if missing_schema:
+        raise RuntimeError(
+            "Database schema is incomplete for this application "
+            f"(missing_tables_or_columns={missing_schema}); inspect and migrate "
+            "it with `alembic upgrade head` using the authorized migration "
+            "connection before starting Vervfy."
+        )
+
+
+def _require_private_upload_storage() -> None:
+    if audio_store.enabled() and not audio_store.bucket_is_private():
+        raise RuntimeError(
+            "Configured Supabase Storage bucket must be explicitly private"
+        )
+
+
 def startup() -> None:
     if is_production:
         if not audio_store.enabled():
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SERVICE_KEY are required in production"
             )
+        _require_private_upload_storage()
         if "VERVFY_TRUSTED_PROXY_HOPS" not in os.environ:
             log.warning(
                 "VERVFY_TRUSTED_PROXY_HOPS is unset in production; rate limits may use the proxy IP"
             )
         app.state.is_first_account = user_store.count() == 0
         return
-    # create_all does not add columns to an existing deployment. Keep older
-    # databases usable while Alembic catches up on the next deployment.
-    from sqlalchemy import inspect, text
-
-    Base.metadata.create_all(engine)
-    existing_columns = {column["name"] for column in inspect(engine).get_columns("users")}
-    with engine.begin() as connection:
-        if "photo_data" not in existing_columns:
-            photo_type = "BYTEA" if engine.dialect.name == "postgresql" else "BLOB"
-            connection.execute(text(f"ALTER TABLE users ADD COLUMN photo_data {photo_type}"))
-        if "photo_mime" not in existing_columns:
-            connection.execute(text("ALTER TABLE users ADD COLUMN photo_mime VARCHAR(64)"))
-        if "session_version" not in existing_columns:
-            connection.execute(text("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0"))
-        if "email_verified" not in existing_columns:
-            connection.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE"))
-        if "pending_email" not in existing_columns:
-            connection.execute(text("ALTER TABLE users ADD COLUMN pending_email VARCHAR(320)"))
-        existing_track_columns = {column["name"] for column in inspect(engine).get_columns("tracks")}
-        if "size_bytes" not in existing_track_columns:
-            connection.execute(text("ALTER TABLE tracks ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0"))
-        if "storage_path" not in existing_track_columns:
-            connection.execute(text("ALTER TABLE tracks ADD COLUMN storage_path VARCHAR(600)"))
-        if "cover_path" not in existing_track_columns:
-            connection.execute(text("ALTER TABLE tracks ADD COLUMN cover_path VARCHAR(600)"))
-        if "cover_source" not in existing_track_columns:
-            connection.execute(
-                text(
-                    "ALTER TABLE tracks ADD COLUMN cover_source "
-                    "VARCHAR(20) NOT NULL DEFAULT 'unknown'"
-                )
-            )
-            connection.execute(text("UPDATE tracks SET cover_source = 'unknown'"))
-        connection.execute(text(
-            "UPDATE tracks SET cover_source = 'embedded' "
-            "WHERE cover_source = 'unknown' AND has_cover IS TRUE"
-        ))
-        existing_playlist_columns = {column["name"] for column in inspect(engine).get_columns("playlists")}
-        if "position" not in existing_playlist_columns:
-            connection.execute(text("ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0"))
-        if "last_played_at" not in existing_playlist_columns:
-            connection.execute(text("ALTER TABLE playlists ADD COLUMN last_played_at FLOAT"))
-        existing_artist_photo_columns = {
-            column["name"] for column in inspect(engine).get_columns("artist_photos")
-        }
-        if "storage_path" not in existing_artist_photo_columns:
-            connection.execute(
-                text("ALTER TABLE artist_photos ADD COLUMN storage_path VARCHAR(600)")
-            )
-        if engine.dialect.name == "postgresql":
-            audio_data_col = next(
-                (c for c in inspect(engine).get_columns("tracks") if c["name"] == "audio_data"),
-                None,
-            )
-            if audio_data_col is not None and not audio_data_col.get("nullable", True):
-                # Audio moved to Supabase Storage, so the blob column may now be empty.
-                connection.execute(text("ALTER TABLE tracks ALTER COLUMN audio_data DROP NOT NULL"))
-            cover_data_col = next(
-                (c for c in inspect(engine).get_columns("tracks") if c["name"] == "cover_data"),
-                None,
-            )
-            if cover_data_col is not None and not cover_data_col.get("nullable", True):
-                connection.execute(text("ALTER TABLE tracks ALTER COLUMN cover_data DROP NOT NULL"))
-            connection.execute(text(
-                "UPDATE tracks SET size_bytes = length(audio_data) WHERE size_bytes = 0 AND audio_data IS NOT NULL"
-            ))
+    _require_migrated_schema()
+    _require_private_upload_storage()
     app.state.is_first_account = user_store.count() == 0
 
 
@@ -1369,6 +1460,450 @@ def login_submit(
     request.session["sv"] = row["session_version"]
     request.session["sid"] = session_id
     return RedirectResponse("/", status_code=303)
+
+
+def _google_oauth_unavailable() -> JSONResponse:
+    return JSONResponse(
+        {"detail": "Google sign-in is temporarily unavailable"},
+        status_code=503,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+def _google_oauth_failed(
+    config: google_oauth.GoogleOAuthConfig,
+    purpose: str = "login",
+    *,
+    clear_browser_binding: bool = True,
+) -> Response:
+    if purpose == "signup":
+        destination = "/register?google=failed"
+    elif purpose == "link":
+        destination = "/?view=account&google_link=failed"
+    elif purpose not in {"login", "signup"}:
+        destination = f"/?view=account&google_reauth=failed&google_action={purpose}"
+    else:
+        destination = "/login?google=failed"
+    response = RedirectResponse(destination, status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if clear_browser_binding:
+        response.delete_cookie(
+            config.browser_cookie_name,
+            path="/",
+            secure=config.cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+    return response
+
+
+def _google_browser_binding(request: Request, config) -> str:
+    value = request.cookies.get(config.browser_cookie_name, "")
+    if len(value) < 32 or len(value) > 256:
+        return secrets.token_urlsafe(32)
+    return value
+
+
+def _set_google_browser_cookie(response: Response, config, binding: str) -> None:
+    response.set_cookie(
+        config.browser_cookie_name,
+        binding,
+        max_age=google_oauth.TRANSACTION_TTL_SECONDS,
+        path="/",
+        secure=config.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _clear_google_browser_cookie(response: Response, config) -> None:
+    response.delete_cookie(
+        config.browser_cookie_name,
+        path="/",
+        secure=config.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+@app.get("/api/auth/google/start", include_in_schema=False)
+async def google_oauth_start(
+    request: Request, purpose: str = Query("login")
+) -> Response:
+    service = google_oauth_service
+    config = google_oauth_config
+    if service is None or config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if purpose not in {"login", "signup"}:
+        raise HTTPException(status_code=400, detail="Invalid Google sign-in flow")
+    browser_binding = _google_browser_binding(request, config)
+    try:
+        authorization_url = await service.create_authorization_url(
+            browser_binding, purpose=purpose
+        )
+    except (
+        google_oauth.OAuthBackendUnavailable,
+        google_oauth.GoogleProviderError,
+        google_oauth.OAuthTransactionError,
+    ):
+        return _google_oauth_unavailable()
+    response = RedirectResponse(authorization_url, status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    _set_google_browser_cookie(response, config, browser_binding)
+    return response
+
+
+class GoogleLinkStartRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class GoogleReauthStartRequest(BaseModel):
+    purpose: Literal[
+        "password_add", "email_change", "account_delete", "logout_all"
+    ]
+
+
+class GoogleOnboardingRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+
+
+class GoogleUnlinkRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+async def _start_account_google_flow(
+    request: Request,
+    config,
+    service,
+    *,
+    purpose: str,
+    user: User,
+    issued_password_at: int | None = None,
+) -> JSONResponse:
+    session_id = request.session.get("sid")
+    session_version = request.session.get("sv")
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or not isinstance(session_version, int)
+        or isinstance(session_version, bool)
+        or session_version != user.session_version
+    ):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    context: dict[str, object] = {
+        "user_id": user.id,
+        "session_id": session_id,
+        "session_version": session_version,
+    }
+    if issued_password_at is not None:
+        context["password_verified_at"] = issued_password_at
+    binding = _google_browser_binding(request, config)
+    try:
+        authorization_url = await service.create_authorization_url(
+            binding, purpose=purpose, context=context
+        )
+    except (
+        google_oauth.OAuthBackendUnavailable,
+        google_oauth.GoogleProviderError,
+        google_oauth.OAuthTransactionError,
+    ):
+        return _google_oauth_unavailable()
+    response = JSONResponse(
+        {"authorization_url": authorization_url},
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+    _set_google_browser_cookie(response, config, binding)
+    return response
+
+
+@app.post("/api/account/google/link/start")
+async def google_account_link_start(
+    payload: GoogleLinkStartRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> Response:
+    service = google_oauth_service
+    config = google_oauth_config
+    if service is None or config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        security = await run_in_threadpool(
+            user_store.account_security, user["id"]
+        )
+    except (SQLAlchemyError, ValueError):
+        return _google_oauth_unavailable()
+    if not security["has_password"]:
+        raise HTTPException(
+            status_code=400, detail="A password is required before linking Google"
+        )
+    if security["google_linked"]:
+        raise HTTPException(status_code=409, detail="A Google account is already linked")
+    verify_current_password(user, payload.current_password)
+    return await _start_account_google_flow(
+        request,
+        config,
+        service,
+        purpose="link",
+        user=user,
+        issued_password_at=int(time.time()),
+    )
+
+
+@app.post("/api/account/google/reauth/start")
+async def google_account_reauth_start(
+    payload: GoogleReauthStartRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> Response:
+    service = google_oauth_service
+    config = google_oauth_config
+    if service is None or config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        security = await run_in_threadpool(
+            user_store.account_security, user["id"]
+        )
+    except (SQLAlchemyError, ValueError):
+        return _google_oauth_unavailable()
+    if security["has_password"] or not security["google_linked"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Google reauthentication is not available for this account",
+        )
+    return await _start_account_google_flow(
+        request, config, service, purpose=payload.purpose, user=user
+    )
+
+
+@app.post("/api/auth/google/onboarding")
+def google_account_onboarding(
+    payload: GoogleOnboardingRequest,
+    request: Request,
+    _csrf=Depends(auth.verify_api_csrf),
+) -> Response:
+    service = google_oauth_service
+    config = google_oauth_config
+    if service is None or config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    username_error = auth.validate_username(payload.username)
+    if username_error:
+        raise HTTPException(status_code=400, detail=username_error)
+    ip = auth.client_ip(request)
+    try:
+        if signup_throttle.is_limited(ip):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many sign-ups from this network. Try again later.",
+            )
+        binding = request.cookies.get(config.browser_cookie_name, "")
+        pending = service.consume_pending_signup(binding)
+        if (
+            not isinstance(pending, dict)
+            or pending.get("issuer") != google_oauth.GOOGLE_ISSUER
+            or not isinstance(pending.get("subject"), str)
+        ):
+            raise HTTPException(
+                status_code=400, detail="Google sign-up expired; start again"
+            )
+        email = pending.get("email")
+        if email is not None and (
+            not isinstance(email, str) or auth.validate_email(email)
+        ):
+            raise HTTPException(
+                status_code=400, detail="Google sign-up could not be completed"
+            )
+        new_user = user_store.create_google_user(
+            payload.username, email, pending["subject"]
+        )
+        signup_throttle.record_success(ip)
+        request.app.state.is_first_account = False
+        user = user_store.get_by_id(new_user["id"])
+        if user is None:
+            return _google_oauth_unavailable()
+        session_id = session_store.create(user["id"])
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        if not service.store_pending_signup(
+            binding,
+            {"sub": pending["subject"], "email": pending.get("email"),
+             "email_verified": pending.get("email") is not None},
+        ):
+            return _google_oauth_unavailable()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (SQLAlchemyError, RuntimeError):
+        return _google_oauth_unavailable()
+    request.session.clear()
+    request.session["user_id"] = user["id"]
+    request.session["sv"] = user["session_version"]
+    request.session["sid"] = session_id
+    response = RedirectResponse("/", status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    _clear_google_browser_cookie(response, config)
+    return response
+
+
+@app.get("/api/auth/google/callback", include_in_schema=False)
+async def google_oauth_callback(request: Request) -> Response:
+    service = google_oauth_service
+    config = google_oauth_config
+    if service is None or config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    state = request.query_params.get("state", "")
+    browser_binding = request.cookies.get(config.browser_cookie_name, "")
+    if not state or not browser_binding:
+        return JSONResponse(
+            {"detail": "Google sign-in could not be completed"},
+            status_code=400,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+    try:
+        transaction = await service.consume_transaction(state, browser_binding)
+    except google_oauth.OAuthBackendUnavailable:
+        return _google_oauth_unavailable()
+    except google_oauth.OAuthTransactionError:
+        return _google_oauth_failed(config, clear_browser_binding=False)
+    purpose = transaction.get("purpose", "login")
+
+    if request.query_params.get("error") or not request.query_params.get("code"):
+        return _google_oauth_failed(config, purpose)
+    try:
+        claims = await service.exchange_and_validate(
+            request.query_params["code"], transaction
+        )
+    except google_oauth.GoogleTokenError:
+        return _google_oauth_failed(config, purpose)
+    except (
+        google_oauth.GoogleProviderError,
+        google_oauth.OAuthBackendUnavailable,
+    ):
+        return _google_oauth_unavailable()
+
+    try:
+        user_id = await run_in_threadpool(service.lookup_identity, claims)
+        if purpose == "signup" and user_id is None:
+            if not service.store_pending_signup(browser_binding, claims):
+                return _google_oauth_failed(config, purpose)
+            response = RedirectResponse("/register?google=complete", status_code=303)
+            _set_google_browser_cookie(response, config, browser_binding)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        if purpose in {"login", "signup"}:
+            if not user_id:
+                return _google_oauth_failed(config, purpose)
+            user = await run_in_threadpool(user_store.get_by_id, user_id)
+            if user is None:
+                return _google_oauth_failed(config, purpose)
+            old_session_id = request.session.get("sid")
+            if isinstance(old_session_id, str) and old_session_id:
+                await run_in_threadpool(session_store.revoke, old_session_id)
+            session_id = await run_in_threadpool(session_store.create, user["id"])
+            request.session.clear()
+            request.session["user_id"] = user["id"]
+            request.session["sv"] = user["session_version"]
+            request.session["sid"] = session_id
+            response = RedirectResponse("/", status_code=303)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            _clear_google_browser_cookie(response, config)
+            return response
+
+        user = current_user_row(request)
+        expected_user_id = transaction.get("user_id")
+        expected_session_id = transaction.get("session_id")
+        expected_version = transaction.get("session_version")
+        if (
+            user is None
+            or user["id"] != expected_user_id
+            or request.session.get("sid") != expected_session_id
+            or request.session.get("sv") != expected_version
+            or (
+                purpose == "link"
+                and user_id is not None
+            )
+            or (
+                purpose != "link"
+                and (not isinstance(user_id, str) or user_id != user["id"])
+            )
+        ):
+            return _google_oauth_failed(config, purpose)
+        auth_time = service.require_fresh_authentication(claims)
+        if purpose == "link":
+            password_verified_at = transaction.get("password_verified_at")
+            if (
+                not isinstance(password_verified_at, int)
+                or isinstance(password_verified_at, bool)
+                or time.time() - password_verified_at
+                > google_oauth.FRESH_AUTH_MAX_AGE_SECONDS
+                or password_verified_at > time.time() + google_oauth.CLOCK_SKEW_SECONDS
+            ):
+                return _google_oauth_failed(config, purpose)
+            session_version = await run_in_threadpool(
+                user_store.link_google_identity, user["id"], claims["sub"]
+            )
+            await run_in_threadpool(session_store.revoke_user, user["id"])
+            session_id = await run_in_threadpool(session_store.create, user["id"])
+            request.session.clear()
+            request.session["user_id"] = user["id"]
+            request.session["sv"] = session_version
+            request.session["sid"] = session_id
+            response = RedirectResponse(
+                "/?view=account&google_link=success", status_code=303
+            )
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            _clear_google_browser_cookie(response, config)
+            return response
+
+        if purpose not in {
+            "password_add",
+            "email_change",
+            "account_delete",
+            "logout_all",
+        }:
+            return _google_oauth_failed(config, purpose)
+        security = await run_in_threadpool(
+            user_store.account_security, user["id"]
+        )
+        if security["has_password"] or not security["google_linked"]:
+            return _google_oauth_failed(config, purpose)
+        proof = {
+            "purpose": purpose,
+            "user_id": user["id"],
+            "session_id": expected_session_id,
+            "session_version": expected_version,
+            "auth_time": auth_time,
+            "verified_at": int(time.time()),
+        }
+        if not await run_in_threadpool(
+            service.store_reauthentication_proof,
+            expected_session_id,
+            purpose,
+            proof,
+        ):
+            return _google_oauth_failed(config, purpose)
+        response = RedirectResponse(
+            f"/?view=account&google_reauth=success&google_action={purpose}",
+            status_code=303,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        _clear_google_browser_cookie(response, config)
+        return response
+    except google_oauth.GoogleTokenError:
+        return _google_oauth_failed(config, purpose)
+    except ValueError:
+        return _google_oauth_failed(config, purpose)
+    except (SQLAlchemyError, RuntimeError, google_oauth.OAuthBackendUnavailable):
+        return _google_oauth_unavailable()
+    return _google_oauth_failed(config, purpose)
 
 
 @app.post("/register")
@@ -1443,10 +1978,13 @@ def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
 
 @app.get("/api/me")
 def api_me(user=Depends(require_api_user)) -> dict:
+    security = user_store.account_security(user["id"])
     return {
         "id": user["id"],
         "username": user["username"],
         "email": user["email"],
+        **security,
+        "google_oauth_enabled": google_oauth_service is not None,
         "created_at": user["created_at"],
         "photo_url": (
             f"/api/account/photo?v={int(user['created_at'])}"
@@ -1470,6 +2008,7 @@ def account_photo(user=Depends(require_api_user)) -> Response:
 
 
 @app.post("/api/account/photo")
+@limit_upload_processing
 async def upload_account_photo(
     request: Request,
     file: UploadFile = File(...),
@@ -1478,15 +2017,20 @@ async def upload_account_photo(
     auth.verify_api_csrf(request)
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Choose an image file")
+    expected_format = _image_upload_format(file.filename or "", IMAGE_UPLOAD_FORMATS)
     photo_data = await file.read(MAX_PROFILE_PHOTO_BYTES + 1)
     if len(photo_data) > MAX_PROFILE_PHOTO_BYTES:
         raise HTTPException(status_code=413, detail="Profile photo must be 5 MB or smaller")
-    photo_mime = await run_in_threadpool(_validate_profile_photo, photo_data)
+    photo_mime = await run_in_threadpool(
+        _validate_profile_photo, photo_data, expected_format
+    )
     await run_in_threadpool(user_store.update_profile_photo, user["id"], photo_data, photo_mime)
     return {"photo_url": "/api/account/photo"}
 
 
-def _validate_profile_photo(photo_data: bytes) -> str:
+def _validate_profile_photo(
+    photo_data: bytes, expected_format: str | None = None
+) -> str:
     try:
         with Image.open(BytesIO(photo_data)) as image:
             width, height = image.size
@@ -1503,6 +2047,12 @@ def _validate_profile_photo(photo_data: bytes) -> str:
                 )
             image.verify()
             image_format = (image.format or "").upper()
+        # JPEG verify() checks headers, not the compressed pixel stream.
+        # Decode it before accepting bytes that browsers may fail to display.
+        with Image.open(BytesIO(photo_data)) as image:
+            image.load()
+            if expected_format is not None and image.format != expected_format:
+                raise HTTPException(status_code=400, detail="Image extension does not match its content")
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
         raise HTTPException(status_code=400, detail="That file is not a valid image") from None
     allowed_formats = {
@@ -1534,18 +2084,22 @@ def api_csrf(request: Request) -> Response:
 
 
 class PasswordChangeRequest(BaseModel):
-    current_password: str
+    current_password: str | None = None
     new_password: str
 
 
 class EmailChangeRequest(BaseModel):
     email: str = Field(max_length=320)
-    current_password: str
+    current_password: str | None = None
 
 
 class AccountDeletionRequest(BaseModel):
-    current_password: str
+    current_password: str | None = None
     confirmation: str
+
+
+class LogoutAllRequest(BaseModel):
+    current_password: str | None = None
 
 
 class TrackLyricsRequest(BaseModel):
@@ -1646,7 +2200,23 @@ def _library_state(user_id: str) -> dict:
         return _library_state_from_session(user_id, session)
 
 
-def _listening_period_summary(session, user_id: str, start: float) -> dict:
+def _listening_period_summary(
+    session,
+    user_id: str,
+    start: float,
+    end: float | None = None,
+    end_inclusive: bool = False,
+) -> dict:
+    listen_period = [
+        TrackListen.user_id == user_id,
+        TrackListen.played_at >= start,
+    ]
+    if end is not None:
+        listen_period.append(
+            TrackListen.played_at <= end
+            if end_inclusive
+            else TrackListen.played_at < end
+        )
     rows = session.execute(
         select(
             TrackListen.track_id,
@@ -1658,7 +2228,7 @@ def _listening_period_summary(session, user_id: str, start: float) -> dict:
             (TrackRecord.id == TrackListen.track_id)
             & (TrackRecord.user_id == TrackListen.user_id),
         )
-        .where(TrackListen.user_id == user_id, TrackListen.played_at >= start)
+        .where(*listen_period)
         .group_by(TrackListen.track_id, TrackRecord.artist)
         .order_by(func.count(TrackListen.id).desc())
     ).all()
@@ -1682,9 +2252,15 @@ def _listening_period_summary(session, user_id: str, start: float) -> dict:
 
 
 def _listening_summary(user_id: str) -> dict:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_month_start = (
+        month_start.replace(year=month_start.year - 1, month=12)
+        if month_start.month == 1
+        else month_start.replace(month=month_start.month - 1)
+    )
     year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    as_of = now.timestamp()
     with tenant_session(user_id) as session:
         last_played = session.execute(
             select(TrackListen.track_id, func.max(TrackListen.played_at))
@@ -1694,12 +2270,21 @@ def _listening_summary(user_id: str) -> dict:
         return {
             "lastPlayedAt": {track_id: played_at for track_id, played_at in last_played},
             "month": _listening_period_summary(
-                session, user_id, month_start.timestamp()
+                session, user_id, month_start.timestamp(), as_of, end_inclusive=True
             ),
-            "year": _listening_period_summary(session, user_id, year_start.timestamp()),
+            "previousMonth": _listening_period_summary(
+                session,
+                user_id,
+                previous_month_start.timestamp(),
+                month_start.timestamp(),
+            ),
+            "year": _listening_period_summary(
+                session, user_id, year_start.timestamp(), as_of, end_inclusive=True
+            ),
             "monthStart": month_start.timestamp(),
+            "previousMonthStart": previous_month_start.timestamp(),
             "yearLabel": str(now.year),
-            "asOf": now.timestamp(),
+            "asOf": as_of,
         }
 
 
@@ -1742,22 +2327,108 @@ def verify_current_password(user: User, password: str) -> None:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
 
+def verify_google_action_proof(
+    request: Request, user: User, purpose: str
+) -> None:
+    service = google_oauth_service
+    session_id = request.session.get("sid")
+    session_version = request.session.get("sv")
+    if (
+        service is None
+        or not isinstance(session_id, str)
+        or not session_id
+        or not isinstance(session_version, int)
+        or isinstance(session_version, bool)
+        or session_version != user["session_version"]
+    ):
+        raise HTTPException(status_code=403, detail="Recent Google verification required")
+    try:
+        proof = service.consume_reauthentication_proof(session_id, purpose)
+    except google_oauth.OAuthBackendUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="Authentication service temporarily unavailable"
+        ) from exc
+    if not isinstance(proof, dict):
+        raise HTTPException(status_code=403, detail="Recent Google verification required")
+    now = int(time.time())
+    verified_at = proof.get("verified_at")
+    auth_time = proof.get("auth_time")
+    if (
+        proof.get("purpose") != purpose
+        or proof.get("user_id") != user["id"]
+        or proof.get("session_id") != session_id
+        or proof.get("session_version") != session_version
+        or isinstance(verified_at, bool)
+        or not isinstance(verified_at, int)
+        or now - verified_at > google_oauth.CREDENTIAL_PROOF_TTL_SECONDS
+        or verified_at > now + google_oauth.CLOCK_SKEW_SECONDS
+        or isinstance(auth_time, bool)
+        or not isinstance(auth_time, int)
+        or now - auth_time > google_oauth.FRESH_AUTH_MAX_AGE_SECONDS
+        or auth_time > now + google_oauth.CLOCK_SKEW_SECONDS
+    ):
+        raise HTTPException(status_code=403, detail="Recent Google verification required")
+
+
+def verify_account_action(
+    request: Request,
+    user: User,
+    purpose: str,
+    current_password: str | None,
+) -> None:
+    if user["password_hash"] is not None:
+        if not current_password:
+            raise HTTPException(status_code=400, detail="Current password is required")
+        verify_current_password(user, current_password)
+        return
+    try:
+        security = user_store.account_security(user["id"])
+    except (SQLAlchemyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Authentication service temporarily unavailable"
+        ) from exc
+    if not security["google_linked"]:
+        raise HTTPException(status_code=403, detail="A usable sign-in method is required")
+    verify_google_action_proof(request, user, purpose)
+
+
+def rotate_authenticated_session(
+    request: Request, user_id: str, session_version: int
+) -> None:
+    try:
+        session_store.revoke_user(user_id)
+        session_id = session_store.create(user_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Account updated, but session rotation failed; sign in again",
+        ) from exc
+    request.session.clear()
+    request.session["user_id"] = user_id
+    request.session["sv"] = session_version
+    request.session["sid"] = session_id
+
+
 @app.put("/api/account/email")
 def change_account_email(
     payload: EmailChangeRequest,
+    request: Request,
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    verify_current_password(user, payload.current_password)
+    verify_account_action(
+        request, user, "email_change", payload.current_password
+    )
     email = payload.email.strip().lower()
     if email:
         error = auth.validate_email(email)
         if error:
             raise HTTPException(status_code=400, detail=error)
     try:
-        user_store.update_email(user["id"], email or None)
+        session_version = user_store.update_email(user["id"], email or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    rotate_authenticated_session(request, user["id"], session_version)
     return {"email": email or None}
 
 
@@ -1768,24 +2439,64 @@ def change_password(
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    verify_current_password(user, payload.current_password)
+    purpose = (
+        "password_add"
+        if user["password_hash"] is None
+        else "password_change"
+    )
+    verify_account_action(
+        request, user, purpose, payload.current_password
+    )
     error = auth.validate_password(payload.new_password)
     if error:
         raise HTTPException(status_code=400, detail=error)
-    user_store.update_password(user["id"], auth.hash_password(payload.new_password))
-    request.session["sv"] = user_store.bump_session_version(user["id"])
+    try:
+        session_version = user_store.set_password_and_bump_version(
+            user["id"],
+            auth.hash_password(payload.new_password),
+            expected_password_hash=user["password_hash"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    rotate_authenticated_session(request, user["id"], session_version)
     return {"ok": True}
 
 
 @app.post("/api/account/logout-all")
 def logout_all(
+    payload: LogoutAllRequest,
     request: Request,
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
+    verify_account_action(
+        request, user, "logout_all", payload.current_password
+    )
     user_store.bump_session_version(user["id"])
+    try:
+        session_store.revoke_user(user["id"])
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Could not revoke all account sessions"
+        ) from exc
     request.session.clear()
     return {"ok": True}
+
+
+@app.delete("/api/account/google")
+def unlink_google_account(
+    payload: GoogleUnlinkRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    verify_current_password(user, payload.current_password)
+    try:
+        session_version = user_store.unlink_google_identity(user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    rotate_authenticated_session(request, user["id"], session_version)
+    return {"google_linked": False}
 
 
 @app.delete("/api/account")
@@ -1798,67 +2509,107 @@ def delete_account(
     """Permanently delete the signed-in account after explicit confirmation."""
     if payload.confirmation != "DELETE":
         raise HTTPException(status_code=400, detail='Type DELETE to confirm account deletion')
-    verify_current_password(user, payload.current_password)
-    with tenant_session(user["id"]) as session:
-        owner_id = session.scalar(
-            select(User.id).where(User.id == user["id"]).with_for_update()
-        )
-        if owner_id is None:
-            raise HTTPException(status_code=404, detail="Account not found")
-        storage_paths = list(session.scalars(
-            select(TrackRecord.storage_path).where(
-                TrackRecord.user_id == user["id"],
-                TrackRecord.storage_path.is_not(None),
+    verify_account_action(
+        request, user, "account_delete", payload.current_password
+    )
+    try:
+        user_store.bump_session_version(user["id"])
+        session_store.revoke_user(user["id"])
+    except (RuntimeError, SQLAlchemyError) as exc:
+        log.exception("could not revoke account sessions before deletion")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Account sessions could not be revoked; deletion was not completed. "
+                "Sign in again and retry"
+            ),
+        ) from exc
+    try:
+        with tenant_session(user["id"]) as session:
+            owner_id = session.scalar(
+                select(User.id).where(User.id == user["id"]).with_for_update()
             )
-        ).all())
-        storage_paths.extend(session.scalars(
-            select(TrackRecord.cover_path).where(
-                TrackRecord.user_id == user["id"],
-                TrackRecord.cover_path.is_not(None),
-            )
-        ).all())
-        storage_paths.extend(session.scalars(
-            select(ArtistPhoto.storage_path).where(
-                ArtistPhoto.user_id == user["id"],
-                ArtistPhoto.storage_path.is_not(None),
-            )
-        ).all())
-        storage_paths.extend(session.scalars(
-            select(UploadJob.storage_path).where(UploadJob.user_id == user["id"])
-        ).all())
-        storage_paths = list(dict.fromkeys(path for path in storage_paths if path))
-        try:
-            audio_store.delete_many(storage_paths)
-        except audio_store.StorageError as exc:
-            log.exception("could not delete account Storage objects")
-            raise HTTPException(
-                status_code=502,
-                detail="Account files could not be deleted; please retry",
-            ) from exc
+            if owner_id is None:
+                raise HTTPException(status_code=404, detail="Account not found")
+            storage_paths = list(session.scalars(
+                select(TrackRecord.storage_path).where(
+                    TrackRecord.user_id == user["id"],
+                    TrackRecord.storage_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(TrackRecord.cover_path).where(
+                    TrackRecord.user_id == user["id"],
+                    TrackRecord.cover_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(ArtistPhoto.storage_path).where(
+                    ArtistPhoto.user_id == user["id"],
+                    ArtistPhoto.storage_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(UploadJob.storage_path).where(UploadJob.user_id == user["id"])
+            ).all())
+            storage_paths = list(dict.fromkeys(path for path in storage_paths if path))
+            try:
+                audio_store.delete_many(storage_paths)
+            except audio_store.StorageError as exc:
+                log.exception("could not delete account Storage objects")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Account files could not be fully deleted; sign in again "
+                        "and retry deletion"
+                    ),
+                ) from exc
 
-        playlist_ids = select(Playlist.id).where(Playlist.user_id == user["id"])
-        session.query(PlaylistTrack).filter(
-            PlaylistTrack.playlist_id.in_(playlist_ids)
-        ).delete(synchronize_session=False)
-        session.query(Favorite).filter_by(user_id=user["id"]).delete(
-            synchronize_session=False
-        )
-        session.query(TrackRecord).filter_by(user_id=user["id"]).delete(
-            synchronize_session=False
-        )
-        session.query(UploadJob).filter_by(user_id=user["id"]).delete(
-            synchronize_session=False
-        )
-        session.query(Playlist).filter_by(user_id=user["id"]).delete(
-            synchronize_session=False
-        )
-        session.query(User).filter_by(id=user["id"]).delete(
-            synchronize_session=False
-        )
-        session.commit()
+            playlist_ids = select(Playlist.id).where(Playlist.user_id == user["id"])
+            session.query(PlaylistTrack).filter(
+                PlaylistTrack.playlist_id.in_(playlist_ids)
+            ).delete(synchronize_session=False)
+            session.query(Favorite).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(TrackListen).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(ArtistPhoto).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(TrackRecord).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(UploadJob).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(Playlist).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(ProviderIdentity).filter_by(user_id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.query(User).filter_by(id=user["id"]).delete(
+                synchronize_session=False
+            )
+            session.commit()
+    except SQLAlchemyError as exc:
+        log.exception("could not delete account database records")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Account records could not be confirmed deleted; sign in again "
+                "and retry deletion"
+            ),
+        ) from exc
     _libraries.pop(user["id"], None)
     request.session.clear()
-    request.app.state.is_first_account = user_store.count() == 0
+    try:
+        request.app.state.is_first_account = user_store.count() == 0
+    except SQLAlchemyError:
+        request.app.state.is_first_account = False
+        log.exception("could not refresh first-account state after account deletion")
     return {"ok": True}
 
 
@@ -2159,6 +2910,9 @@ async def upload_artist_photo(
     normalized_name = _artist_search_key(name.strip())
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Invalid artist name")
+    expected_format = _image_upload_format(
+        file.filename or "", STATIC_IMAGE_UPLOAD_FORMATS
+    )
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -2179,7 +2933,7 @@ async def upload_artist_photo(
                     detail="Artist photo upload exceeds the 5 MB size limit",
                 )
         jpeg_data, resized = await run_in_threadpool(
-            _normalize_artist_photo, bytes(data)
+            _normalize_artist_photo, bytes(data), expected_format
         )
     finally:
         await file.close()
@@ -2257,7 +3011,24 @@ def remove_artist_photo(
 def public_config() -> dict:
     """Expose only frontend-safe feature flags."""
     enabled = os.environ.get("LYRICS_PROVIDER_LRCLIB", "1").strip().lower()
-    return {"lyrics_provider_lrclib": enabled not in {"0", "false", "off", "no"}}
+    return {
+        "lyrics_provider_lrclib": enabled not in {"0", "false", "off", "no"},
+        "google_oauth_enabled": google_oauth_service is not None,
+    }
+
+
+@app.get("/api/lyrics/authorize")
+def authorize_lyrics_lookup(user: Annotated[User, Depends(require_api_user)]) -> Response:
+    """Reuse the session and distributed limiter for the Next.js lyrics proxy."""
+    if not public_config()["lyrics_provider_lrclib"]:
+        raise HTTPException(status_code=403, detail="Lyrics lookup is disabled")
+    try:
+        allowed = request_throttle.allow(f"lyrics:{user['id']}", 60, 60)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Rate-limit service unavailable") from None
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Too many lyrics lookups", headers={"Retry-After": "60"})
+    return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/tracks")
@@ -2335,11 +3106,21 @@ async def upload_track(
             raise HTTPException(status_code=400, detail="Invalid upload size") from None
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
+    filename = os.path.basename(file.filename.replace("\\", "/"))
+    filename = "".join(char for char in filename if ord(char) >= 32 and ord(char) != 127)
+    suffix = os.path.splitext(filename)[1].lower()
+    if (
+        not filename
+        or len(filename) > 512
+        or suffix not in AUDIO_EXTENSIONS
+        or _has_executable_upload_suffix(filename)
+    ):
+        raise HTTPException(status_code=400, detail="Unsupported audio filename or format")
     total_bytes = 0
     audio_path = None
     try:
         with tempfile.NamedTemporaryFile(
-            suffix=os.path.splitext(file.filename)[1], delete=False
+            suffix=suffix, delete=False
         ) as audio_file:
             audio_path = audio_file.name
             while part := await file.read(1024 * 1024):
@@ -2354,16 +3135,12 @@ async def upload_track(
             raise HTTPException(status_code=400, detail="Empty upload")
         library = get_library(user["id"])
         if async_uploads:
-            job_id = uuid.uuid4().hex
-            await run_in_threadpool(
-                _queue_staged_upload,
-                job_id,
-                user["id"],
-                file.filename,
-                audio_path,
-            )
-            return {"id": job_id, "status": "processing"}
-        track_id, used_bytes, track_count, existing = await run_in_threadpool(
+            # Use the same content parser as synchronous uploads before any
+            # untrusted bytes enter durable staging storage.
+            metadata = await run_in_threadpool(library._read_metadata_path, filename, audio_path)
+            if metadata is None:
+                raise HTTPException(status_code=400, detail="Could not read uploaded audio file")
+        _, used_bytes, track_count, existing = await run_in_threadpool(
             _upload_preflight, library, audio_path
         )
         if not existing and (
@@ -2376,10 +3153,14 @@ async def upload_track(
                 status_code=413,
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             )
+        if async_uploads:
+            job_id = uuid.uuid4().hex
+            await run_in_threadpool(_queue_staged_upload, job_id, user["id"], filename, audio_path)
+            return {"id": job_id, "status": "processing"}
         try:
             track = await run_in_threadpool(
                 library.add_upload_file,
-                file.filename,
+                filename,
                 audio_path,
                 quota_bytes=USER_QUOTA_BYTES,
                 max_tracks=MAX_TRACKS_PER_USER,
@@ -2392,10 +3173,10 @@ async def upload_track(
                 status_code=413,
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             ) from None
-        except audio_store.StorageError as exc:
+        except audio_store.StorageError:
             log.exception("audio storage failed during upload")
             raise HTTPException(
-                status_code=502, detail=f"Audio storage error: {str(exc)[:200]}"
+                status_code=502, detail="Audio storage is temporarily unavailable"
             ) from None
         if track is None:
             raise HTTPException(
@@ -2410,6 +3191,7 @@ async def upload_track(
         )
         return _track_payload(track)
     finally:
+        await file.close()
         if audio_path:
             try:
                 os.unlink(audio_path)
@@ -2469,7 +3251,9 @@ def save_track_lyrics(
     return {"custom_lyrics": track.custom_lyrics}
 
 
-def _normalize_track_cover(data: bytes) -> bytes:
+def _normalize_track_cover(
+    data: bytes, expected_format: str | None = None
+) -> bytes:
     if not data:
         raise HTTPException(status_code=400, detail="Empty image upload")
     try:
@@ -2479,6 +3263,8 @@ def _normalize_track_cover(data: bytes) -> bytes:
                     status_code=400,
                     detail="Cover must be a JPEG, PNG, or WebP image",
                 )
+            if expected_format is not None and image.format != expected_format:
+                raise HTTPException(status_code=400, detail="Image extension does not match its content")
             width, height = image.size
             if (
                 width <= 0
@@ -2559,6 +3345,9 @@ async def upload_track_cover(
             status_code=400,
             detail="Confirm replacing user covers only when applying to the album",
         )
+    expected_format = _image_upload_format(
+        file.filename or "", STATIC_IMAGE_UPLOAD_FORMATS
+    )
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -2579,7 +3368,9 @@ async def upload_track_cover(
                 detail="Cover upload exceeds the 5 MB size limit",
             )
     try:
-        cover = await run_in_threadpool(_normalize_track_cover, bytes(data))
+        cover = await run_in_threadpool(
+            _normalize_track_cover, bytes(data), expected_format
+        )
     finally:
         await file.close()
     library = get_library(user["id"])

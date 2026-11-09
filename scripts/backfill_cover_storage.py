@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from io import BytesIO
 import os
 import tempfile
+from io import BytesIO
 
 from PIL import Image, ImageOps
 from sqlalchemy import create_engine, select, update

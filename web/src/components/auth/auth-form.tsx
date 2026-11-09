@@ -20,6 +20,9 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
   const [password, setPassword] = useState("");
   const [passwordIncorrect, setPasswordIncorrect] = useState(false);
   const [pending, setPending] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  const [googleOnboarding, setGoogleOnboarding] = useState(false);
+  const isGoogleOnboarding = googleOnboarding && googleEnabled;
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const passwordLength = Array.from(password).length;
   const passwordBytes = new TextEncoder().encode(password).length;
@@ -57,6 +60,85 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       active = false;
     };
   }, [translateError]);
+
+  useEffect(() => {
+    let active = true;
+    let statusFrame: number | undefined;
+    void fetch("/api/config", { credentials: "same-origin", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const config: unknown = await response.json();
+        if (
+          active &&
+          typeof config === "object" &&
+          config !== null &&
+          "google_oauth_enabled" in config &&
+          config.google_oauth_enabled === true
+        ) {
+          setGoogleEnabled(true);
+        }
+      })
+      .catch(() => undefined);
+
+    const url = new URL(window.location.href);
+    const googleStatus = url.searchParams.get("google");
+    if (googleStatus) {
+      statusFrame = window.requestAnimationFrame(() => {
+        if (!active) return;
+        if (googleStatus === "complete") {
+          setGoogleOnboarding(true);
+        } else if (googleStatus === "failed") {
+          setError(t("Google sign-up could not be completed. Try again."));
+        }
+        url.searchParams.delete("google");
+        window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+      });
+    }
+    return () => {
+      active = false;
+      if (statusFrame !== undefined) window.cancelAnimationFrame(statusFrame);
+    };
+  }, [t]);
+
+  async function handleGoogleOnboarding(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!csrfToken || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/auth/google/onboarding", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        redirect: "manual",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({ username: username.trim() }),
+      });
+      if (response.status === 303 || response.type === "opaqueredirect") {
+        window.location.assign("/");
+        return;
+      }
+      const result = (await response.json().catch(() => null)) as {
+        detail?: unknown;
+      } | null;
+      const detail = typeof result?.detail === "string"
+        ? result.detail
+        : t("Google sign-up could not be completed. Try again.");
+      setError(translateError(detail, "Google sign-up could not be completed. Try again."));
+    } catch (reason) {
+      setError(
+        translateError(
+          reason instanceof Error ? reason.message : "",
+          "The authentication request could not be completed.",
+        ),
+      );
+    } finally {
+      setPending(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -119,10 +201,12 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
         </div>
         <LanguageSelect className="auth-language-select" />
         <h1 className="auth-title">
-          {t(isLogin ? "Welcome back" : "Create your account")}
+          {t(isGoogleOnboarding ? "Choose your username" : isLogin ? "Welcome back" : "Create your account")}
         </h1>
         <p className="auth-sub">
-          {isLogin
+          {isGoogleOnboarding
+            ? t("Your Google account is verified. Choose a unique username for Vervfy.")
+            : isLogin
             ? t("Log in to reach your synced library.")
             : t("Your library, uploads, and covers will be synced to it.")}
         </p>
@@ -133,7 +217,58 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
+        {isGoogleOnboarding ? (
+          <form onSubmit={handleGoogleOnboarding}>
+            <div className="auth-field">
+              <label htmlFor="username">{t("Username")}</label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                minLength={3}
+                maxLength={32}
+                pattern="[a-zA-Z0-9_.\-]+"
+                required
+                autoFocus
+                value={username}
+                onChange={(event) => {
+                  setUsername(event.currentTarget.value);
+                  setError(null);
+                }}
+              />
+            </div>
+            <button
+              className="auth-submit"
+              type="submit"
+              disabled={!csrfToken || pending || !!csrfError}
+            >
+              {pending ? t("Creating account…") : t("Create account")}
+            </button>
+          </form>
+        ) : null}
+
+        {!isGoogleOnboarding && googleEnabled ? (
+          <div className="auth-provider">
+            <a
+              className="auth-google"
+              href={`/api/auth/google/start?purpose=${isLogin ? "login" : "signup"}`}
+            >
+              <svg viewBox="0 0 48 48" aria-hidden="true">
+                <path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.2v5.1h6.6c3.9-3.6 6.1-8.8 6.1-15Z" />
+                <path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.8l-6.6-5.1c-1.8 1.2-4.1 2-6.9 2-5.3 0-9.8-3.6-11.4-8.4H5.8v5.3A20.4 20.4 0 0 0 24 44Z" />
+                <path fill="#FBBC05" d="M12.6 27.7a12.3 12.3 0 0 1 0-7.4V15H5.8a20.3 20.3 0 0 0 0 18l6.8-5.3Z" />
+                <path fill="#EA4335" d="M24 12c3 0 5.7 1 7.8 3.1l5.8-5.8A19.4 19.4 0 0 0 24 4 20.4 20.4 0 0 0 5.8 15l6.8 5.3C14.2 15.6 18.7 12 24 12Z" />
+              </svg>
+              {t("Continue with Google")}
+            </a>
+            <div className="auth-divider"><span>{t("or")}</span></div>
+          </div>
+        ) : null}
+
+        {!isGoogleOnboarding ? <form onSubmit={handleSubmit}>
           <div className="auth-field">
             <label htmlFor="username">{t("Username")}</label>
             <input
@@ -209,14 +344,14 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
                 ? t("Log in")
                 : t("Create account")}
           </button>
-        </form>
+        </form> : null}
 
-        <div className="auth-footer">
+        {!isGoogleOnboarding ? <div className="auth-footer">
           {t(isLogin ? "No account yet? " : "Already have an account? ")}
           <Link href={isLogin ? "/register" : "/login"}>
             {t(isLogin ? "Create one" : "Log in")}
           </Link>
-        </div>
+        </div> : null}
         <SiteFooter showLanguage={false} />
       </section>
     </main>

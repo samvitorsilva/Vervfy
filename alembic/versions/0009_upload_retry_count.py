@@ -1,6 +1,7 @@
 """Track bounded upload worker retry attempts."""
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0009_upload_retry_count"
 down_revision = "0008_upload_jobs"

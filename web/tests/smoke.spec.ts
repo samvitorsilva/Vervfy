@@ -5,9 +5,8 @@ const password = process.env.PLAYWRIGHT_PASSWORD;
 const externalBackend = Boolean(process.env.PLAYWRIGHT_BACKEND_URL);
 const externalApp = Boolean(process.env.PLAYWRIGHT_BASE_URL);
 
-function makeWav(): Buffer {
+function makeWav(seconds = 6): Buffer {
   const sampleRate = 22_050;
-  const seconds = 6;
   const sampleCount = sampleRate * seconds;
   const dataSize = sampleCount * 2;
   const wav = Buffer.alloc(44 + dataSize);
@@ -89,7 +88,9 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
   await page.goto("/privacy");
   await expect(page).toHaveTitle("Privacy Policy | Vervfy");
   await expect(page.getByRole("heading", { name: "Privacy Policy" })).toBeVisible();
-  await expect(page.getByText(/Draft for legal review/)).toBeVisible();
+  await expect(
+    page.getByText(/This document describes the current implementation/),
+  ).toBeVisible();
   const privacyContactLinks = page.getByRole("link", { name: "vervfy.dev@proton.me" });
   await expect(privacyContactLinks).toHaveCount(2);
   for (let index = 0; index < 2; index += 1) {
@@ -101,7 +102,13 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
   await page.goto("/terms");
   await expect(page).toHaveTitle("Terms and Conditions | Vervfy");
   await expect(page.getByRole("heading", { name: "Terms and Conditions" })).toBeVisible();
-  await expect(page.getByText(/Brazil, State of Pernambuco/)).toBeVisible();
+  await expect(
+    page.getByText(/These terms do not limit consumer or data-protection rights/),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Privacy Policy" }).first()).toHaveAttribute(
+    "href",
+    "/privacy",
+  );
   const manifestResponse = await page.request.get("/manifest.webmanifest");
   expect(manifestResponse.ok()).toBe(true);
   const manifest = await manifestResponse.json();
@@ -123,6 +130,118 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
     "href",
     "/",
   );
+});
+
+test("account settings expose privacy requests and clear cached lyrics on deletion", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.evaluate(() => {
+    localStorage.setItem(
+      "vervfy:lrclib:v4:cached-track",
+      JSON.stringify({ savedAt: Date.now(), lyrics: { text: "cached lyrics" } }),
+    );
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open("auralis-db", 2);
+        request.onupgradeneeded = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains("kv")) database.createObjectStore("kv");
+          if (!database.objectStoreNames.contains("handles")) database.createObjectStore("handles");
+          if (!database.objectStoreNames.contains("offlineTracks")) {
+            database.createObjectStore("offlineTracks", { keyPath: "id" });
+          }
+        };
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction("offlineTracks", "readwrite");
+          const store = transaction.objectStore("offlineTracks");
+          store.put({
+            id: "playwright-user:offline-track",
+            accountId: "playwright-user",
+            trackId: "offline-track",
+            audio: new Blob(["account audio"]),
+          });
+          store.put({
+            id: "another-user:offline-track",
+            accountId: "another-user",
+            trackId: "offline-track",
+            audio: new Blob(["other account audio"]),
+          });
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+        };
+      }),
+  );
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  const accountLoaded = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/me" &&
+      response.ok(),
+  );
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await accountLoaded;
+  await page.getByRole("button", { name: "Open account" }).click();
+
+  await expect(page.getByRole("heading", { name: "Privacy & data requests" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View privacy options" })).toHaveAttribute(
+    "href",
+    "/privacy",
+  );
+  await page.getByRole("button", { name: "Delete account" }).first().click();
+  await page.getByLabel("Current password").fill("playwright-test-password");
+  await page.getByLabel("Type DELETE to confirm").fill("DELETE");
+  await page.route("**/api/account", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ json: { ok: true } });
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Delete account" }).click();
+
+  await expect(page).toHaveURL(/\/login\?account_deleted=1$/);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        localStorage.getItem("vervfy:lrclib:v4:cached-track"),
+      ),
+    )
+    .toBeNull();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<string[]>((resolve, reject) => {
+            const request = indexedDB.open("auralis-db", 2);
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const database = request.result;
+              const transaction = database.transaction("offlineTracks", "readonly");
+              const read = transaction.objectStore("offlineTracks").getAll();
+              read.onsuccess = () => {
+                resolve(
+                  read.result.map(
+                    (record: { accountId: string }) => record.accountId,
+                  ),
+                );
+              };
+              read.onerror = () => reject(read.error);
+              transaction.oncomplete = () => database.close();
+            };
+          }),
+      ),
+    )
+    .toEqual(["another-user"]);
 });
 
 test("brand logo returns to the library view", async ({ page }) => {
@@ -433,18 +552,22 @@ test("language changes translate legal pages, navigation, and document metadata"
   await expect(page).toHaveTitle("Politique de confidentialité | Vervfy");
   await expect(page.getByRole("heading", { name: "Qui exploite Vervfy" })).toBeVisible();
   await expect(page.getByText("Informations traitées par le service")).toBeVisible();
-  await expect(page.getByText(/Projet soumis à une vérification juridique/)).toBeVisible();
+  await expect(
+    page.getByText(
+      "Ce document décrit l’implémentation actuelle et ne constitue pas une certification de conformité juridique.",
+    ),
+  ).toBeVisible();
   await expect(page.locator(".site-footer")).toContainText("Voir les crédits");
 
   await page.goto("/terms");
   await expect(page).toHaveTitle("Conditions générales | Vervfy");
   await expect(page.getByRole("heading", { name: "Votre musique et vos autres contenus" })).toBeVisible();
-  await expect(page.getByText(/Le Brésil, État de Pernambuco/)).toBeVisible();
+  await expect(page.getByText(/notamment le droit brésilien lorsqu’il s’applique/)).toBeVisible();
 
   await page.locator(".site-footer-language select").selectOption("es");
-  await expect(page).toHaveTitle("Condiciones generales | Vervfy");
+  await expect(page).toHaveTitle("Términos y condiciones | Vervfy");
   await expect(page.getByRole("heading", { name: "Tu música y otros contenidos" })).toBeVisible();
-  await expect(page.getByText(/Se propone Brasil, estado de Pernambuco/)).toBeVisible();
+  await expect(page.getByText(/incluida la legislación brasileña cuando corresponda/)).toBeVisible();
 
   await page.goto("/credits");
   await expect(page).toHaveTitle("Créditos y fuentes de datos | Vervfy");
@@ -694,6 +817,44 @@ test("development CSP supports React debugging and disables service worker cachi
   ).toBe(true);
 });
 
+test("library loading skeleton matches the desktop and mobile layouts", async ({ page }) => {
+  test.skip(
+    externalApp || externalBackend,
+    "This deterministic loading test uses the local mock backend.",
+  );
+  let releaseLibraryRequests: () => void = () => {};
+  const libraryRequestGate = new Promise<void>((resolve) => {
+    releaseLibraryRequests = resolve;
+  });
+  const delayLibraryRequest = async (route: Route) => {
+    await libraryRequestGate;
+    await route.continue();
+  };
+  await page.route("**/api/tracks", delayLibraryRequest);
+  await page.route("**/api/library/state", delayLibraryRequest);
+  await page.route("**/api/me", delayLibraryRequest);
+  await page.goto("/login");
+  await page.getByLabel("Username").fill("playwright");
+  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/$/);
+
+  const loadingSkeleton = page.locator(".app-loading-skeleton");
+  await expect(loadingSkeleton).toBeVisible();
+  await expect(loadingSkeleton).toHaveAttribute("aria-busy", "true");
+  await expect(loadingSkeleton.locator(".app-skeleton-track-card")).toHaveCount(12);
+
+  await page.evaluate(() => localStorage.setItem("vervfy:list-mode", "list"));
+  await page.reload();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.locator(".app-skeleton-track-list .app-skeleton-list-row")).toHaveCount(8);
+  await page.setViewportSize({ width: 360, height: 812 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+  releaseLibraryRequests();
+});
+
 test("disabled LRCLIB lookup makes no external lyrics request", async ({ page }) => {
   let lrclibRequests = 0;
   await page.route("**/api/config", (route) =>
@@ -748,6 +909,10 @@ test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page
   const embeddedRequestStarted = new Promise<void>((resolve) => {
     resolveEmbeddedRequestStarted = resolve;
   });
+  let releaseOnlineLookup: () => void = () => {};
+  const onlineLookupDelay = new Promise<void>((resolve) => {
+    releaseOnlineLookup = resolve;
+  });
   await page.route("**/api/tracks/playwright-track-59/stream", async (route) => {
     if (route.request().headers().range !== "bytes=0-262143") {
       await route.continue();
@@ -766,7 +931,8 @@ test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page
       if (!route.request().failure()) throw error;
     }
   });
-  await page.route("**/api/lyrics/lrclib/**", (route) => {
+  await page.route("**/api/lyrics/lrclib/**", async (route) => {
+    await onlineLookupDelay;
     if (new URL(route.request().url()).pathname.endsWith("/get")) {
       return route.fulfill({
         json: {
@@ -784,6 +950,8 @@ test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page
   await page.locator(".player-control-lyrics").click();
   const lyrics = page.getByRole("dialog", { name: "Lyrics" });
   await embeddedRequestStarted;
+  await expect(lyrics.locator(".lyrics-skeleton")).toBeVisible();
+  releaseOnlineLookup();
   await expect(lyrics.locator(".lyrics-line")).toHaveText("Immediate lyric line", {
     timeout: 2_000,
   });
@@ -1288,6 +1456,7 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
   };
   const lastPlayedAt: Record<string, number> = {};
   let listeningSummaryRequests = 0;
+  let omitPreviousMonth = false;
   await page.route("**/api/tracks", (route) =>
     route.fulfill({ json: { tracks } }),
   );
@@ -1297,6 +1466,7 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
       json: {
         lastPlayedAt,
         month: period,
+        ...(omitPreviousMonth ? {} : { previousMonth: period }),
         year: period,
         monthStart: Date.UTC(2026, 9, 1) / 1000,
         yearLabel: "2026",
@@ -1312,6 +1482,16 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator(".card").filter({ hasText: "Most played" })).toBeVisible();
   await expect.poll(() => listeningSummaryRequests).toBeGreaterThan(0);
+  await expect(
+    page.getByRole("status").filter({ hasText: "Your monthly recap is ready." }),
+  ).toContainText("Your monthly recap is ready.");
+  for (const width of [390, 980, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole("button", { name: "View recap" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+      true,
+    );
+  }
   const recapNav = page.getByRole("button", { name: "Recap", exact: true });
   await recapNav.focus();
   expect(
@@ -1321,11 +1501,17 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
   ).toBe('"Recap"');
   await recapNav.click();
   await expect(recapNav).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "September 2026" })).toBeVisible();
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page.getByRole("button", { name: "View recap" }).click();
+  await expect(recapNav).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "September 2026" })).toBeVisible();
 
-  const recapTracks = page.locator(".recap-period .recap-track");
-  await expect(page.getByRole("heading", { name: "Top 2 tracks" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Top artists" })).toBeVisible();
+  const recapTracks = page.locator(".recap-periods .recap-period:first-child .recap-track");
+  await expect(page.getByRole("heading", { name: "Top 2 tracks" })).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "Top artists" })).toHaveCount(2);
   await expect(recapTracks).toHaveCount(2);
+  await expect(page.locator(".recap-periods .recap-period:nth-child(2) .recap-track")).toHaveCount(2);
   await expect(recapTracks.first()).toHaveAccessibleName("Play Most played, 8 plays");
   await expect(recapTracks.nth(1)).toHaveAccessibleName("Play Next played, 4 plays");
   await expect(recapTracks.nth(0).locator(".recap-play-bar > span")).toHaveAttribute(
@@ -1336,7 +1522,9 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
     "style",
     "width: 50%;",
   );
-  const recapArtists = page.getByRole("list", { name: "Top artists" });
+  const recapArtists = page
+    .locator(".recap-periods .recap-period:first-child")
+    .getByRole("list", { name: "Top artists" });
   await expect(recapArtists.getByRole("listitem")).toHaveCount(2);
   await expect(recapArtists.getByRole("listitem").first()).toContainText("8 plays");
   await expect(recapArtists.locator(".recap-artist-avatar")).toHaveCount(2);
@@ -1378,6 +1566,11 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
     page.getByRole("button", { name: "Create Rediscover playlist" }),
   ).toBeEnabled();
   await expect(page.locator("#recap-rediscover-disabled-reason")).toHaveCount(0);
+
+  omitPreviousMonth = true;
+  await page.reload();
+  await page.getByRole("button", { name: "Recap", exact: true }).click();
+  await expect(page.locator(".recap-periods .recap-period")).toHaveCount(2);
 });
 
 test("mobile player menu opens MusicBrainz cover art information", async ({ page }) => {
@@ -1493,6 +1686,13 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   await expect(navigation).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
+  await page.getByRole("button", { name: "Open account" }).click();
+  const accountAction = page.locator(".account-view .btn").first();
+  await expect(accountAction).toBeVisible();
+  await expect
+    .poll(() => accountAction.evaluate((button) => button.getBoundingClientRect().height))
+    .toBeGreaterThanOrEqual(48);
+  await navigation.locator('[data-view="library"]').click();
   // Mobile hides Account (opened from the topbar avatar); Library, Offline,
   // Playlists, Recap, Artists, and Favorites remain visible.
   await expect(navigation.locator("[data-view]:visible")).toHaveCount(6);
@@ -1618,6 +1818,23 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await page.getByRole("button", { name: "New playlist" }).first().click();
   await expect(page.getByRole("dialog", { name: "New playlist" })).toBeVisible();
   await expect(page.locator(".queue-picker-card.glass")).toBeVisible();
+  await expect(page.locator(".queue-picker-card.glass")).toHaveCSS(
+    "background-color",
+    "rgba(18, 20, 31, 0.2)",
+  );
+  await expect(page.locator(".queue-picker-card.glass")).toHaveCSS(
+    "border-top-color",
+    "rgba(255, 255, 255, 0.22)",
+  );
+  await expect
+    .poll(() =>
+      page.locator(".queue-picker-card.glass").evaluate((element) => getComputedStyle(element).boxShadow),
+    )
+    .toContain("rgba(255, 255, 255, 0.48)");
+  await expect(page.getByRole("dialog", { name: "New playlist" })).toHaveCSS(
+    "backdrop-filter",
+    /blur\(12px\)/,
+  );
   await expect
     .poll(() => page.locator(".glass").count())
     .toBeLessThanOrEqual(4);
@@ -2132,8 +2349,8 @@ test("cancelled seeks preserve the playhead and the lyrics editor is labeled", a
     const pausedAt = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
     const cancelX = (bounds?.x ?? 0) + (bounds?.width ?? 0) * 0.9;
     await page.mouse.move(cancelX, seekY);
-    await seekBar.evaluate(
-      (element, point) =>
+    const timeAtCancellation = await seekBar.evaluate(
+      (element, point) => {
         element.dispatchEvent(
           new PointerEvent("pointercancel", {
             bubbles: true,
@@ -2142,16 +2359,32 @@ test("cancelled seeks preserve the playhead and the lyrics editor is labeled", a
             clientX: point.x,
             clientY: point.y,
           }),
-        ),
+        );
+        const audio = document.querySelector("audio");
+        return {
+          currentTime: audio?.currentTime ?? 0,
+          timestamp: performance.now(),
+        };
+      },
       { x: cancelX, y: seekY },
     );
+    expect(timeAtCancellation.currentTime).toBeCloseTo(pausedAt, 1);
     await expect
       .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused))
       .toBe(false);
     await page.mouse.up();
     await audio.evaluate((element) => (element as HTMLAudioElement).pause());
-    const afterCancel = await audio.evaluate((element) => (element as HTMLAudioElement).currentTime);
-    expect(afterCancel).toBeLessThan(pausedAt + 1);
+    const afterCancel = await audio.evaluate((element, cancelledAt) => {
+      const player = element as HTMLAudioElement;
+      return {
+        currentTime: player.currentTime,
+        playbackRate: player.playbackRate,
+        elapsed: (performance.now() - cancelledAt) / 1000,
+      };
+    }, timeAtCancellation.timestamp);
+    expect(afterCancel.currentTime).toBeLessThanOrEqual(
+      pausedAt + afterCancel.elapsed * afterCancel.playbackRate + 0.25,
+    );
   };
   await cancelSeek(page.locator('.nowbar [aria-label="Track progress"]'));
 
@@ -2174,8 +2407,8 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     externalApp || externalBackend,
     "This deterministic full-flow test uses the local mock backend.",
   );
-  test.setTimeout(300_000);
-  const wav = makeWav();
+  test.setTimeout(420_000);
+  const wav = makeWav(1);
   const hydrationErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error" && /hydrated|hydration mismatch/i.test(message.text())) {
@@ -2186,15 +2419,21 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
   await page.getByLabel("Password").fill("playwright-test-password");
+  const accountLoaded = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/me" &&
+      response.ok(),
+  );
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
+  await accountLoaded;
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await expect.poll(() => hydrationErrors).toEqual([]);
   await expect
     .poll(() => page.locator(".side-panel").evaluate((element) => getComputedStyle(element).position))
     .toBe("fixed");
   await expect
-    .poll(() => page.locator(".rail").evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+    .poll(() => page.locator(".shell").evaluate((element) => Math.round(element.getBoundingClientRect().height)))
     .toBeGreaterThanOrEqual(await page.evaluate(() => window.innerHeight - 2));
   await expect(page.locator(".home-profile-avatar img")).toBeVisible();
   await expect
@@ -2231,10 +2470,10 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     ],
   );
 
-  await expect(page.locator(".card")).toHaveCount(60, { timeout: 150_000 });
   await expect(page.locator(".toasts .toast").last()).toContainText("Saved 60 tracks", {
     timeout: 10_000,
   });
+  await expect(page.locator(".card")).toHaveCount(60, { timeout: 150_000 });
   const trackCard = page.locator(".card").filter({ hasText: "pw-batch-01" });
   await expect(trackCard).toBeVisible();
   await trackCard.getByRole("button", { name: "More options for pw-batch-01" }).click();
@@ -2265,7 +2504,12 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await expect(page.getByRole("heading", { name: "Vervfy Test Artist" })).toBeVisible();
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await expect(trackCard).toBeVisible();
+  const playbackRange = page.waitForRequest((request) =>
+    /\/api\/tracks\/playwright-track-\d+\/stream$/.test(request.url()) &&
+    request.headers().range === "bytes=0-"
+  );
   await page.locator(".card").filter({ hasText: "pw-batch-60" }).click();
+  await playbackRange;
   const audio = page.locator("audio");
   await expect(page.locator(".now-title")).toHaveText("pw-batch-60");
   await expect
@@ -2306,12 +2550,12 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     .toBeGreaterThan(0);
   const content = page.locator(".content");
   await content.evaluate((element) => element.scrollTo(0, 500));
-  const scrollPosition = await content.evaluate((element) => element.scrollTop);
-  expect(scrollPosition).toBeGreaterThan(0);
+  await expect
+    .poll(() => content.evaluate((element) => element.scrollTop))
+    .toBe(500);
   await page.waitForTimeout(750);
   const expectedScrollPosition = await content.evaluate(
-    (element, position) => Math.min(position, element.scrollHeight - element.clientHeight),
-    scrollPosition,
+    (element) => Math.min(500, element.scrollHeight - element.clientHeight),
   );
   await expect
     .poll(() => content.evaluate((element) => element.scrollTop))
@@ -2321,12 +2565,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
     .poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused))
     .toBe(true);
   await page.setViewportSize({ width: 360, height: 812 });
-  const embeddedLyricsRange = page.waitForRequest((request) =>
-    /\/api\/tracks\/playwright-track-\d+\/stream$/.test(request.url()) &&
-    request.headers().range === "bytes=0-262143"
-  );
   await page.locator('.nowbar button[aria-label="Lyrics"]').click();
-  await embeddedLyricsRange;
   await expect(page.getByRole("dialog", { name: "Lyrics" })).toBeVisible();
   const lyricsControls = page.locator(".lyrics-player");
   for (const label of ["Previous track", "Play", "Next track", "Shuffle", "Repeat: off"]) {
@@ -2373,6 +2612,9 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.locator('.nowbar button[aria-label="Play"]').click();
+  await expect.poll(() => audio.evaluate((element) => (element as HTMLAudioElement).paused)).toBe(
+    false,
+  );
 
   const seekBar = page.locator('.nowbar [aria-label="Track progress"]');
   const progressMotion = await page.locator(".nowbar .seek-fill, .nowbar .seek-thumb").evaluateAll(

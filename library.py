@@ -1,11 +1,24 @@
 """PostgreSQL-backed music library; no durable data is written to disk."""
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone
-import base64, hashlib, io, logging, math, os, re, tempfile, unicodedata
+
+import base64
+import hashlib
+import io
+import logging
+import math
+import os
+import re
+import tempfile
+import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import load_only
+
 import audio_store
 from db import TrackRecord, User, tenant_session
 
@@ -14,13 +27,21 @@ log = logging.getLogger(__name__)
 Image.MAX_IMAGE_PIXELS = int(os.environ.get("VERVFY_MAX_IMAGE_PIXELS", "12000000"))
 try:
     from mutagen import File as MutagenFile
-    from mutagen.id3 import APIC, ID3
+    from mutagen import MutagenError
     from mutagen.flac import Picture
+    from mutagen.id3 import APIC, ID3
     from mutagen.mp3 import MP3
     MUTAGEN_AVAILABLE = True
-except ImportError: MUTAGEN_AVAILABLE = False
+    MUTAGEN_ERRORS = (MutagenError, OSError, ValueError, TypeError, AttributeError)
+except ImportError:
+    MUTAGEN_AVAILABLE = False
+    MUTAGEN_ERRORS = (OSError, ValueError, TypeError, AttributeError)
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wav", ".weba"}
+EXECUTABLE_UPLOAD_SUFFIXES = {
+    ".php", ".phtml", ".phar", ".jsp", ".jspx", ".asp", ".aspx",
+    ".cgi", ".pl", ".py", ".sh", ".js", ".html", ".htm",
+}
 BytesLike = bytes | bytearray | memoryview
 @dataclass
 class Track:
@@ -122,25 +143,25 @@ def _strip_noise(text: str) -> str:
 
 
 def _clean_title(title: str) -> str:
-    title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.I).strip()
+    title = re.sub(r"\s+(?:feat(?:uring)?|ft\.?|with)\s+.+$", "", title, flags=re.IGNORECASE).strip()
     title = re.sub(r"\s*[\[(][^)\]]*&[^)\]]*[)\]]", "", title).strip()
     cleaned = _strip_noise(title)
     cleaned = re.sub(
         r"\s*[\[(]from\b[^)\]]*\b(?:movie|film|soundtrack)[)\]]\s*$",
         "",
         cleaned,
-        flags=re.I,
+        flags=re.IGNORECASE,
     ).strip()
     return cleaned or title
 
 
 def _is_channel(part: str) -> bool:
-    return bool(re.search(r"vevo", part, re.I))
+    return bool(re.search(r"vevo", part, re.IGNORECASE))
 
 
 def _channel_to_artist(part: str) -> str:
     """'TateMcRaeVEVOTate McRae' -> 'Tate McRae'; 'TheWeekndVEVO' -> 'TheWeeknd'."""
-    pieces = [piece.strip() for piece in re.split(r"vevo", part, flags=re.I) if piece.strip()]
+    pieces = [piece.strip() for piece in re.split(r"vevo", part, flags=re.IGNORECASE) if piece.strip()]
     if not pieces:
         return part.strip()
     return ([piece for piece in pieces if " " in piece] or pieces)[0]
@@ -220,7 +241,7 @@ def _extract_cover(path: str, ext: str) -> Image.Image | None:
                 picture = Picture(base64.b64decode(str(pictures[0])))
                 if picture.data:
                     return Image.open(io.BytesIO(picture.data)).convert("RGB")
-    except Exception:
+    except (OSError, ValueError, TypeError, Image.DecompressionBombError):
         return None
     return None
 
@@ -346,7 +367,12 @@ class Library:
         legacy_data: BytesLike | None = None,
     ):
         safe=os.path.basename(filename.replace("\\","/")).replace("\x00","") or "upload.mp3"
-        if os.path.splitext(safe)[1].lower() not in AUDIO_EXTENSIONS:return None
+        suffixes = Path(safe).suffixes
+        if (
+            os.path.splitext(safe)[1].lower() not in AUDIO_EXTENSIONS
+            or any(suffix.lower() in EXECUTABLE_UPLOAD_SUFFIXES for suffix in suffixes)
+        ):
+            return None
         track_id=track_id_for_file(path)
         size_bytes=os.path.getsize(path)
         with tenant_session(self.user_id) as s:
@@ -363,7 +389,7 @@ class Library:
             cover.thumbnail((600,600), Image.Resampling.LANCZOS)
             output=io.BytesIO()
             cover.save(output,format="JPEG",quality=90)
-        except Exception:
+        except (OSError, ValueError, TypeError, Image.DecompressionBombError):
             if not has_cover:
                 raise
             log.warning("Could not encode cover for %r by %r; using placeholder", title, artist, exc_info=True)
@@ -430,7 +456,8 @@ class Library:
             # the same file already owns it (or we can't tell).
             try:
                 with tenant_session(self.user_id) as s:still_used=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id}) is not None
-            except Exception:still_used=True
+            except SQLAlchemyError:
+                still_used = True
             if not still_used:
                 if not storage_path_override:
                     audio_store.delete_quietly(storage_path)
@@ -577,7 +604,7 @@ class Library:
                 return 0
             if audio_store.enabled():
                 album_key = hashlib.sha256(
-                    f"{track.artist.casefold()}\0{track.album.casefold()}".encode("utf-8")
+                    f"{track.artist.casefold()}\0{track.album.casefold()}".encode()
                 ).hexdigest()[:24]
                 image_key = hashlib.sha256(cover_data).hexdigest()[:16]
                 new_path = (
@@ -864,7 +891,7 @@ class Library:
         cooldown: timedelta = timedelta(hours=24),
     ) -> bool:
         """Atomically mark an eligible track as attempted within the cooldown."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         statement = update(TrackRecord).where(
             TrackRecord.id == track_id,
             TrackRecord.user_id == self.user_id,
@@ -933,13 +960,11 @@ class Library:
         return True
 
     def _read_metadata(self, filename, data: BytesLike):
-        title,artist=_parse_filename(filename);album="Unknown Album";duration=0.;cover=make_placeholder_cover(title);has_cover=False
         with tempfile.NamedTemporaryFile(suffix=os.path.splitext(filename)[1],delete=False) as f:path=f.name;f.write(data)
         try:
             return self._read_metadata_path(filename, path)
         finally:
-            try:os.unlink(path)
-            except OSError:pass
+            os.unlink(path)
 
     def _read_metadata_path(self, filename, path: str):
         title,artist=_parse_filename(filename);album="Unknown Album";duration=0.;cover=make_placeholder_cover(title);has_cover=False
@@ -951,14 +976,18 @@ class Library:
                 title=_clean_title(_tag_text(tags.get("title"), title))
                 artist=_tag_text(tags.get("artist"), artist, join_values=True)
                 album=_tag_text(tags.get("album"), album)
-            except Exception:return None
+            except MUTAGEN_ERRORS:return None
             ext = os.path.splitext(filename)[1].lower()
             if ext == ".mp3":
-                try: duration=float(MP3(path).info.length or duration)
-                except Exception: pass
+                try:
+                    mp3_duration = float(MP3(path).info.length or duration)
+                except MUTAGEN_ERRORS:
+                    mp3_duration = duration
+                duration = mp3_duration
             embedded = _extract_cover(path, ext)
         else:
-            embedded = None
+            # Content validation must fail closed if the required parser is absent.
+            return None
         if embedded is not None:
             cover = embedded
             has_cover = True

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 import os
 import unittest
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import call, patch
 
 from sqlalchemy import create_engine, select
@@ -11,8 +11,8 @@ from sqlalchemy.orm import sessionmaker, undefer
 
 os.environ.setdefault("VERVFY_SECRET_KEY", "test-only-vervfy-session-secret")
 
-from db import Base, TrackRecord, User
 import library
+from db import Base, TrackRecord, User
 
 
 class AlbumCoverTests(unittest.TestCase):
@@ -132,10 +132,10 @@ class AlbumCoverTests(unittest.TestCase):
             ).cover_checked_at
         self.assertIsNotNone(checked_at)
         if checked_at.tzinfo is None:
-            checked_at = checked_at.replace(tzinfo=timezone.utc)
+            checked_at = checked_at.replace(tzinfo=UTC)
         self.assertGreater(
             checked_at,
-            datetime.now(timezone.utc) - timedelta(minutes=1),
+            datetime.now(UTC) - timedelta(minutes=1),
         )
 
     def test_embedded_cover_uses_range_then_falls_back_to_full_file(self) -> None:

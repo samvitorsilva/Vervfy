@@ -11,6 +11,50 @@ import audio_store
 
 
 class AudioStoreStreamingTests(unittest.TestCase):
+    def test_bucket_privacy_requires_explicit_private_metadata(self) -> None:
+        for payload, expected in (
+            ({"public": False}, True),
+            ({"public": True}, False),
+            ({}, None),
+        ):
+            with self.subTest(payload=payload):
+                client = httpx.Client(
+                    transport=httpx.MockTransport(
+                        lambda request, value=payload: httpx.Response(
+                            200, json=value
+                        )
+                    ),
+                    base_url="https://storage.example.test",
+                )
+                with client, patch.object(audio_store, "_client", return_value=client), patch.dict(
+                    os.environ,
+                    {
+                        "SUPABASE_URL": "https://project.supabase.co",
+                        "SUPABASE_SERVICE_KEY": "test-key",
+                    },
+                ):
+                    if expected is None:
+                        with self.assertRaises(audio_store.StorageError):
+                            audio_store.bucket_is_private()
+                    else:
+                        self.assertEqual(audio_store.bucket_is_private(), expected)
+
+    def test_bucket_privacy_fails_closed_on_provider_error(self) -> None:
+        client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(403, text="denied")
+            ),
+            base_url="https://storage.example.test",
+        )
+        with client, patch.object(audio_store, "_client", return_value=client), patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SERVICE_KEY": "test-key",
+            },
+        ), self.assertRaises(audio_store.StorageError):
+            audio_store.bucket_is_private()
+
     def test_upload_sets_long_cache_control(self) -> None:
         requests: list[httpx.Request] = []
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
 import unittest
+from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -355,6 +355,35 @@ class CoverResolutionScheduleTests(unittest.TestCase):
 
 
 class ResolveCoverChainTests(unittest.TestCase):
+    def test_programming_errors_in_provider_callback_are_not_swallowed(self) -> None:
+        track = MagicMock(
+            id="track-provider-error",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            cover_source="generated",
+            has_cover=False,
+        )
+        library = MagicMock()
+        library.get.return_value = track
+
+        with (
+            patch("library.Library", return_value=library),
+            patch.object(cover_art, "uploaded_cover", return_value=None),
+            patch.object(cover_art, "embedded_cover", return_value=None),
+            self.assertRaisesRegex(AssertionError, "provider programming error"),
+        ):
+            asyncio.run(
+                cover_art.resolve_cover(
+                    "user-1",
+                    "track-provider-error",
+                    audio_path="/tmp/missing.mp3",
+                    lookup_musicbrainz=AsyncMock(
+                        side_effect=AssertionError("provider programming error")
+                    ),
+                )
+            )
+
     def test_first_hit_wins_and_logs_each_step(self) -> None:
         track = MagicMock(
             id="track-1",

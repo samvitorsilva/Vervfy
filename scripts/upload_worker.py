@@ -12,13 +12,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from sqlalchemy import select
+from sqlalchemy.orm import undefer
+
 import audio_store
 import upload_queue
 from cover_art import resolve_cover
 from db import UploadJob, tenant_session
 from library import Library
-from sqlalchemy import select
-from sqlalchemy.orm import undefer
 
 log = logging.getLogger("vervfy.upload_worker")
 MAX_BYTES = int(os.environ.get("VERVFY_MAX_UPLOAD_MB", "50")) * 1024 * 1024

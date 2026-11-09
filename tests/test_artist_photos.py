@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -37,7 +37,6 @@ class ArtistPhotoApiTests(unittest.TestCase):
 
         def delete_photo(user_id: str, normalized_name: str):
             self.photos.pop((user_id, normalized_name), None)
-            return None
 
         self.read_patch = patch.object(server, "_artist_photo_record", side_effect=read_photo)
         self.save_patch = patch.object(server, "_save_artist_photo", side_effect=save_photo)
@@ -131,6 +130,13 @@ class ArtistPhotoApiTests(unittest.TestCase):
         self.assertEqual(too_large.status_code, 413)
         self.assertEqual(gif.status_code, 400)
         self.assertEqual(too_many_pixels.status_code, 400)
+
+    def test_upload_rejects_executable_suffixes_and_extension_mismatch(self) -> None:
+        for filename in ("artist.php.png", "artist.jsp", "artist.jpg"):
+            with self.subTest(filename=filename):
+                response = self.upload(image_bytes("PNG"), filename)
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.photos, {})
 
     def test_photo_routes_require_authentication(self) -> None:
         server.app.dependency_overrides.pop(server.require_api_user)

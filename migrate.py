@@ -1,5 +1,9 @@
-import os, mimetypes, httpx, psycopg
+import mimetypes
+import os
 from urllib.parse import quote
+
+import httpx
+import psycopg
 
 DB = os.environ["DATABASE_URL"].strip()
 SB = os.environ["SUPABASE_URL"].strip().rstrip("/")

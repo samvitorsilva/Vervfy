@@ -1,6 +1,7 @@
 """Enable tenant isolation for application-owned PostgreSQL tables."""
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0007_row_level_security"
 down_revision = "0006_tenant_integrity"

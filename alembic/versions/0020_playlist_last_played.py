@@ -1,7 +1,7 @@
 """Track when a playlist was last listened to."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0020_playlist_last_played"
 down_revision = "0019_track_listens"

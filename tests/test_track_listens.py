@@ -4,10 +4,10 @@ import os
 import time
 import unittest
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
@@ -107,10 +107,10 @@ class TrackListenTests(unittest.TestCase):
         with patch.object(server, "tenant_session", self.tenant_session):
             summary = server._listening_summary("test-user")
 
-        month_start = datetime.fromtimestamp(summary["monthStart"], timezone.utc)
+        month_start = datetime.fromtimestamp(summary["monthStart"], UTC)
         self.assertEqual((month_start.day, month_start.hour, month_start.minute), (1, 0, 0))
         self.assertEqual(summary["month"]["playCount"], 1)
-        year_start = datetime.now(timezone.utc).replace(
+        year_start = datetime.now(UTC).replace(
             month=1, day=1, hour=0, minute=0, second=0, microsecond=0
         ).timestamp()
         expected_year_count = 1 + int(self.now - 60 * 24 * 60 * 60 >= year_start)
@@ -129,11 +129,62 @@ class TrackListenTests(unittest.TestCase):
         self.assertEqual(result["trackId"], "track-one")
         self.assertEqual(summary["month"]["playCount"], 2)
 
+    def test_summary_separates_current_and_previous_month_at_utc_boundaries(self) -> None:
+        now = datetime(2026, 11, 1, 0, 0, 1, tzinfo=UTC)
+        month_start = datetime(2026, 11, 1, tzinfo=UTC).timestamp()
+        previous_month_start = datetime(2026, 10, 1, tzinfo=UTC).timestamp()
+        with Session(self.engine) as session:
+            for listen in session.scalars(select(TrackListen)).all():
+                session.delete(listen)
+            session.add_all(
+                [
+                    TrackListen(
+                        id="before-previous-month",
+                        user_id="test-user",
+                        track_id="track-one",
+                        played_at=previous_month_start - 1,
+                    ),
+                    TrackListen(
+                        id="previous-month-boundary",
+                        user_id="test-user",
+                        track_id="track-one",
+                        played_at=previous_month_start,
+                    ),
+                    TrackListen(
+                        id="current-month-boundary",
+                        user_id="test-user",
+                        track_id="track-one",
+                        played_at=month_start,
+                    ),
+                    TrackListen(
+                        id="current-month-latest",
+                        user_id="test-user",
+                        track_id="track-one",
+                        played_at=now.timestamp(),
+                    ),
+                ]
+            )
+            session.commit()
+
+        with (
+            patch.object(server, "datetime") as mocked_datetime,
+            patch.object(server, "tenant_session", self.tenant_session),
+        ):
+            mocked_datetime.now.return_value = now
+            summary = server._listening_summary("test-user")
+
+        self.assertEqual(summary["month"]["playCount"], 2)
+        self.assertEqual(summary["previousMonth"]["playCount"], 1)
+        self.assertEqual(summary["monthStart"], month_start)
+        self.assertEqual(summary["previousMonthStart"], previous_month_start)
+
     def test_record_listen_rejects_track_from_another_account_or_missing(self) -> None:
         payload = server.TrackListenRequest(trackId="missing-track")
-        with patch.object(server, "tenant_session", self.tenant_session):
-            with self.assertRaises(server.HTTPException) as error:
-                server.record_track_listen(payload, {"id": "test-user"}, None)
+        with (
+            patch.object(server, "tenant_session", self.tenant_session),
+            self.assertRaises(server.HTTPException) as error,
+        ):
+            server.record_track_listen(payload, {"id": "test-user"}, None)
 
         self.assertEqual(error.exception.status_code, 404)
 

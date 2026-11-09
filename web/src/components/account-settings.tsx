@@ -32,6 +32,95 @@ async function sendJson(path: string, method: string, payload: unknown) {
   return response.json() as Promise<Record<string, unknown>>;
 }
 
+function clearCachedLyrics() {
+  try {
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith("vervfy:lrclib:v4:")) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  } catch (reason) {
+    console.warn("Could not clear cached lyrics after account deletion.", reason);
+  }
+}
+
+function clearOfflineTracks(accountId: string): Promise<void> {
+  if (typeof indexedDB === "undefined") return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("auralis-db", 2);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("kv")) database.createObjectStore("kv");
+      if (!database.objectStoreNames.contains("handles")) database.createObjectStore("handles");
+      if (!database.objectStoreNames.contains("offlineTracks")) {
+        database.createObjectStore("offlineTracks", { keyPath: "id" });
+      }
+    };
+    request.onerror = () => reject(request.error ?? new Error("Could not open offline storage."));
+    request.onblocked = () => reject(new Error("Offline storage is busy in another browser tab."));
+    request.onsuccess = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains("offlineTracks")) {
+        database.close();
+        resolve();
+        return;
+      }
+
+      let transaction: IDBTransaction;
+      try {
+        transaction = database.transaction("offlineTracks", "readwrite");
+        const cursorRequest = transaction.objectStore("offlineTracks").openCursor();
+        cursorRequest.onsuccess = () => {
+          try {
+            const cursor = cursorRequest.result;
+            if (!cursor) return;
+            const value: unknown = cursor.value;
+            if (
+              typeof value === "object" &&
+              value !== null &&
+              "accountId" in value &&
+              value.accountId === accountId
+            ) {
+              cursor.delete();
+            }
+            cursor.continue();
+          } catch (reason) {
+            try {
+              transaction.abort();
+            } catch {
+              // The transaction may already have completed.
+            }
+            database.close();
+            reject(reason instanceof Error ? reason : new Error("Could not clear offline storage."));
+          }
+        };
+        cursorRequest.onerror = () => {
+          database.close();
+          reject(cursorRequest.error ?? new Error("Could not clear offline storage."));
+        };
+      } catch (reason) {
+        database.close();
+        reject(reason instanceof Error ? reason : new Error("Could not clear offline storage."));
+        return;
+      }
+      transaction.oncomplete = () => {
+        database.close();
+        resolve();
+      };
+      transaction.onerror = () => {
+        database.close();
+        reject(transaction.error ?? new Error("Could not clear offline storage."));
+      };
+      transaction.onabort = () => {
+        database.close();
+        reject(transaction.error ?? new Error("Could not clear offline storage."));
+      };
+    };
+  });
+}
+
 export default function AccountSettings({
   active,
   onToast,
@@ -53,6 +142,14 @@ export default function AccountSettings({
   const [emailEditorOpen, setEmailEditorOpen] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
+  const [googleMessage, setGoogleMessage] = useState("");
+  const [googleLinkEditorOpen, setGoogleLinkEditorOpen] = useState(false);
+  const [googleLinkPassword, setGoogleLinkPassword] = useState("");
+  const [googleUnlinkEditorOpen, setGoogleUnlinkEditorOpen] = useState(false);
+  const [googleUnlinkPassword, setGoogleUnlinkPassword] = useState("");
+  const [logoutEditorOpen, setLogoutEditorOpen] = useState(false);
+  const [logoutPassword, setLogoutPassword] = useState("");
+  const [logoutMessage, setLogoutMessage] = useState("");
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
   const [photoDraftUrl, setPhotoDraftUrl] = useState<string | null>(null);
@@ -82,6 +179,35 @@ export default function AccountSettings({
     },
     [],
   );
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const url = new URL(window.location.href);
+      const linkStatus = url.searchParams.get("google_link");
+      const reauthStatus = url.searchParams.get("google_reauth");
+      const action = url.searchParams.get("google_action");
+      if (linkStatus === "success") {
+        setGoogleMessage(t("Google account linked."));
+      } else if (linkStatus === "failed") {
+        setGoogleMessage(t("Google account could not be linked. Try again."));
+      } else if (reauthStatus === "success") {
+        setGoogleMessage(t("Google verification complete. Repeat your action now."));
+        if (action === "email_change") setEmailEditorOpen(true);
+        if (action === "password_add") setPasswordEditorOpen(true);
+        if (action === "account_delete") setDeleteEditorOpen(true);
+        if (action === "logout_all") setLogoutEditorOpen(true);
+      } else if (reauthStatus === "failed") {
+        setGoogleMessage(t("Google verification failed. Try again."));
+      } else {
+        return;
+      }
+      url.searchParams.delete("google_link");
+      url.searchParams.delete("google_reauth");
+      url.searchParams.delete("google_action");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [t]);
 
   useEffect(() => {
     if (!photoEditorOpen || photoSaving) return;
@@ -121,7 +247,7 @@ export default function AccountSettings({
     try {
       const data = await sendJson("/api/account/email", "PUT", {
         email: email.trim(),
-        current_password: emailPassword,
+        ...(account?.has_password ? { current_password: emailPassword } : {}),
       });
       const nextEmail = typeof data.email === "string" ? data.email : null;
       setAccount((current) => current ? { ...current, email: nextEmail } : current);
@@ -140,13 +266,68 @@ export default function AccountSettings({
     setPasswordMessage(t("Updating…"));
     try {
       await sendJson("/api/account/password", "POST", {
-        current_password: String(formData.get("current_password") ?? ""),
+        ...(account?.has_password
+          ? { current_password: String(formData.get("current_password") ?? "") }
+          : {}),
         new_password: String(formData.get("new_password") ?? ""),
       });
       form.reset();
+      setAccount((current) => current ? { ...current, has_password: true } : current);
       setPasswordMessage(t("Password updated."));
     } catch (reason) {
       setPasswordMessage(translateError(reason instanceof Error ? reason.message : "", "Could not update password."));
+    }
+  }
+
+  async function redirectToGoogle(path: string, payload: unknown) {
+    setPending(true);
+    setGoogleMessage(t("Opening Google verification…"));
+    try {
+      const data = await sendJson(path, "POST", payload);
+      const target = typeof data.authorization_url === "string"
+        ? new URL(data.authorization_url)
+        : null;
+      if (!target || target.origin !== "https://accounts.google.com") {
+        throw new Error("Could not start Google verification.");
+      }
+      window.location.assign(target.href);
+    } catch (reason) {
+      setPending(false);
+      setGoogleMessage(
+        translateError(
+          reason instanceof Error ? reason.message : "",
+          "Could not start Google verification.",
+        ),
+      );
+    }
+  }
+
+  async function linkGoogle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await redirectToGoogle("/api/account/google/link/start", {
+      current_password: googleLinkPassword,
+    });
+  }
+
+  async function startGoogleReauthentication(
+    purpose: "password_add" | "email_change" | "account_delete" | "logout_all",
+  ) {
+    await redirectToGoogle("/api/account/google/reauth/start", { purpose });
+  }
+
+  async function unlinkGoogle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setGoogleMessage(t("Unlinking Google…"));
+    try {
+      await sendJson("/api/account/google", "DELETE", {
+        current_password: googleUnlinkPassword,
+      });
+      setAccount((current) => current ? { ...current, google_linked: false } : current);
+      setGoogleUnlinkPassword("");
+      setGoogleUnlinkEditorOpen(false);
+      setGoogleMessage(t("Google account unlinked."));
+    } catch (reason) {
+      setGoogleMessage(translateError(reason instanceof Error ? reason.message : "", "Could not unlink Google."));
     }
   }
 
@@ -307,24 +488,42 @@ export default function AccountSettings({
   async function logoutAll() {
     setPending(true);
     try {
-      await sendJson("/api/account/logout-all", "POST", {});
+      await sendJson("/api/account/logout-all", "POST", {
+        ...(account?.has_password ? { current_password: logoutPassword } : {}),
+      });
       window.location.assign("/login");
     } catch (reason) {
       setPending(false);
-      onToast(translateError(reason instanceof Error ? reason.message : "", "Could not sign out of all devices."));
+      setLogoutMessage(translateError(reason instanceof Error ? reason.message : "", "Could not sign out of all devices."));
     }
   }
 
   async function deleteAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const accountId = account?.id;
+    if (!accountId) {
+      setDeleteMessage(t("Could not delete account."));
+      return;
+    }
     const formData = new FormData(event.currentTarget);
     setDeleteMessage(t("Deleting account…"));
     setPending(true);
     try {
       await sendJson("/api/account", "DELETE", {
-        current_password: String(formData.get("current_password") ?? ""),
+        ...(account?.has_password
+          ? { current_password: String(formData.get("current_password") ?? "") }
+          : {}),
         confirmation: String(formData.get("confirmation") ?? ""),
       });
+      clearCachedLyrics();
+      try {
+        await clearOfflineTracks(accountId);
+      } catch (reason) {
+        console.error("Could not clear offline downloads after account deletion.", reason);
+        window.alert(
+          t("Your account was deleted, but offline downloads could not be removed from this browser. Clear this site's browser storage manually."),
+        );
+      }
       window.location.assign("/login?account_deleted=1");
     } catch (reason) {
       setPending(false);
@@ -343,7 +542,30 @@ export default function AccountSettings({
   const memberSince = new Date(account?.created_at ? account.created_at * 1000 : 0);
 
   if (!account) {
-    return <div className="account-view acct-loading">{error || t("Loading account…")}</div>;
+    if (error) return <div className="account-view acct-loading" role="alert">{error}</div>;
+    return (
+      <div className="account-view app-skeleton-account" aria-label={t("Loading account…")} aria-busy="true">
+        <section className="acct-card" aria-hidden="true">
+          <span className="app-skeleton-block app-skeleton-account-avatar" />
+          <div className="app-skeleton-account-profile">
+            <span className="app-skeleton-block app-skeleton-line short" />
+            <span className="app-skeleton-block app-skeleton-line heading" />
+            <span className="app-skeleton-block app-skeleton-line" />
+          </div>
+        </section>
+        <section className="acct-library-section" aria-hidden="true">
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <div className="acct-grid">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div className="acct-panel" key={index}>
+                <span className="app-skeleton-block app-skeleton-line" />
+                <span className="app-skeleton-block app-skeleton-line short" />
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -393,10 +615,18 @@ export default function AccountSettings({
           </div>
           <Link className="acct-link" href="/credits">{t("View credits")}</Link>
         </div>
+        <div className="acct-setting-row">
+          <div className="acct-setting-copy">
+            <h3>{t("Privacy & data requests")}</h3>
+            <p>{t("Access, correct, or request deletion of your personal data.")}</p>
+          </div>
+          <Link className="acct-link" href="/privacy">{t("View privacy options")}</Link>
+        </div>
       </section>
 
       <section className="acct-settings acct-settings-group" aria-labelledby="account-security-title">
         <h2 className="acct-section-heading" id="account-security-title">{t("Sign-in & security")}</h2>
+        {googleMessage ? <p className="acct-form-msg" role="status" aria-live="polite">{googleMessage}</p> : null}
         <div className="acct-security-item">
           <div className="acct-setting-copy">
             <h3>{t("Email address")}</h3>
@@ -424,10 +654,21 @@ export default function AccountSettings({
                   <input type="email" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
                 </label>
                 <label className="acct-field">
-                  <span>{t("Current password")}</span>
-                  <input type="password" autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
+                  {account.has_password ? (
+                    <>
+                      <span>{t("Current password")}</span>
+                      <input type="password" autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
+                    </>
+                  ) : (
+                    <span>{t("Verify your Google account before saving.")}</span>
+                  )}
                 </label>
                 <div className="acct-form-actions">
+                  {!account.has_password && account.google_oauth_enabled ? (
+                    <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("email_change")}>
+                      {t("Verify with Google")}
+                    </button>
+                  ) : null}
                   <button className="btn btn-primary" type="submit">{t("Save email")}</button>
                 </div>
                 <div className={`acct-form-msg${emailMessage.includes("salvo") || emailMessage.includes("removido") || emailMessage.includes("saved") || emailMessage.includes("removed") ? " ok" : emailMessage && !emailMessage.includes("Salvando") && !emailMessage.includes("Saving") ? " error" : ""}`} role="status" aria-live="polite">
@@ -455,28 +696,97 @@ export default function AccountSettings({
             </button>
             {passwordEditorOpen ? (
               <form className="acct-form acct-inline-editor" id="account-password-editor" onSubmit={savePassword}>
+                {account.has_password ? (
+                  <label className="acct-field">
+                    <span>{t("Current password")}</span>
+                    <input name="current_password" type="password" autoComplete="current-password" required />
+                  </label>
+                ) : account.google_oauth_enabled ? (
+                  <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("password_add")}>
+                    {t("Verify with Google")}
+                  </button>
+                ) : <p className="acct-form-msg">{t("Google sign-in is currently unavailable.")}</p>}
                 <label className="acct-field">
-                  <span>{t("Current password")}</span>
-                  <input name="current_password" type="password" autoComplete="current-password" required />
-                </label>
-                <label className="acct-field">
-                  <span>{t("New password (min 8 characters)")}</span>
+                  <span>{t(account.has_password ? "New password (min 8 characters)" : "Create password (min 8 characters)")}</span>
                   <input name="new_password" type="password" autoComplete="new-password" minLength={8} required />
                 </label>
-                <button className="btn btn-primary" type="submit">{t("Update password")}</button>
+                <button className="btn btn-primary" type="submit">{t(account.has_password ? "Update password" : "Add password")}</button>
                 <div className={`acct-form-msg${passwordMessage === t("Password updated.") ? " ok" : passwordMessage && passwordMessage !== t("Updating…") ? " error" : ""}`} role="status" aria-live="polite">{passwordMessage}</div>
               </form>
             ) : null}
           </div>
         </div>
+        {account.google_oauth_enabled || account.google_linked ? (
+          <div className="acct-security-item">
+            <div className="acct-setting-copy">
+              <h3>{t("Google account")}</h3>
+              <p>{t(account.google_linked ? "Google is linked to this account." : "Google is not linked.")}</p>
+            </div>
+            <div className="acct-security-action">
+              {account.google_linked && account.has_password ? (
+                <button className="btn" type="button" aria-expanded={googleUnlinkEditorOpen} onClick={() => {
+                  setGoogleUnlinkEditorOpen((open) => !open);
+                  setGoogleMessage("");
+                }}>
+                  {t(googleUnlinkEditorOpen ? "Cancel" : "Unlink Google")}
+                </button>
+              ) : null}
+              {!account.google_linked && account.google_oauth_enabled ? (
+                <button className="btn" type="button" aria-expanded={googleLinkEditorOpen} onClick={() => {
+                  setGoogleLinkEditorOpen((open) => !open);
+                  setGoogleMessage("");
+                }}>
+                  {t(googleLinkEditorOpen ? "Cancel" : "Link Google")}
+                </button>
+              ) : null}
+              {account.google_linked && !account.has_password ? (
+                <p className="acct-form-msg">{t("Add a password before unlinking Google.")}</p>
+              ) : null}
+              {googleLinkEditorOpen ? (
+                <form className="acct-form acct-inline-editor" onSubmit={linkGoogle}>
+                  <label className="acct-field">
+                    <span>{t("Current password")}</span>
+                    <input type="password" autoComplete="current-password" required value={googleLinkPassword} onChange={(event) => setGoogleLinkPassword(event.target.value)} />
+                  </label>
+                  <p className="acct-form-msg">{t("Google will ask you to verify your account before linking.")}</p>
+                  <button className="btn btn-primary" type="submit" disabled={pending}>{t("Continue with Google")}</button>
+                </form>
+              ) : null}
+              {googleUnlinkEditorOpen ? (
+                <form className="acct-form acct-inline-editor" onSubmit={unlinkGoogle}>
+                  <label className="acct-field">
+                    <span>{t("Current password")}</span>
+                    <input type="password" autoComplete="current-password" required value={googleUnlinkPassword} onChange={(event) => setGoogleUnlinkPassword(event.target.value)} />
+                  </label>
+                  <p className="acct-form-msg">{t("You must keep at least one sign-in method.")}</p>
+                  <button className="btn btn-danger" type="submit">{t("Unlink Google")}</button>
+                </form>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="acct-settings acct-session" aria-labelledby="account-session-title">
         <h2 className="acct-section-heading" id="account-session-title">{t("Session")}</h2>
         <div className="acct-session-actions">
           <LogoutButton className="btn" />
-          <button className="btn" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button>
+          <button className="btn" type="button" disabled={pending} aria-expanded={logoutEditorOpen} onClick={() => setLogoutEditorOpen((open) => !open)}>{t("Sign out of all devices")}</button>
         </div>
+        {logoutEditorOpen ? (
+          <div className="acct-form acct-inline-editor">
+            {account.has_password ? (
+              <label className="acct-field">
+                <span>{t("Current password")}</span>
+                <input type="password" autoComplete="current-password" required value={logoutPassword} onChange={(event) => setLogoutPassword(event.target.value)} />
+              </label>
+            ) : account.google_oauth_enabled ? (
+              <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("logout_all")}>{t("Verify with Google")}</button>
+            ) : <p className="acct-form-msg">{t("Google sign-in is currently unavailable.")}</p>}
+            <button className="btn btn-primary" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button>
+            <div className="acct-form-msg" role="status" aria-live="polite">{logoutMessage}</div>
+          </div>
+        ) : null}
       </section>
 
       <section className="acct-settings acct-danger-zone" aria-labelledby="account-delete-title">
@@ -497,9 +807,18 @@ export default function AccountSettings({
           {deleteEditorOpen ? (
             <form className="acct-form acct-delete-form" onSubmit={deleteAccount}>
               <label className="acct-field">
-                <span>{t("Current password")}</span>
-                <input name="current_password" type="password" autoComplete="current-password" required />
+                {account.has_password ? (
+                  <>
+                    <span>{t("Current password")}</span>
+                    <input name="current_password" type="password" autoComplete="current-password" required />
+                  </>
+                ) : (
+                  <span>{t("Google reauthentication is required before deletion.")}</span>
+                )}
               </label>
+              {!account.has_password && account.google_oauth_enabled ? (
+                <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("account_delete")}>{t("Verify with Google")}</button>
+              ) : null}
               <label className="acct-field">
                 <span>{t("Type DELETE to confirm")}</span>
                 <input name="confirmation" type="text" autoComplete="off" required />

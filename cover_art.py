@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-from difflib import SequenceMatcher
-from io import BytesIO
 import logging
 import os
 import re
 import threading
 import time
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from difflib import SequenceMatcher
+from io import BytesIO
 
 import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -336,7 +336,7 @@ async def resolve_cover(
                 log.info("cover lookup track_id=%s step=musicbrainz result=hit", track_id)
                 return True
             log.info("cover lookup track_id=%s step=musicbrainz result=miss", track_id)
-        except Exception:
+        except (httpx.HTTPError, OSError, RuntimeError, ValueError):
             log.exception("cover lookup track_id=%s step=musicbrainz result=error", track_id)
         return False
 
@@ -349,7 +349,7 @@ async def resolve_cover(
                 log.info("cover lookup track_id=%s step=audiodb result=hit", track_id)
                 return True
             log.info("cover lookup track_id=%s step=audiodb result=miss", track_id)
-        except Exception as exc:
+        except (httpx.HTTPError, OSError, RuntimeError, ValueError) as exc:
             status = (
                 f" status={exc.response.status_code}"
                 if isinstance(exc, httpx.HTTPStatusError)

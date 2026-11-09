@@ -3,6 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3100";
 const useExternalServer = Boolean(process.env.PLAYWRIGHT_BASE_URL);
 const backendURL = process.env.PLAYWRIGHT_BACKEND_URL ?? "http://127.0.0.1:8100";
+// Avoid silently reusing stale local processes; opt in only for a known server.
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_SERVER === "1";
 
 export default defineConfig({
   testDir: "./tests",
@@ -28,14 +30,14 @@ export default defineConfig({
               {
                 command: "node tests/mock-backend.mjs",
                 url: "http://127.0.0.1:8100/__health",
-                reuseExistingServer: !process.env.CI,
+                reuseExistingServer,
                 timeout: 30_000,
               },
             ]),
         {
           command: "npm run dev -- --webpack --hostname 127.0.0.1 --port 3100",
           url: baseURL,
-          reuseExistingServer: !process.env.CI,
+          reuseExistingServer,
           timeout: 120_000,
           env: {
             ...process.env,

@@ -9,8 +9,8 @@ services:
     name: vervfy-api
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install --require-hashes -r requirements.lock
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
@@ -19,6 +19,8 @@ services:
         value: production
       - key: VERVFY_HTTPS_ONLY
         value: "1"
+      - key: VERVFY_COOKIE_SAME_SITE
+        value: lax
       - key: VERVFY_TRUSTED_PROXY_HOPS
         value: "1"
       - key: VERVFY_SECRET_KEY
@@ -36,6 +38,18 @@ services:
         sync: false
       - key: SUPABASE_BUCKET
         value: songs
+      - key: GOOGLE_OAUTH_ENABLED
+        value: "0"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_FRONTEND_ORIGIN
+        sync: false
+      - key: GOOGLE_IDENTITY_LOOKUP_DATABASE_URL
+        sync: false
 
   - type: web
     name: vervfy-next

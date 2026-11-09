@@ -1,6 +1,6 @@
 """Enforce tenant-owned favorite references and add common lookup indexes."""
+
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0006_tenant_integrity"
 down_revision = "0005_storage_path"

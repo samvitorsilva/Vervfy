@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from library import AudioUnavailableError  # noqa: E402
-from scripts import rebuild_covers  # noqa: E402
+from library import AudioUnavailableError
+from scripts import rebuild_covers
 
 
 class RebuildCoversTests(unittest.TestCase):

@@ -27,10 +27,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import inspect, select, text  # noqa: E402
+from sqlalchemy import inspect, select, text
 
-import audio_store  # noqa: E402
-from db import SessionLocal, TrackRecord, engine  # noqa: E402
+import audio_store
+from db import SessionLocal, TrackRecord, engine
 
 
 def ensure_schema() -> None:
