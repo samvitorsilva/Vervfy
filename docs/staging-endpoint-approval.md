@@ -8,22 +8,10 @@ complete. Production Google OAuth remains disabled.
 
 ## Endpoint evidence
 
-The owner reports the Render dashboard identifies the isolated staging
-resource as:
-
-| Field | Reported value |
-|---|---|
-| Resource ID | `dpg-dbl7q66tlv9c73b883jg-a` |
-| Internal hostname | `dpg-dbl7q66tlv9c73b883jg-a` |
-| External TLS hostname | `dpg-dbl7q66tlv9c73b883jg-a.oregon-postgres.render.com` |
-| Port / database | `5432` / `vervfy_oauth_staging` |
-| PostgreSQL / status | `18` / `Available` |
-| Default migration username | `vervfy_oauth_staging_user` |
-
-The owner reports independently comparing the external hostname with Render's
-external connection details. This is operator-reported identity evidence, not
-a live TLS handshake or database-role check. The internal hostname is not an
-external TLS hostname and must never be substituted in a connection URL.
+The exact Render resource ID, hostnames, database identifier, and migration
+login are intentionally omitted from this public document. Verify them against
+the Render dashboard and keep them in the private, operation-specific approval
+record. No live TLS handshake or database-role check is claimed here.
 
 Render Support confirmed external PostgreSQL supports `sslmode=verify-full`,
 the endpoint uses Let's Encrypt certificates, and the standard system CA store

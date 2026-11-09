@@ -15,10 +15,10 @@
 ## Readiness evidence
 
 No current preflight output is available to establish live database roles,
-memberships, ACLs, TLS, or recovery state. The owner reports independently
-matching external hostname `dpg-dbl7q66tlv9c73b883jg-a.oregon-postgres.render.com`
-to isolated resource `dpg-dbl7q66tlv9c73b883jg-a`; this is operator-reported
-identity evidence, not a live check. **Current status remains NO-GO for hosted
+memberships, ACLs, TLS, or recovery state. Exact staging host and resource
+identifiers are maintained in the private operation-specific approval record
+and must be reverified against the provider dashboard before use; no live
+endpoint check is claimed here. **Current status remains NO-GO for hosted
 migrations** pending a successful, authorized preflight, reviewed recovery
 baseline, and a separate migration authorization.
 

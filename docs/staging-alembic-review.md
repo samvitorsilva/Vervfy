@@ -22,19 +22,16 @@ supports `sslmode=verify-full`, the endpoint uses Let's Encrypt certificates,
 and the standard system CA store is sufficient; no Render-specific bundle or
 leaf/intermediate pinning is needed. This closes the provider-support TLS
 uncertainty. The release owner now reports independently verifying
-`dpg-dbl7q66tlv9c73b883jg-a.oregon-postgres.render.com` against the dashboard
-for resource `dpg-dbl7q66tlv9c73b883jg-a`; no live hostname/TLS handshake was
-performed. The current guard requires the approved system CA file and SHA-256
-digest for `verify-full`. Hosted migrations remain **NO-GO** pending role and
+the staging endpoint against the Render dashboard; exact host and resource
+identifiers are omitted from this public report and must be reverified
+privately before use. No live hostname/TLS handshake was performed. The
+current guard requires the approved system CA file and SHA-256 digest for
+`verify-full`. Hosted migrations remain **NO-GO** pending role and
 authorization evidence, artifact approval, and recovery-baseline acceptance.
 
-The operator-reported dashboard identity is: resource
-`dpg-dbl7q66tlv9c73b883jg-a`, external hostname
-`dpg-dbl7q66tlv9c73b883jg-a.oregon-postgres.render.com`, PostgreSQL 18,
-database `vervfy_oauth_staging`, port 5432, default username
-`vervfy_oauth_staging_user`, status Available. The internal hostname equals
-the resource ID and is not the external TLS hostname. Role/membership/ACL
-authorization evidence remains outstanding.
+The operator-specific database identity and role details belong in the private
+operation approval record. Role/membership/ACL authorization evidence remains
+outstanding.
 
 ## Findings
 
