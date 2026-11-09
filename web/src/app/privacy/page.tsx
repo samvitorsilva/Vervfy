@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
 import PrivacyPolicyContent from "@/components/privacy-policy-content";
+import { pageMetadata } from "@/lib/page-metadata";
 
-export const metadata: Metadata = {
-  title: "Privacy Policy",
-  description: "How Vervfy handles account, library, and device information.",
-};
+export const generateMetadata = () => pageMetadata("/privacy");
 
 export default function PrivacyPolicyPage() {
   return <PrivacyPolicyContent />;

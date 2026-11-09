@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from library import AudioUnavailableError  # noqa: E402
-from scripts import rebuild_covers  # noqa: E402
+from library import AudioUnavailableError
+from scripts import rebuild_covers
 
 
 class RebuildCoversTests(unittest.TestCase):
@@ -43,15 +43,14 @@ class RebuildCoversTests(unittest.TestCase):
             patch("sys.argv", ["rebuild_covers.py", "--apply", "--limit", "1"]),
             contextlib.redirect_stdout(output),
         ):
-            rebuild_covers.main()
+            with self.assertRaisesRegex(RuntimeError,"Retired"):
+                rebuild_covers.main()
 
         self.assertEqual(record.cover_source, "unknown")
         self.assertEqual(record.cover_data, b"original-cover")
-        tenant_session.execute.assert_called_once()
+        tenant_session.execute.assert_not_called()
         tenant_session.commit.assert_not_called()
-        self.assertIn("unavailable-track: skipped", output.getvalue())
-        self.assertIn("Processed 1; embedded 0; placeholders 0; skipped 1;", output.getvalue())
-        self.assertIn("Skipped track ids: unavailable-track", output.getvalue())
+        self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Persist qualified track listens for monthly and yearly recaps."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0019_track_listens"
 down_revision = "0018_cover_checked_at"

@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+from sqlalchemy.exc import SQLAlchemyError
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import audio_store
@@ -26,8 +28,9 @@ def _database():
             "that can bypass tracks RLS"
         )
     os.environ["DATABASE_URL"] = database_url
-    from db import SessionLocal, TrackRecord, engine
     from sqlalchemy import select, tuple_, update
+
+    from db import SessionLocal, TrackRecord, engine
 
     if engine.dialect.name != "postgresql":
         raise RuntimeError("MIGRATION_DATABASE_URL must use PostgreSQL")
@@ -71,6 +74,7 @@ def _upload_with_retries(path: str, data: bytes, content_type: str) -> None:
 
 
 def main() -> int:
+    raise RuntimeError("Retired maintenance entry point: immutable lifecycle review required")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dry-run",
@@ -181,7 +185,7 @@ def main() -> int:
                     )
                 print(f"  ok {label} ({len(data) / 1_000_000:.1f} MB) -> {path}")
                 moved += 1
-            except Exception as exc:
+            except (SQLAlchemyError, OSError, RuntimeError, ValueError) as exc:
                 failed += 1
                 print(
                     f"  FAIL {label}: {type(exc).__name__}: {exc}",

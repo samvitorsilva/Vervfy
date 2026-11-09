@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+import uuid
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -10,7 +11,6 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("VERVFY_SECRET_KEY", "test-only-vervfy-session-secret")
 
-import auth
 import library
 import server
 
@@ -131,6 +131,7 @@ class LazyAudioMigrationTests(unittest.TestCase):
         first_session.execute.return_value.one_or_none.return_value = (
             "song.mp3",
             None,
+            uuid.UUID(int=1),
         )
         first_session.scalar.return_value = b"audio bytes"
         second_session = MagicMock()
@@ -145,14 +146,15 @@ class LazyAudioMigrationTests(unittest.TestCase):
                     nullcontext(second_session),
                 ],
             ),
-            patch.object(library.audio_store, "upload") as upload,
+            patch.object(library.storage_lifecycle, "upload_bytes", return_value="v2/synthetic/user-a/audio/unique.mp3") as upload,
         ):
             path = library.Library("user-a").ensure_audio_storage("track-id")
 
-        self.assertEqual(path, "user-a/track-id.mp3")
-        upload.assert_called_once_with(
-            "user-a/track-id.mp3", b"audio bytes", "audio/mpeg"
-        )
+        self.assertEqual(path, "v2/synthetic/user-a/audio/unique.mp3")
+        upload.assert_called_once_with("user-a", "audio", b"audio bytes", "audio/mpeg", "mp3")
+        statement = str(second_session.execute.call_args.args[0])
+        self.assertIn("media_version", statement)
+        self.assertIn("storage_path IS NULL", statement)
         second_session.commit.assert_called_once()
 
     def test_does_not_read_legacy_audio_when_storage_path_exists(self) -> None:
@@ -160,6 +162,7 @@ class LazyAudioMigrationTests(unittest.TestCase):
         session.execute.return_value.one_or_none.return_value = (
             "song.mp3",
             "user-a/track-id.mp3",
+            uuid.UUID(int=1),
         )
         with patch.object(
             library, "tenant_session", return_value=nullcontext(session)
@@ -171,20 +174,19 @@ class LazyAudioMigrationTests(unittest.TestCase):
 
     def test_does_not_save_path_when_upload_fails(self) -> None:
         session = MagicMock()
-        session.execute.return_value.one_or_none.return_value = ("song.mp3", None)
+        session.execute.return_value.one_or_none.return_value = ("song.mp3", None, uuid.UUID(int=1))
         session.scalar.return_value = b"audio bytes"
         with (
             patch.object(
                 library, "tenant_session", return_value=nullcontext(session)
             ),
             patch.object(
-                library.audio_store,
-                "upload",
+                library.storage_lifecycle,
+                "upload_bytes",
                 side_effect=library.audio_store.StorageError("storage failed"),
-            ),
+            ),self.assertRaises(library.audio_store.StorageError)
         ):
-            with self.assertRaises(library.audio_store.StorageError):
-                library.Library("user-a").ensure_audio_storage("track-id")
+            library.Library("user-a").ensure_audio_storage("track-id")
 
         self.assertEqual(session.execute.call_count, 1)
 

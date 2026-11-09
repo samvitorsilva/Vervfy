@@ -32,6 +32,7 @@ log = logging.getLogger("vervfy.backfill_covers")
 
 
 def main() -> int:
+    raise RuntimeError("Retired maintenance entry point: immutable lifecycle review required")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--user-id", default=os.environ.get("BACKFILL_USER_ID"))
     parser.add_argument(

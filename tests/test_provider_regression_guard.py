@@ -4,7 +4,6 @@ import re
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED_PARTS = {
     ".git",
@@ -15,6 +14,7 @@ EXCLUDED_PARTS = {
     "__pycache__",
     "alembic",
     "docs",
+    "reports",
     "node_modules",
     "tests",
     "test-results",
@@ -38,12 +38,16 @@ ALLOWED_EXTERNAL_HOSTS = {
     "archive.org",
     "coverartarchive.org",
     "creativecommons.org",
+    "accounts.google.com",
+    "cloud.google.com",
+    "docs.aws.amazon.com",
     "en.wikipedia.org",
     "eslint.org",
     "feross.org",
     "fonts.googleapis.com",
     "fonts.gstatic.com",
     "github.com",
+    "oauth2.googleapis.com",
     "jairproducoes.com.br",
     "kaimalachi.com",
     "linktr.ee",
@@ -55,6 +59,7 @@ ALLOWED_EXTERNAL_HOSTS = {
     "opencollective.org",
     "opencollective.com",
     "patreon.com",
+    "pages.nist.gov",
     "registry.npmjs.org",
     "r2.theaudiodb.com",
     "tidelift.com",
@@ -67,6 +72,7 @@ ALLOWED_EXTERNAL_HOSTS = {
     "www.theaudiodb.com",
     "www.viclucas.com",
     "www.w3.org",
+    "www.googleapis.com",
     "www.wassupgio.com",
     "www.wikipedia.org",
     "www.youtube.com",

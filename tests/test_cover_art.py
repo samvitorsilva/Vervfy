@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from io import BytesIO
 import unittest
+from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -355,6 +355,35 @@ class CoverResolutionScheduleTests(unittest.TestCase):
 
 
 class ResolveCoverChainTests(unittest.TestCase):
+    def test_programming_errors_in_provider_callback_are_not_swallowed(self) -> None:
+        track = MagicMock(
+            id="track-provider-error",
+            title="Song",
+            artist="Artist",
+            album="Album",
+            cover_source="generated",
+            has_cover=False,
+        )
+        library = MagicMock()
+        library.get.return_value = track
+
+        with (
+            patch("library.Library", return_value=library),
+            patch.object(cover_art, "uploaded_cover", return_value=None),
+            patch.object(cover_art, "embedded_cover", return_value=None),
+            self.assertRaisesRegex(AssertionError, "provider programming error"),
+        ):
+            asyncio.run(
+                cover_art.resolve_cover(
+                    "user-1",
+                    "track-provider-error",
+                    audio_path="/tmp/missing.mp3",
+                    lookup_musicbrainz=AsyncMock(
+                        side_effect=AssertionError("provider programming error")
+                    ),
+                )
+            )
+
     def test_first_hit_wins_and_logs_each_step(self) -> None:
         track = MagicMock(
             id="track-1",
@@ -395,7 +424,7 @@ class ResolveCoverChainTests(unittest.TestCase):
             "musicbrainz",
             None,
             "https://coverartarchive.org/release-group/abc/front-500",
-        )
+         expected_version=track.media_version)
         messages = "\n".join(logs.output)
         self.assertIn("step=upload result=miss", messages)
         self.assertIn("step=embedded result=miss", messages)
@@ -433,7 +462,7 @@ class ResolveCoverChainTests(unittest.TestCase):
 
         library.set_resolved_cover.assert_called_once_with(
             "track-upload", "upload", jpeg, None
-        )
+        , expected_version=track.media_version)
 
     def test_generated_step_creates_a_jpeg(self) -> None:
         with Image.open(BytesIO(cover_art.generated_cover("Generated song"))) as image:
@@ -471,7 +500,7 @@ class ResolveCoverChainTests(unittest.TestCase):
             "audiodb",
             None,
             "https://r2.theaudiodb.com/x.jpg",
-        )
+         expected_version=track.media_version)
 
     def test_preferred_audiodb_cover_skips_musicbrainz_when_found(self) -> None:
         track = MagicMock(
@@ -510,7 +539,7 @@ class ResolveCoverChainTests(unittest.TestCase):
             "audiodb",
             None,
             "https://r2.theaudiodb.com/x.jpg",
-        )
+         expected_version=track.media_version)
 
     def test_audiodb_failure_does_not_log_api_key_from_request_url(self) -> None:
         track = MagicMock(
@@ -588,7 +617,7 @@ class ResolveCoverChainTests(unittest.TestCase):
             "generated",
             jpeg,
             None,
-        )
+         expected_version=track.media_version)
 
 
 if __name__ == "__main__":

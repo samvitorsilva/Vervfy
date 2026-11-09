@@ -33,7 +33,7 @@
   let nextFilterId = 0;
   let syncFrame = 0;
   const surfacePriorities = [
-    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side", 0],
+    [".queue-picker-card, .photo-editor-card, .shortcuts-card, .sleep-timer-card, .lyrics-player, .lyrics-side, .yearly-recap-dialog, .cover-info-popover, .sleep-timer-popover", 0],
     [".mobile-player-info", 1],
     [".nowbar", 2],
     [".rail", 3],

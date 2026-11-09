@@ -32,12 +32,22 @@ struct VervfyWebView: View {
     }
 }
 
-final class WebViewController {
+final class WebViewController: NSObject {
     private weak var webView: WKWebView?
 
     func attach(_ webView: WKWebView) {
         self.webView = webView
     }
+
+    #if os(iOS)
+    @objc func refresh(_ sender: UIRefreshControl) {
+        guard let webView else {
+            sender.endRefreshing()
+            return
+        }
+        webView.reload()
+    }
+    #endif
 
     func navigate(to destination: ShellDestination) {
         webView?.evaluateJavaScript(
@@ -115,7 +125,30 @@ private final class WebViewCoordinator: NSObject, WKScriptMessageHandler, WKNavi
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        endRefreshing(in: webView)
         webView.evaluateJavaScript("window.__vervfyNativeShell?.report()")
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        endRefreshing(in: webView)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        endRefreshing(in: webView)
+    }
+
+    private func endRefreshing(in webView: WKWebView) {
+        #if os(iOS)
+        webView.scrollView.refreshControl?.endRefreshing()
+        #endif
     }
 }
 
@@ -208,6 +241,13 @@ private struct NativeWebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .systemBackground
         webView.scrollView.backgroundColor = .systemBackground
+        let refreshControl = UIRefreshControl()
+        refreshControl.addTarget(
+            controller,
+            action: #selector(WebViewController.refresh(_:)),
+            for: .valueChanged
+        )
+        webView.scrollView.refreshControl = refreshControl
         webView.load(URLRequest(url: url))
         return webView
     }

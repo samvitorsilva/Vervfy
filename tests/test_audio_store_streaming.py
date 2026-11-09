@@ -11,31 +11,54 @@ import audio_store
 
 
 class AudioStoreStreamingTests(unittest.TestCase):
-    def test_upload_sets_long_cache_control(self) -> None:
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(200)
-
-        audio_store.close_client()
-        with (
-            patch.object(audio_store, "_transport", httpx.MockTransport(handler)),
-            patch.dict(
-                os.environ,
-                {
-                    "SUPABASE_URL": "https://project.supabase.co",
-                    "SUPABASE_SERVICE_KEY": "test-key",
-                },
-            ),
+    def test_bucket_privacy_requires_explicit_private_metadata(self) -> None:
+        for payload, expected in (
+            ({"public": False}, True),
+            ({"public": True}, False),
+            ({}, None),
         ):
-            try:
-                audio_store.upload("user/track.mp3", b"audio", "audio/mpeg")
-            finally:
-                audio_store.close_client()
+            with self.subTest(payload=payload):
+                client = httpx.Client(
+                    transport=httpx.MockTransport(
+                        lambda request, value=payload: httpx.Response(
+                            200, json=value
+                        )
+                    ),
+                    base_url="https://storage.example.test",
+                )
+                with client, patch.object(audio_store, "_client", return_value=client), patch.dict(
+                    os.environ,
+                    {
+                        "SUPABASE_URL": "https://project.supabase.co",
+                        "SUPABASE_SERVICE_KEY": "test-key",
+                    },
+                ):
+                    if expected is None:
+                        with self.assertRaises(audio_store.StorageError):
+                            audio_store.bucket_is_private()
+                    else:
+                        self.assertEqual(audio_store.bucket_is_private(), expected)
 
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0].headers["cache-control"], "max-age=31536000")
+    def test_bucket_privacy_fails_closed_on_provider_error(self) -> None:
+        client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(403, text="denied")
+            ),
+            base_url="https://storage.example.test",
+        )
+        with client, patch.object(audio_store, "_client", return_value=client), patch.dict(
+            os.environ,
+            {
+                "SUPABASE_URL": "https://project.supabase.co",
+                "SUPABASE_SERVICE_KEY": "test-key",
+            },
+        ), self.assertRaises(audio_store.StorageError):
+            audio_store.bucket_is_private()
+
+    def test_unmanaged_upload_is_rejected_before_network(self) -> None:
+        with patch.object(audio_store,"_client") as client, self.assertRaises(audio_store.StorageError):
+            audio_store.upload("legacy/path",b"private")
+        client.assert_not_called()
 
     def test_signed_url_cache_reuses_until_one_minute_before_expiry(self) -> None:
         requests = 0
@@ -83,43 +106,10 @@ class AudioStoreStreamingTests(unittest.TestCase):
         self.assertNotEqual(first, expired)
         self.assertEqual(requests, 2)
 
-    def test_upload_file_streams_chunks_with_content_length(self) -> None:
-        payload = b"a" * (150 * 1024)
-        requests: list[httpx.Request] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            requests.append(request)
-            return httpx.Response(200)
-
-        with tempfile.NamedTemporaryFile() as source:
-            source.write(payload)
-            source.flush()
-            audio_store.close_client()
-            with (
-                patch.object(audio_store, "_transport", httpx.MockTransport(handler)),
-                patch.dict(
-                    os.environ,
-                    {
-                        "SUPABASE_URL": "https://project.supabase.co",
-                        "SUPABASE_SERVICE_KEY": "test-key",
-                    },
-                ),
-            ):
-                try:
-                    audio_store.upload_file(
-                        "user/track.mp3", source.name, "audio/mpeg"
-                    )
-                finally:
-                    audio_store.close_client()
-
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0].content, payload)
-        self.assertEqual(
-            requests[0].headers["content-length"],
-            str(len(payload)),
-        )
-        self.assertEqual(requests[0].headers["cache-control"], "max-age=31536000")
-        self.assertNotIn("transfer-encoding", requests[0].headers)
+    def test_unmanaged_file_upload_is_rejected_before_network(self) -> None:
+        with patch.object(audio_store,"_client") as client, self.assertRaises(audio_store.StorageError):
+            audio_store.upload_file("legacy/path","unused-file")
+        client.assert_not_called()
 
 
 if __name__ == "__main__":

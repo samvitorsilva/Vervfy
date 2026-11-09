@@ -1,7 +1,7 @@
 """Move track covers to Supabase Storage and cache TheAudioDB URLs."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0017_track_covers"
 down_revision = "0016_audiodb_artist_images"

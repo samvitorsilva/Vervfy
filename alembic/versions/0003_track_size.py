@@ -1,6 +1,7 @@
 """Track stored audio size for per-user quotas."""
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0003_track_size"
 down_revision = "0002_profile_photo"

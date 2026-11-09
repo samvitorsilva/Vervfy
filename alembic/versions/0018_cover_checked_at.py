@@ -1,7 +1,7 @@
 """Persist cover lookup attempts for retry cooldowns."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0018_cover_checked_at"
 down_revision = "0017_track_covers"

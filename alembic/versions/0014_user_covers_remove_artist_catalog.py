@@ -1,7 +1,7 @@
 """Replace provider artwork with user-owned covers and remove artist caches."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0014_user_covers"
 down_revision = "0013_artist_catalog"

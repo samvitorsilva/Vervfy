@@ -1,15 +1,18 @@
 """Durable Redis queue for staged audio uploads."""
+
 from __future__ import annotations
 
 import json
 import logging
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Event, Thread
-from typing import Iterator
 
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 QUEUE_KEY = "vervfy:upload-jobs"
 LEASE_KEY = "vervfy:upload-jobs:leases"
@@ -40,7 +43,27 @@ def client() -> redis.Redis:
     url = os.environ.get("REDIS_URL")
     if not url:
         raise RuntimeError("REDIS_URL is required for asynchronous uploads")
-    return redis.Redis.from_url(url, decode_responses=True)
+    try:
+        connection = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            retry=Retry(NoBackoff(), 0),
+        )
+        # URL query parameters override kwargs in redis-py. Reject overrides that
+        # would remove the bounds; never issue a command before this validation.
+        options = connection.connection_pool.connection_kwargs
+        if any(
+            not isinstance(options.get(name), (int, float))
+            or not 0 < options[name] <= 5
+            for name in ("socket_connect_timeout", "socket_timeout")
+        ) or not isinstance(options.get("retry"), Retry):
+            connection.close()
+            raise RuntimeError("Upload queue URL overrides bounded timeouts")
+        return connection
+    except (ValueError, TypeError):
+        raise RuntimeError("Upload queue configuration is invalid") from None
 
 
 def enqueue(job_id: str, user_id: str) -> None:
@@ -114,7 +137,9 @@ def keep_lease(job_id: str, user_id: str) -> Iterator[None]:
             except redis.RedisError:
                 # Do not terminate processing on a transient heartbeat failure.
                 # If the lease expires, duplicate delivery is safe/idempotent.
-                log.warning("could not renew upload lease for job %s", job_id, exc_info=True)
+                log.warning(
+                    "could not renew upload lease for job %s", job_id, exc_info=True
+                )
 
     heartbeat = Thread(target=renew_loop, name=f"upload-lease-{job_id}", daemon=True)
     heartbeat.start()
@@ -134,12 +159,14 @@ def dead_letter(job_id: str, user_id: str, reason: str) -> None:
     try:
         queue.rpush(
             DEAD_LETTER_KEY,
-            json.dumps({
-                "job_id": job_id,
-                "user_id": user_id,
-                "reason": reason[:500],
-                "failed_at": time.time(),
-            }),
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "reason": reason[:500],
+                    "failed_at": time.time(),
+                }
+            ),
         )
     finally:
         queue.close()

@@ -14,6 +14,7 @@ if (!["http:", "https:"].includes(backendUrl.protocol)) {
 const backendOrigin = backendUrl.origin + backendUrl.pathname.replace(/\/+$/, "");
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   async headers() {
     return [
       {

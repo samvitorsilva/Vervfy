@@ -7,6 +7,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
+  TouchEvent as ReactTouchEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -23,6 +24,7 @@ import { getPlaybackController } from "@/lib/playback-controller";
 import {
   usePlayerStore,
   type CachedLyrics,
+  type ListMode,
   type LibraryView,
   type PlaylistRecord,
   type TrackRecord,
@@ -92,10 +94,27 @@ interface ListeningPeriodSummary {
 interface ListeningSummary {
   lastPlayedAt: Record<string, number>;
   month: ListeningPeriodSummary;
+  previousMonth?: ListeningPeriodSummary;
   year: ListeningPeriodSummary;
   monthStart: number;
+  previousMonthStart?: number;
   yearLabel: string;
   asOf: number;
+}
+
+function getPreviousMonthStart(summary: ListeningSummary | null): number | null {
+  if (!summary) return null;
+
+  const previousMonth = new Date((summary.previousMonthStart ?? Number.NaN) * 1000);
+  if (Number.isFinite(previousMonth.getTime())) {
+    return previousMonth.getTime() / 1000;
+  }
+
+  const monthStart = new Date(summary.monthStart * 1000);
+  if (!Number.isFinite(monthStart.getTime())) return null;
+  monthStart.setUTCDate(1);
+  monthStart.setUTCMonth(monthStart.getUTCMonth() - 1);
+  return monthStart.getTime() / 1000;
 }
 
 function generateAura(seed: string): string {
@@ -477,81 +496,6 @@ function PlaybackSeek({
   );
 }
 
-function parseLegacyMeta(value: unknown): LibraryMeta | null {
-  let parsed = value;
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const record = parsed as Record<string, unknown>;
-  const favorites = Array.isArray(record.favorites)
-    ? record.favorites.filter((id): id is string => typeof id === "string")
-    : [];
-  const playlists = Array.isArray(record.playlists)
-    ? record.playlists.flatMap((value) => {
-        if (typeof value !== "object" || value === null) return [];
-        const playlist = value as Record<string, unknown>;
-        if (typeof playlist.id !== "string" || typeof playlist.name !== "string") return [];
-        const rawTrackIds = Array.isArray(playlist.trackIds)
-          ? playlist.trackIds
-          : Array.isArray(playlist.fingerprints)
-            ? playlist.fingerprints
-            : [];
-        return [{
-          id: playlist.id,
-          name: playlist.name,
-          trackIds: [...new Set(rawTrackIds.filter((id): id is string => typeof id === "string"))],
-        }];
-      })
-    : [];
-  return {
-    favorites: [...new Set(favorites)].sort(),
-    playlists,
-  };
-}
-
-async function readLegacyMeta(): Promise<LibraryMeta | null> {
-  if (typeof indexedDB === "undefined") return null;
-  return new Promise((resolve) => {
-    let settled = false;
-    let database: IDBDatabase | null = null;
-    const finish = (result: LibraryMeta | null) => {
-      if (settled) return;
-      settled = true;
-      database?.close();
-      resolve(result);
-    };
-
-    const request = indexedDB.open("auralis-db", 2);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
-      if (!db.objectStoreNames.contains("handles")) db.createObjectStore("handles");
-      if (!db.objectStoreNames.contains("offlineTracks")) {
-        db.createObjectStore("offlineTracks", { keyPath: "id" });
-      }
-    };
-    request.onerror = () => finish(null);
-    request.onblocked = () => finish(null);
-    request.onsuccess = () => {
-      database = request.result;
-      if (!database.objectStoreNames.contains("kv")) {
-        finish(null);
-        return;
-      }
-      const transaction = database.transaction("kv", "readonly");
-      const valueRequest = transaction.objectStore("kv").get("auralis:library");
-      valueRequest.onsuccess = () => finish(parseLegacyMeta(valueRequest.result));
-      valueRequest.onerror = () => finish(null);
-      transaction.onerror = () => finish(null);
-    };
-  });
-}
-
 function openOfflineDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("Offline storage is not available in this browser."));
@@ -690,6 +634,179 @@ function viewName(view: LibraryView, playlists: PlaylistRecord[]): string {
   if (view === "account") return "Account";
   if (view.startsWith("artist:")) return decodeURIComponent(view.slice("artist:".length));
   return playlists.find((playlist) => `playlist:${playlist.id}` === view)?.name ?? "Playlist";
+}
+
+function AppLoadingSkeleton({
+  view,
+  listMode,
+  label,
+}: {
+  view: LibraryView;
+  listMode: ListMode;
+  label: string;
+}) {
+  const trackRows = Array.from({ length: 8 }, (_, index) => (
+    <div className="app-skeleton-list-row" key={index} aria-hidden="true">
+      <span className="app-skeleton-block app-skeleton-index" />
+      <span className="app-skeleton-track-copy">
+        <span className="app-skeleton-block app-skeleton-cover" />
+        <span className="app-skeleton-track-lines">
+          <span className="app-skeleton-block app-skeleton-line" />
+          <span className="app-skeleton-block app-skeleton-line short" />
+        </span>
+      </span>
+      <span className="app-skeleton-block app-skeleton-line album" />
+      <span className="app-skeleton-block app-skeleton-line time" />
+      <span className="app-skeleton-actions">
+        <span className="app-skeleton-block app-skeleton-action" />
+        <span className="app-skeleton-block app-skeleton-action" />
+      </span>
+    </div>
+  ));
+  const trackGrid = (
+    <div className="grid app-skeleton-track-grid" aria-hidden="true">
+      {Array.from({ length: 12 }, (_, index) => (
+        <div className="app-skeleton-track-card" key={index}>
+          <span className="app-skeleton-block app-skeleton-square" />
+          <span className="app-skeleton-block app-skeleton-line" />
+          <span className="app-skeleton-block app-skeleton-line short" />
+        </div>
+      ))}
+    </div>
+  );
+  const trackList = (
+    <div className="list app-skeleton-track-list" aria-hidden="true">
+      <div className="list-head"><div /><div /><div /><div /><div /></div>
+      {trackRows}
+    </div>
+  );
+  const playlistCards = (
+    <div className={`pl-grid app-skeleton-playlists${listMode === "list" ? " list-mode" : ""}`} aria-hidden="true">
+      {Array.from({ length: 6 }, (_, index) => (
+        <div className="pl-card app-skeleton-playlist-card" key={index}>
+          <span className="app-skeleton-block app-skeleton-playlist-cover" />
+          <span className="app-skeleton-playlist-copy">
+            <span className="app-skeleton-block app-skeleton-line" />
+            <span className="app-skeleton-block app-skeleton-line short" />
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+  const artistCards = (
+    <div className={`artist-grid app-skeleton-artists${listMode === "list" ? " list-mode" : ""}`} aria-hidden="true">
+      {Array.from({ length: 8 }, (_, index) => (
+        <div className={`artist-card app-skeleton-artist-card${listMode === "list" ? " list-mode" : ""}`} key={index}>
+          <span className="app-skeleton-block app-skeleton-artist-avatar" />
+          <span className="app-skeleton-block app-skeleton-line" />
+          <span className="app-skeleton-block app-skeleton-line short" />
+        </div>
+      ))}
+    </div>
+  );
+  const recap = (
+    <div className="recap-page app-skeleton-recap" aria-hidden="true">
+      <div className="recap-overview">
+        <div className="app-skeleton-recap-intro">
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <span className="app-skeleton-block app-skeleton-line" />
+        </div>
+      </div>
+      <div className="recap-periods">
+        <section className="recap-period app-skeleton-recap-card">
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <span className="app-skeleton-block app-skeleton-line short" />
+          <div className="app-skeleton-recap-chart">
+            {Array.from({ length: 12 }, (_, index) => (
+              <span className="app-skeleton-block app-skeleton-chart-bar" key={index} />
+            ))}
+          </div>
+          {Array.from({ length: 4 }, (_, index) => (
+            <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
+          ))}
+        </section>
+        <section className="recap-period app-skeleton-recap-card">
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <span className="app-skeleton-block app-skeleton-line short" />
+          {Array.from({ length: 5 }, (_, index) => (
+            <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
+          ))}
+        </section>
+      </div>
+    </div>
+  );
+  const account = (
+    <div className="account-view app-skeleton-account" aria-hidden="true">
+      <section className="acct-card">
+        <span className="app-skeleton-block app-skeleton-account-avatar" />
+        <div className="app-skeleton-account-profile">
+          <span className="app-skeleton-block app-skeleton-line short" />
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <span className="app-skeleton-block app-skeleton-line" />
+        </div>
+      </section>
+      <section className="acct-library-section">
+        <span className="app-skeleton-block app-skeleton-line heading" />
+        <div className="acct-grid">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div className="acct-panel" key={index}>
+              <span className="app-skeleton-block app-skeleton-line" />
+              <span className="app-skeleton-block app-skeleton-line short" />
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+  const artistProfile = (
+    <div className="artist-page app-skeleton-artist-profile" aria-hidden="true">
+      <header className="artist-hero">
+        <span className="app-skeleton-block app-skeleton-profile-avatar" />
+        <div className="app-skeleton-profile-copy">
+          <span className="app-skeleton-block app-skeleton-line short" />
+          <span className="app-skeleton-block app-skeleton-line heading" />
+          <span className="app-skeleton-block app-skeleton-line" />
+          <span className="app-skeleton-block app-skeleton-profile-button" />
+        </div>
+      </header>
+      <section className="artist-info">
+        <span className="app-skeleton-block app-skeleton-line heading" />
+        <span className="app-skeleton-block app-skeleton-line" />
+        <span className="app-skeleton-block app-skeleton-line" />
+        <span className="app-skeleton-block app-skeleton-line short" />
+      </section>
+      {listMode === "grid" ? trackGrid : trackList}
+    </div>
+  );
+  const isPlaylistDetail = view.startsWith("playlist:");
+
+  return (
+    <div className="app-loading-skeleton" aria-label={label} aria-busy="true">
+      {view === "recap" ? recap
+        : view === "account" ? account
+          : view === "playlists" ? playlistCards
+            : view === "artists" ? artistCards
+              : view.startsWith("artist:") ? artistProfile
+                : (
+                  <>
+                    {isPlaylistDetail ? (
+                      <div className="app-skeleton-playlist-detail" aria-hidden="true">
+                        <div className="playlist-hero">
+                          <span className="app-skeleton-block app-skeleton-detail-cover" />
+                          <div className="app-skeleton-detail-copy">
+                            <span className="app-skeleton-block app-skeleton-line short" />
+                            <span className="app-skeleton-block app-skeleton-line heading" />
+                            <span className="app-skeleton-block app-skeleton-line" />
+                            <span className="app-skeleton-block app-skeleton-profile-button" />
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                    {listMode === "grid" ? trackGrid : trackList}
+                  </>
+                )}
+    </div>
+  );
 }
 
 function getMetaFromStore(): LibraryMeta {
@@ -971,10 +1088,23 @@ export default function LibraryApp() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const pullStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pullDistanceRef = useRef(0);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const [profile, setProfile] = useState<Account | null>(null);
   const [listeningSummary, setListeningSummary] = useState<ListeningSummary | null>(null);
   const [listeningError, setListeningError] = useState<string | null>(null);
   const [yearlyRecapOpen, setYearlyRecapOpen] = useState(false);
+  const [monthlyRecapSeenMonth, setMonthlyRecapSeenMonth] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem("vervfy:monthly-recap-seen") ?? "";
+    } catch (error) {
+      console.warn("Could not read the monthly recap preference.", error);
+      return "";
+    }
+  });
   const [toast, setToast] = useState("");
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
@@ -1042,6 +1172,18 @@ export default function LibraryApp() {
   const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
 
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("view") !== "account") return;
+    setView("account");
+    url.searchParams.delete("view");
+    window.history.replaceState(
+      null,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, [setView]);
+
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
     setProfile((current) => current ? { ...current, photo_url: photoUrl } : current);
   }, []);
@@ -1079,6 +1221,30 @@ export default function LibraryApp() {
       cancelled = true;
     };
   }, [profile]);
+
+  const previousMonthStart = getPreviousMonthStart(listeningSummary);
+  const previousMonthSummary = listeningSummary?.previousMonth ?? {
+    playCount: 0,
+    topTracks: [],
+    topArtists: [],
+  };
+  const previousMonthKey = previousMonthStart !== null
+    ? new Date(previousMonthStart * 1000).toISOString().slice(0, 7)
+    : "";
+
+  const listeningMonthStart = listeningSummary?.monthStart;
+  useEffect(() => {
+    if (listeningMonthStart === undefined) return;
+    const nextMonthStart = new Date(listeningMonthStart * 1000);
+    nextMonthStart.setUTCMonth(nextMonthStart.getUTCMonth() + 1);
+    const timeout = window.setTimeout(() => {
+      void loadListeningSummary().catch((error: unknown) => {
+        console.error("Could not refresh the monthly recap.", error);
+        setListeningError("Listening history could not be loaded.");
+      });
+    }, Math.max(1000, nextMonthStart.getTime() - Date.now() + 1000));
+    return () => window.clearTimeout(timeout);
+  }, [listeningMonthStart, loadListeningSummary]);
 
   useEffect(() => {
     const shell = document.querySelector<HTMLElement>("#app > .shell");
@@ -1223,9 +1389,20 @@ export default function LibraryApp() {
   }, [listeningSummary, tracks]);
   const hasRediscoveryPlaylist = playlists.some((playlist) => playlist.name === "Rediscover");
   const recapMonthLabel = listeningSummary
-    ? new Intl.DateTimeFormat(language, { month: "long", year: "numeric" }).format(
+    ? new Intl.DateTimeFormat(language, {
+        month: "long",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(
         new Date(listeningSummary.monthStart * 1000),
       )
+    : "";
+  const recapPreviousMonthLabel = listeningSummary && previousMonthStart !== null
+    ? new Intl.DateTimeFormat(language, {
+        month: "long",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(new Date(previousMonthStart * 1000))
     : "";
   const recapTrackDateFormatter = useMemo(
     () => new Intl.DateTimeFormat(language, { month: "short", day: "numeric", year: "numeric" }),
@@ -1238,6 +1415,15 @@ export default function LibraryApp() {
   const canOpenYearlyRecap = listeningSummary
     ? new Date(listeningSummary.asOf * 1000).getUTCMonth() === 11
     : false;
+  const acknowledgeMonthlyRecap = () => {
+    if (!previousMonthKey) return;
+    try {
+      window.localStorage.setItem("vervfy:monthly-recap-seen", previousMonthKey);
+    } catch (error) {
+      console.warn("Could not save the monthly recap preference.", error);
+    }
+    setMonthlyRecapSeenMonth(previousMonthKey);
+  };
   useEffect(() => {
     if (yearlyRecapOpen && yearlyRecapDialogRef.current && !yearlyRecapDialogRef.current.open) {
       yearlyRecapDialogRef.current.showModal();
@@ -2010,6 +2196,9 @@ export default function LibraryApp() {
         await expectOk(accountResponse);
         const payload = (await tracksResponse.json()) as { tracks: ServerTrack[] };
         const account = (await accountResponse.json()) as Account;
+        const previousTracksById = new Map(
+          usePlayerStore.getState().tracks.map((track) => [track.id, track]),
+        );
         const nextTracks: TrackRecord[] = payload.tracks.map((track) => ({
           id: track.id,
           title: track.title || "Unknown title",
@@ -2025,7 +2214,6 @@ export default function LibraryApp() {
           customLyrics: track.custom_lyrics ?? null,
         }));
         const remoteMeta = normalizeMeta((await stateResponse.json()) as LibraryState);
-        const legacyMeta = await readLegacyMeta();
         let offlineRecords: OfflineTrackRecord[] = [];
         try {
           offlineRecords = await readOfflineTracks(account.id);
@@ -2033,31 +2221,40 @@ export default function LibraryApp() {
           console.error("Could not load saved offline tracks.", error);
           notify(t("Saved offline tracks could not be loaded from this browser."));
         }
+        if (cancelled) return;
         const offlineById = new Map(offlineRecords.map((record) => [record.trackId, record]));
         for (const track of nextTracks) {
           const record = offlineById.get(track.id);
           if (!record) continue;
-          const offlineUrl = URL.createObjectURL(record.audio);
-          offlineObjectUrlsRef.current.add(offlineUrl);
+          const previous = previousTracksById.get(track.id);
+          const offlineUrl = previous?.offlineUrl ?? URL.createObjectURL(record.audio);
+          if (!previous?.offlineUrl) offlineObjectUrlsRef.current.add(offlineUrl);
           track.offlineUrl = offlineUrl;
           track.offline = true;
           track.customLyrics = record.customLyrics ?? track.customLyrics;
           if (record.cover instanceof Blob) {
-            const coverUrl = URL.createObjectURL(record.cover);
-            offlineObjectUrlsRef.current.add(coverUrl);
+            const previousCoverUrl = previous?.coverUrl.startsWith("blob:")
+              ? previous.coverUrl
+              : null;
+            const coverUrl = previousCoverUrl ?? URL.createObjectURL(record.cover);
+            if (!previousCoverUrl) offlineObjectUrlsRef.current.add(coverUrl);
             track.coverUrl = coverUrl;
           }
         }
         const loadedTrackIds = new Set(nextTracks.map((track) => track.id));
         for (const record of offlineRecords) {
           if (loadedTrackIds.has(record.trackId)) continue;
-          const offlineUrl = URL.createObjectURL(record.audio);
-          offlineObjectUrlsRef.current.add(offlineUrl);
+          const previous = previousTracksById.get(record.trackId);
+          const offlineUrl = previous?.offlineUrl ?? URL.createObjectURL(record.audio);
+          if (!previous?.offlineUrl) offlineObjectUrlsRef.current.add(offlineUrl);
           const fallbackCover = generateAura(`${record.artist}|${record.album}|${record.title}`);
           let coverUrl = fallbackCover;
           if (record.cover instanceof Blob) {
-            coverUrl = URL.createObjectURL(record.cover);
-            offlineObjectUrlsRef.current.add(coverUrl);
+            const previousCoverUrl = previous?.coverUrl.startsWith("blob:")
+              ? previous.coverUrl
+              : null;
+            coverUrl = previousCoverUrl ?? URL.createObjectURL(record.cover);
+            if (!previousCoverUrl) offlineObjectUrlsRef.current.add(coverUrl);
           }
           nextTracks.push({
             id: record.trackId,
@@ -2074,7 +2271,6 @@ export default function LibraryApp() {
             customLyrics: record.customLyrics,
           });
         }
-        if (cancelled) return;
         setProfile(account);
         setTracks(nextTracks);
         trackCoverPollAttemptsRef.current = 0;
@@ -2082,30 +2278,30 @@ export default function LibraryApp() {
         void refreshTrackCoversRef.current();
         baselineRef.current = remoteMeta;
         etagRef.current = stateResponse.headers.get("ETag");
-        if (
-          remoteMeta.favorites.length === 0 &&
-          remoteMeta.playlists.length === 0 &&
-          legacyMeta &&
-          (legacyMeta.favorites.length > 0 || legacyMeta.playlists.length > 0)
-        ) {
-          applyMeta(legacyMeta);
-          void saveMeta();
-        } else {
-          applyMeta(remoteMeta);
-        }
+        // Unowned legacy browser metadata is preserved, but never assigned to an account.
+        applyMeta(remoteMeta);
       } catch (error) {
         if (!cancelled) {
           setLoadError(translateError(error instanceof Error ? error.message : "", "Could not load your library."));
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setPullRefreshing(false);
+          setPullDistance(0);
+        }
       }
     }
+    const handleRefresh = () => {
+      void loadLibrary();
+    };
+    window.addEventListener("vervfy:refresh", handleRefresh);
     void loadLibrary();
     return () => {
       cancelled = true;
+      window.removeEventListener("vervfy:refresh", handleRefresh);
     };
-  }, [applyMeta, notify, saveMeta, setTracks, t, translateError]);
+  }, [applyMeta, notify, setTracks, t, translateError]);
 
   useEffect(() => {
     if (!audioElement) return;
@@ -2702,6 +2898,58 @@ export default function LibraryApp() {
     );
   };
 
+  const resetPullGesture = () => {
+    pullStartRef.current = null;
+    pullDistanceRef.current = 0;
+    setPullDistance(0);
+  };
+
+  const handleContentTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (
+      loading ||
+      pullRefreshing ||
+      "__vervfyNativeShell" in window ||
+      event.touches.length !== 1 ||
+      event.currentTarget.scrollTop > 0
+    ) {
+      return;
+    }
+    const touch = event.touches.item(0);
+    if (!touch) return;
+    pullStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleContentTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const start = pullStartRef.current;
+    const touch = event.touches.item(0);
+    if (!start || !touch || event.touches.length !== 1) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (
+      event.currentTarget.scrollTop > 0 ||
+      deltaY <= 0 ||
+      (Math.abs(deltaX) > 10 && Math.abs(deltaX) > deltaY)
+    ) {
+      resetPullGesture();
+      return;
+    }
+    pullDistanceRef.current = deltaY;
+    setPullDistance(Math.min(deltaY * 0.5, 56));
+  };
+
+  const handleContentTouchEnd = () => {
+    const shouldRefresh = pullDistanceRef.current >= 96;
+    pullStartRef.current = null;
+    pullDistanceRef.current = 0;
+    if (!shouldRefresh) {
+      setPullDistance(0);
+      return;
+    }
+    setPullRefreshing(true);
+    setPullDistance(56);
+    window.dispatchEvent(new Event("vervfy:refresh"));
+  };
+
   const expandedPlayer = expandedPlayerOpen && currentTrack && typeof document !== "undefined"
     ? createPortal(
         <div
@@ -2951,15 +3199,83 @@ export default function LibraryApp() {
             )}
           </div>
 
-          <div className="content">
+          <div
+            className="content"
+            onTouchStart={handleContentTouchStart}
+            onTouchMove={handleContentTouchMove}
+            onTouchEnd={handleContentTouchEnd}
+            onTouchCancel={resetPullGesture}
+          >
+            <div
+              className={`pull-refresh-indicator${pullDistance > 0 || pullRefreshing ? " is-visible" : ""}`}
+              style={{ transform: `translate(-50%, ${pullDistance - 42}px)` }}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span className={`pull-refresh-spinner${pullRefreshing ? " is-spinning" : ""}`} aria-hidden="true" />
+              <span>
+                {pullRefreshing
+                  ? t("Refreshing…")
+                  : pullDistance >= 48
+                    ? t("Release to refresh")
+                    : t("Pull to refresh")}
+              </span>
+            </div>
             {loading ? (
-              <div className="library-skeleton" aria-label={t("Loading library")} aria-busy="true">
-                {[0, 1, 2].map((item) => <div className="skeleton-row" key={item}><span className="skeleton-art" /><span className="skeleton-copy"><i /><i /></span><span className="skeleton-time" /></div>)}
-              </div>
+              <AppLoadingSkeleton
+                view={view}
+                listMode={listMode}
+                label={t(
+                  view === "account"
+                    ? "Loading account…"
+                    : view === "recap"
+                      ? "Loading your listening history…"
+                      : view.startsWith("artist:")
+                        ? "Looking up artist details…"
+                        : "Loading library",
+                )}
+              />
             ) : loadError ? (
               <div className="empty"><div className="empty-orb" /><h3>{t("Music server unavailable")}</h3><p>{loadError}</p><button className="btn btn-primary" type="button" onClick={() => window.location.reload()}>{t("Retry connection")}</button></div>
             ) : (
               <>
+                {view === "library" &&
+                listeningSummary &&
+                previousMonthSummary.playCount > 0 &&
+                monthlyRecapSeenMonth !== previousMonthKey ? (
+                  <section className="monthly-recap-prompt" role="status">
+                    <div className="monthly-recap-copy">
+                      <h2>{t("Your monthly recap is ready.")}</h2>
+                      <p>
+                        <strong>{recapPreviousMonthLabel}</strong>
+                        {" · "}
+                        {recapNumberFormatter.format(previousMonthSummary.playCount)}{" "}
+                        {t("plays")}
+                      </p>
+                    </div>
+                    <div className="monthly-recap-actions">
+                      <button
+                        className="btn btn-primary"
+                        type="button"
+                        onClick={() => {
+                          acknowledgeMonthlyRecap();
+                          setView("recap");
+                        }}
+                      >
+                        {t("View recap")}
+                      </button>
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        aria-label={t("Dismiss recap notification")}
+                        onClick={acknowledgeMonthlyRecap}
+                      >
+                        <Icon name="close" />
+                      </button>
+                    </div>
+                  </section>
+                ) : null}
                 <div hidden={view !== "account"}>
                   <AccountSettings
                     active={view === "account"}
@@ -3006,6 +3322,13 @@ export default function LibraryApp() {
                             title={recapMonthLabel}
                             period={t("Monthly recap")}
                             summary={listeningSummary.month}
+                            tracksById={tracksById}
+                            onPlay={(track) => playFromList(tracks, track.id)}
+                          />
+                          <ListeningRecapCard
+                            title={recapPreviousMonthLabel}
+                            period={t("Last month")}
+                            summary={previousMonthSummary}
                             tracksById={tracksById}
                             onPlay={(track) => playFromList(tracks, track.id)}
                           />
@@ -3085,11 +3408,24 @@ export default function LibraryApp() {
                         </section>
                       </>
                     ) : (
-                      <div className="recap-loading" aria-live="polite">
-                        {listeningError
-                          ? <p>{t("Your recap is unavailable right now.")}</p>
-                          : <p>{t("Loading your listening history…")}</p>}
-                      </div>
+                      listeningError ? (
+                        <div className="recap-loading" role="status">{t("Your recap is unavailable right now.")}</div>
+                      ) : (
+                        <div className="recap-periods app-skeleton-listening-summary" aria-label={t("Loading your listening history…")} aria-busy="true">
+                          <section className="recap-period app-skeleton-recap-card" aria-hidden="true">
+                            <span className="app-skeleton-block app-skeleton-line heading" />
+                            <span className="app-skeleton-block app-skeleton-line short" />
+                            <div className="app-skeleton-recap-chart">
+                              {Array.from({ length: 12 }, (_, index) => (
+                                <span className="app-skeleton-block app-skeleton-chart-bar" key={index} />
+                              ))}
+                            </div>
+                            {Array.from({ length: 5 }, (_, index) => (
+                              <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
+                            ))}
+                          </section>
+                        </div>
+                      )
                     )}
                   </div>
                 ) : view === "playlists" ? (

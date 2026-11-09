@@ -18,7 +18,7 @@ export default function LegalDocument({
     month: "long",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date("2026-10-31T00:00:00Z"));
+  }).format(new Date("2026-11-01T00:00:00Z"));
 
   return (
     <main className="credits-page">
@@ -27,7 +27,7 @@ export default function LegalDocument({
         <h1>{t(title)}</h1>
         <p className="legal-updated">{t("Last updated: {date}").replace("{date}", updatedDate)}</p>
         <p className="legal-draft">
-          {t("Draft for legal review. The operator details and terms must be confirmed before launch.")}
+          {t("This document describes the current implementation and is not a certification of legal compliance.")}
         </p>
         {children}
         <SiteFooter />

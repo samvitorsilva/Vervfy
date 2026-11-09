@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from io import BytesIO
 import os
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -37,7 +37,6 @@ class ArtistPhotoApiTests(unittest.TestCase):
 
         def delete_photo(user_id: str, normalized_name: str):
             self.photos.pop((user_id, normalized_name), None)
-            return None
 
         self.read_patch = patch.object(server, "_artist_photo_record", side_effect=read_photo)
         self.save_patch = patch.object(server, "_save_artist_photo", side_effect=save_photo)
@@ -78,7 +77,7 @@ class ArtistPhotoApiTests(unittest.TestCase):
         uploaded_objects = []
         with (
             patch.object(server.audio_store, "enabled", return_value=True),
-            patch.object(server.audio_store, "upload", side_effect=lambda *args: uploaded_objects.append(args)),
+            patch.object(server.storage_lifecycle, "upload_bytes", side_effect=lambda *args: (uploaded_objects.append(args), "v2/synthetic/artist-user-a/artist-photo/unique.jpg")[1]),
         ):
             response = self.upload(image_bytes())
 
@@ -88,12 +87,13 @@ class ArtistPhotoApiTests(unittest.TestCase):
         self.assertEqual(stored["jpeg_data"], None)
         self.assertTrue(
             str(stored["storage_path"]).startswith(
-                "artist-photos/artist-user-a/vervfytestartist/"
+                "v2/synthetic/artist-user-a/artist-photo/"
             )
         )
         self.assertTrue(str(stored["storage_path"]).endswith(".jpg"))
         self.assertEqual(len(uploaded_objects), 1)
-        self.assertEqual(uploaded_objects[0][2], "image/jpeg")
+        self.assertEqual(uploaded_objects[0][:2], ("artist-user-a", "artist-photo"))
+        self.assertTrue(uploaded_objects[0][2].startswith(b"\xff\xd8"))
 
     def test_storage_photo_is_redirected_directly_to_supabase(self) -> None:
         self.photos[("artist-user-a", "vervfytestartist")] = {
@@ -131,6 +131,13 @@ class ArtistPhotoApiTests(unittest.TestCase):
         self.assertEqual(too_large.status_code, 413)
         self.assertEqual(gif.status_code, 400)
         self.assertEqual(too_many_pixels.status_code, 400)
+
+    def test_upload_rejects_executable_suffixes_and_extension_mismatch(self) -> None:
+        for filename in ("artist.php.png", "artist.jsp", "artist.jpg"):
+            with self.subTest(filename=filename):
+                response = self.upload(image_bytes("PNG"), filename)
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.photos, {})
 
     def test_photo_routes_require_authentication(self) -> None:
         server.app.dependency_overrides.pop(server.require_api_user)

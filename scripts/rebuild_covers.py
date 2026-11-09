@@ -11,12 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PIL import Image  # noqa: E402
-from sqlalchemy import select  # noqa: E402
+from PIL import Image
+from sqlalchemy import select
 
-import audio_store  # noqa: E402
-from db import SessionLocal, TrackRecord, User, tenant_session  # noqa: E402
-from library import (  # noqa: E402
+import audio_store
+from db import SessionLocal, TrackRecord, User, tenant_session
+from library import (
     AudioUnavailableError,
     Library,
     _extract_cover,
@@ -47,6 +47,7 @@ def _embedded_cover(filename: str, audio: bytes) -> Image.Image | None:
 
 
 def main() -> None:
+    raise RuntimeError("Retired maintenance entry point: immutable lifecycle review required")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--apply",

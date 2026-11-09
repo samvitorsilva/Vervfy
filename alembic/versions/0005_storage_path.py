@@ -2,8 +2,9 @@
 
 Idempotent on purpose — the app's startup shim may already have added the column.
 """
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "0005_storage_path"
 down_revision = "0004_session_version"

@@ -2,6 +2,9 @@ export interface Account {
   id: string;
   username: string;
   email: string | null;
+  has_password: boolean;
+  google_linked: boolean;
+  google_oauth_enabled: boolean;
   created_at: number;
   photo_url: string | null;
   track_count: number;

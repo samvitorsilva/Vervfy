@@ -1,0 +1,77 @@
+# Review-only isolated staging Blueprint. Do not deploy without approval of
+# the exact resources, region, plans, external values, and secret inventory.
+# This file is separate from the production render.yaml.
+databases:
+  - name: vervfy-staging-postgres
+    plan: free
+    region: oregon
+    postgresMajorVersion: "18"
+    databaseName: vervfy_oauth_staging
+    user: vervfy_staging_bootstrap
+    connectionPool: none
+    ipAllowList: []
+
+services:
+  - type: keyvalue
+    name: vervfy-staging-valkey
+    plan: free
+    region: oregon
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: "off"
+
+  - type: web
+    name: vervfy-staging-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install --require-hashes -r requirements.lock
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log --lifespan on
+    healthCheckPath: /healthz
+    autoDeployTrigger: "off"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: VERVFY_ENVIRONMENT
+        value: staging
+      - key: VERVFY_HTTPS_ONLY
+        value: "1"
+      - key: VERVFY_COOKIE_SAME_SITE
+        value: lax
+      - key: VERVFY_TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: VERVFY_SECRET_KEY
+        generateValue: true
+      - key: VERVFY_ASYNC_UPLOADS
+        value: "0"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: vervfy-staging-valkey
+          property: connectionString
+      # Supply only the app_runtime URL for this isolated staging database.
+      # Do not reference the database resource's bootstrap connection string.
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_OAUTH_ENABLED
+        value: "0"
+
+  - type: web
+    name: vervfy-staging-web
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /manifest.webmanifest
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Both URLs are exact, HTTPS, staging-only service origins. Render issues
+      # their actual hostnames only after the resources are created.
+      - key: BACKEND_URL
+        sync: false
+      - key: SITE_URL
+        sync: false

@@ -1,5 +1,10 @@
-import os, mimetypes, httpx, psycopg
+raise SystemExit("Retired unsafe storage migration: immutable lifecycle review required")
+import mimetypes
+import os
 from urllib.parse import quote
+
+import httpx
+import psycopg
 
 DB = os.environ["DATABASE_URL"].strip()
 SB = os.environ["SUPABASE_URL"].strip().rstrip("/")

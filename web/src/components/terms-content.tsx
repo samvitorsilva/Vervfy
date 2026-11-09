@@ -9,17 +9,21 @@ export default function TermsContent() {
   return (
     <LegalDocument title="Terms and Conditions">
       <section className="credits-source">
-        <h2>{t("Draft and operator details")}</h2>
+        <h2>{t("Operator and privacy")}</h2>
         <p>
-          {t("These terms are a draft pending legal review. Vervfy is operated by Sam Vitor, subject to confirmation before launch. Questions about these terms can be sent to")}{" "}
+          {t("Vervfy is an independent project operated by its individual maintainer, not a registered company. Questions about these terms can be sent to")}{" "}
           <a href="mailto:vervfy.dev@proton.me">vervfy.dev@proton.me</a>.
+        </p>
+        <p>
+          <a href="/privacy">{t("Privacy Policy")}</a>{" "}
+          {t("explains what information Vervfy handles, how to make a privacy request, and how account deletion works.")}
         </p>
       </section>
 
       <section className="credits-source">
         <h2>{t("Your account")}</h2>
         <p>
-          {t("Keep your sign-in details secure and provide accurate account information. You are responsible for activity carried out through your account. You may delete your account in account settings.")}
+          {t("Keep your sign-in details secure and provide accurate account information. You are responsible for activity carried out through your account. You may delete your account in account settings; deletion removes the primary account data and referenced stored files, subject to legal retention duties and infrastructure backups or logs described in the Privacy Policy.")}
         </p>
       </section>
 
@@ -48,16 +52,16 @@ export default function TermsContent() {
       </section>
 
       <section className="credits-source">
-        <h2>{t("Governing law")}</h2>
+        <h2>{t("Applicable law and rights")}</h2>
         <p>
-          {t("Brazil, State of Pernambuco, is the proposed governing jurisdiction, subject to legal review and confirmation before launch.")}
+          {t("These terms do not limit consumer or data-protection rights that apply under mandatory law, including Brazilian law where applicable.")}
         </p>
       </section>
 
       <section className="credits-source">
         <h2>{t("Changes to these terms")}</h2>
         <p>
-          {t("These draft terms may change before launch. The published version should include an effective date. Continued use after a material change will be addressed in the final terms.")}
+          {t("These working terms may change as the project develops. Material changes should be reflected here with an updated date.")}
         </p>
       </section>
     </LegalDocument>

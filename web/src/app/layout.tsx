@@ -3,10 +3,12 @@ import { cookies, headers } from "next/headers";
 import type { ReactNode } from "react";
 import RootProviders from "@/components/root-providers";
 import { languageFromAcceptLanguage, languageFromLocale } from "@/lib/language";
+import { siteUrl } from "@/lib/site-metadata";
 import "./styles.css";
 import "./auth.css";
 
 export const metadata: Metadata = {
+  metadataBase: siteUrl,
   title: {
     default: "Vervfy",
     template: "%s | Vervfy",

@@ -1,7 +1,7 @@
 """Add tenant-owned and Commons artist photos."""
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0015_artist_photos"
 down_revision = "0014_user_covers"

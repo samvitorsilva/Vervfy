@@ -31,9 +31,16 @@ class WikipediaArtistProfileLanguageTests(unittest.TestCase):
         for language, title, description, extract, host in cases:
             with self.subTest(language=language):
                 artist_path = quote("Kevin Quinn", safe="")
-                wiki_path = quote(title, safe="")
 
-                def handler(request: httpx.Request) -> httpx.Response:
+                def handler(
+                    request: httpx.Request,
+                    *,
+                    artist_path: str = artist_path,
+                    title: str = title,
+                    description: str = description,
+                    extract: str = extract,
+                    host: str = host,
+                ) -> httpx.Response:
                     if request.url.path.endswith(
                         f"/api/rest_v1/page/summary/{artist_path}"
                     ):
@@ -100,7 +107,14 @@ class WikipediaArtistProfileLanguageTests(unittest.TestCase):
             with self.subTest(language=language):
                 requests: list[httpx.Request] = []
 
-                def handler(request: httpx.Request) -> httpx.Response:
+                def handler(
+                    request: httpx.Request,
+                    *,
+                    requests: list[httpx.Request] = requests,
+                    description: str = description,
+                    extract: str = extract,
+                    host: str = host,
+                ) -> httpx.Response:
                     requests.append(request)
                     return httpx.Response(
                         200,
@@ -136,7 +150,12 @@ class WikipediaArtistProfileLanguageTests(unittest.TestCase):
             with self.subTest(language=language):
                 requests: list[httpx.Request] = []
 
-                def handler(request: httpx.Request) -> httpx.Response:
+                def handler(
+                    request: httpx.Request,
+                    *,
+                    requests: list[httpx.Request] = requests,
+                    localized_host: str = localized_host,
+                ) -> httpx.Response:
                     requests.append(request)
                     if request.url.host == localized_host:
                         return httpx.Response(404)

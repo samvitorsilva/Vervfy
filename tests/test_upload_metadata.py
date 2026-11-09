@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from io import BytesIO
 import socket
 import struct
 import tempfile
 import unittest
 import wave
+from contextlib import contextmanager
+from io import BytesIO
 from unittest.mock import patch
 
 import httpx
@@ -28,6 +28,13 @@ def silent_wav() -> bytes:
 
 
 class UploadMetadataTests(unittest.TestCase):
+    def test_library_rejects_executable_double_extension_before_reading_file(self) -> None:
+        self.assertIsNone(
+            Library("test-user").add_upload_file(
+                "song.jsp.mp3", "/path/that/must/not/be/read"
+            )
+        )
+
     def test_upload_skips_a_differently_encoded_duplicate_recording(self) -> None:
         engine = create_engine("sqlite://")
         Base.metadata.create_all(engine)

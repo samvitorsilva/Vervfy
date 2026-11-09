@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-from io import BytesIO
 import os
 import tempfile
+from io import BytesIO
 
 from PIL import Image, ImageOps
 from sqlalchemy import create_engine, select, update
@@ -61,6 +61,7 @@ def _extract_legacy_cover(
 
 
 def main() -> int:
+    raise RuntimeError("Retired maintenance entry point: immutable lifecycle review required")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch-size", type=int, default=10)
     args = parser.parse_args()

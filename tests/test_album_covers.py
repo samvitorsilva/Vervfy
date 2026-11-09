@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 import os
 import unittest
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from unittest.mock import call, patch
 
 from sqlalchemy import create_engine, select
@@ -11,8 +11,8 @@ from sqlalchemy.orm import sessionmaker, undefer
 
 os.environ.setdefault("VERVFY_SECRET_KEY", "test-only-vervfy-session-secret")
 
-from db import Base, TrackRecord, User
 import library
+from db import Base, TrackRecord, User
 
 
 class AlbumCoverTests(unittest.TestCase):
@@ -132,10 +132,10 @@ class AlbumCoverTests(unittest.TestCase):
             ).cover_checked_at
         self.assertIsNotNone(checked_at)
         if checked_at.tzinfo is None:
-            checked_at = checked_at.replace(tzinfo=timezone.utc)
+            checked_at = checked_at.replace(tzinfo=UTC)
         self.assertGreater(
             checked_at,
-            datetime.now(timezone.utc) - timedelta(minutes=1),
+            datetime.now(UTC) - timedelta(minutes=1),
         )
 
     def test_embedded_cover_uses_range_then_falls_back_to_full_file(self) -> None:
@@ -173,17 +173,13 @@ class AlbumCoverTests(unittest.TestCase):
         album_library = library.Library("album-user-a")
         with (
             patch.object(library.audio_store, "enabled", return_value=True),
-            patch.object(library.audio_store, "upload") as upload,
+            patch.object(library.storage_lifecycle, "upload_bytes", return_value="v2/synthetic/album-user-a/track-cover/unique.jpg") as upload,
         ):
             track = album_library.set_user_cover("placeholder", b"normalized-jpeg")
 
         self.assertEqual(track.cover_source, "user")
-        self.assertEqual(track.cover_path, "covers/album-user-a/placeholder.jpg")
-        upload.assert_called_once_with(
-            "covers/album-user-a/placeholder.jpg",
-            b"normalized-jpeg",
-            "image/jpeg",
-        )
+        self.assertEqual(track.cover_path, "v2/synthetic/album-user-a/track-cover/unique.jpg")
+        upload.assert_called_once_with("album-user-a", "track-cover", b"normalized-jpeg")
         with self.sessions() as session:
             row = session.scalar(
                 select(TrackRecord)
@@ -194,7 +190,7 @@ class AlbumCoverTests(unittest.TestCase):
                 )
             )
         self.assertIsNone(row.cover_data)
-        self.assertEqual(row.cover_path, "covers/album-user-a/placeholder.jpg")
+        self.assertEqual(row.cover_path, "v2/synthetic/album-user-a/track-cover/unique.jpg")
 
     def test_removing_track_preserves_a_cover_shared_with_other_tracks(self) -> None:
         with self.sessions() as session:
@@ -210,7 +206,7 @@ class AlbumCoverTests(unittest.TestCase):
         with patch.object(library.audio_store, "delete_quietly") as delete:
             self.assertTrue(album_library.remove("placeholder"))
 
-        self.assertEqual(delete.call_args_list, [call(None)])
+        delete.assert_not_called()
         with self.sessions() as session:
             remaining = session.get(
                 TrackRecord,

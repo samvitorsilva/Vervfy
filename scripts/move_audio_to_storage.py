@@ -27,10 +27,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import inspect, select, text  # noqa: E402
+from sqlalchemy import inspect, select, text
 
-import audio_store  # noqa: E402
-from db import SessionLocal, TrackRecord, engine  # noqa: E402
+import audio_store
+from db import SessionLocal, TrackRecord, engine
 
 
 def ensure_schema() -> None:
@@ -54,6 +54,7 @@ def verify(path: str, data: bytes) -> bool:
 
 
 def main() -> int:
+    raise RuntimeError("Retired maintenance entry point: immutable lifecycle review required")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--free-db", action="store_true", help="empty audio_data for rows verified in Storage")
     parser.add_argument("--vacuum", action="store_true", help="run VACUUM FULL tracks afterwards (Postgres)")
