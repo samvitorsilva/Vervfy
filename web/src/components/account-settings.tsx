@@ -1,8 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { apiFetch, expectOk } from "@/lib/api/client";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { ApiError, apiFetch, expectOk } from "@/lib/api/client";
+import {
+  isPasskeyBrowserSupported,
+  issueRecoveryCodes,
+  loadPasskeySecurity,
+  registerPasskey,
+  verifyPasskeyAction,
+  type PasskeyEnrollmentEligibility,
+  type PasskeySecurityStatus,
+} from "@/lib/passkey-client";
 import type { Account } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
 import { artistNames } from "@/components/artist-explorer";
@@ -16,6 +26,18 @@ function dateLabel(timestamp: number, language: string): string {
     month: "long",
     day: "numeric",
   });
+}
+
+function subscribeToBrowserSupport() {
+  return () => {};
+}
+
+function getPasskeyBrowserSupport() {
+  return isPasskeyBrowserSupported();
+}
+
+function getServerPasskeyBrowserSupport() {
+  return false;
 }
 
 async function sendJson(path: string, method: string, payload: unknown) {
@@ -131,6 +153,7 @@ export default function AccountSettings({
   onPhotoChange: (photoUrl: string | null) => void;
 }) {
   const { language, t, translateError } = useLanguage();
+  const router = useRouter();
   const tracks = usePlayerStore((state) => state.tracks);
   const playlists = usePlayerStore((state) => state.playlists);
   const setView = usePlayerStore((state) => state.setView);
@@ -138,6 +161,7 @@ export default function AccountSettings({
   const [error, setError] = useState("");
   const [email, setEmail] = useState("");
   const [emailPassword, setEmailPassword] = useState("");
+  const emailInputRef = useRef<HTMLInputElement>(null);
   const [emailMessage, setEmailMessage] = useState("");
   const [emailEditorOpen, setEmailEditorOpen] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
@@ -150,6 +174,23 @@ export default function AccountSettings({
   const [logoutEditorOpen, setLogoutEditorOpen] = useState(false);
   const [logoutPassword, setLogoutPassword] = useState("");
   const [logoutMessage, setLogoutMessage] = useState("");
+  const [passkeyFeatureState, setPasskeyFeatureState] = useState<
+    "loading" | "enabled" | "disabled" | "error"
+  >("loading");
+  const [passkeyMethods, setPasskeyMethods] =
+    useState<PasskeySecurityStatus | null>(null);
+  const [passkeyEligibility, setPasskeyEligibility] =
+    useState<PasskeyEnrollmentEligibility | null>(null);
+  const [passkeyMessage, setPasskeyMessage] = useState("");
+  const [passkeyPassword, setPasskeyPassword] = useState("");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const passkeyBrowserSupported = useSyncExternalStore(
+    subscribeToBrowserSupport,
+    getPasskeyBrowserSupport,
+    getServerPasskeyBrowserSupport,
+  );
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+  const passwordFormRef = useRef<HTMLFormElement>(null);
   const [photoMessage, setPhotoMessage] = useState("");
   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
   const [photoDraftUrl, setPhotoDraftUrl] = useState<string | null>(null);
@@ -161,6 +202,9 @@ export default function AccountSettings({
   const [deleteMessage, setDeleteMessage] = useState("");
   const [deleteEditorOpen, setDeleteEditorOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [emailPasskeyBusy, setEmailPasskeyBusy] = useState(false);
+  const [passwordPasskeyBusy, setPasswordPasskeyBusy] = useState(false);
+  const [logoutPasskeyBusy, setLogoutPasskeyBusy] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoImageRef = useRef<HTMLImageElement>(null);
   const photoStageRef = useRef<HTMLDivElement>(null);
@@ -179,6 +223,58 @@ export default function AccountSettings({
     },
     [],
   );
+
+  const refreshPasskeySecurity = useCallback(async () => {
+    try {
+      const status = await loadPasskeySecurity();
+      setPasskeyMethods(status.methods);
+      setPasskeyEligibility(status.enrollment);
+      setPasskeyFeatureState("enabled");
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 404) {
+        setPasskeyMethods(null);
+        setPasskeyEligibility(null);
+        setPasskeyFeatureState("disabled");
+        return;
+      }
+      setPasskeyFeatureState("error");
+      setPasskeyMessage(
+        translateError(
+          reason instanceof Error ? reason.message : "",
+          "Could not load passkey settings.",
+        ),
+      );
+    }
+  }, [translateError]);
+
+  useEffect(() => {
+    if (!active || !account) return;
+    let cancelled = false;
+    void loadPasskeySecurity().then((status) => {
+      if (cancelled) return;
+      setPasskeyMethods(status.methods);
+      setPasskeyEligibility(status.enrollment);
+      setPasskeyFeatureState("enabled");
+    }).catch((reason: unknown) => {
+      if (cancelled) return;
+      if (reason instanceof ApiError && reason.status === 404) {
+        setPasskeyMethods(null);
+        setPasskeyEligibility(null);
+        setPasskeyFeatureState("disabled");
+        return;
+      }
+      setPasskeyFeatureState("error");
+      setPasskeyMessage(
+        translateError(
+          reason instanceof Error ? reason.message : "",
+          "Could not load passkey settings.",
+        ),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [active, account, translateError]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -259,6 +355,49 @@ export default function AccountSettings({
     }
   }
 
+  function passkeyErrorMessage(reason: unknown): string {
+    if (reason instanceof DOMException && reason.name === "NotAllowedError") {
+      return t("Passkey request cancelled or timed out. Start again.");
+    }
+    if (
+      reason instanceof Error &&
+      reason.message.includes("not supported")
+    ) {
+      return t("Passkeys are not supported in this browser or connection.");
+    }
+    if (reason instanceof ApiError && reason.status === 400) {
+      return t("Passkey verification failed or expired. Start a new attempt.");
+    }
+    return translateError(
+      reason instanceof Error ? reason.message : "",
+      "Passkey verification failed. Try again.",
+    );
+  }
+
+  async function saveEmailWithPasskey() {
+    if (!emailInputRef.current?.reportValidity()) return;
+    setEmailPasskeyBusy(true);
+    setEmailMessage(t("Verifying with your passkey…"));
+    try {
+      const proof = await verifyPasskeyAction("email_change", {
+        email: email.trim(),
+      });
+      const data = await sendJson("/api/account/email", "PUT", {
+        email: email.trim(),
+        ...proof,
+      });
+      const nextEmail = typeof data.email === "string" ? data.email : null;
+      setAccount((current) => current ? { ...current, email: nextEmail } : current);
+      setEmail(nextEmail ?? "");
+      setEmailPassword("");
+      setEmailMessage(nextEmail ? t("Email saved to your account.") : t("Email removed."));
+    } catch (reason) {
+      setEmailMessage(passkeyErrorMessage(reason));
+    } finally {
+      setEmailPasskeyBusy(false);
+    }
+  }
+
   async function savePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -276,6 +415,76 @@ export default function AccountSettings({
       setPasswordMessage(t("Password updated."));
     } catch (reason) {
       setPasswordMessage(translateError(reason instanceof Error ? reason.message : "", "Could not update password."));
+    }
+  }
+
+  async function createPasswordWithPasskey() {
+    if (!passwordFormRef.current?.reportValidity()) return;
+    const formData = passwordFormRef.current
+      ? new FormData(passwordFormRef.current)
+      : null;
+    const newPassword = String(formData?.get("new_password") ?? "");
+    setPasswordPasskeyBusy(true);
+    setPasswordMessage(t("Verifying with your passkey…"));
+    try {
+      const proof = await verifyPasskeyAction("password_add", {
+        new_password: newPassword,
+      });
+      await sendJson("/api/account/password", "POST", {
+        new_password: newPassword,
+        ...proof,
+      });
+      passwordFormRef.current?.reset();
+      setAccount((current) => current ? { ...current, has_password: true } : current);
+      setPasswordMessage(t("Password updated."));
+      await refreshPasskeySecurity();
+    } catch (reason) {
+      setPasswordMessage(passkeyErrorMessage(reason));
+    } finally {
+      setPasswordPasskeyBusy(false);
+    }
+  }
+
+  async function enrollPasskey() {
+    setPasskeyBusy(true);
+    setPasskeyMessage(t("Starting passkey setup…"));
+    try {
+      await registerPasskey(passkeyPassword);
+      setPasskeyPassword("");
+      setPasskeyMessage(t("Passkey added. Your session was refreshed."));
+      await refreshPasskeySecurity();
+    } catch (reason) {
+      setPasskeyMessage(passkeyErrorMessage(reason));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function setupRecoveryCodes() {
+    setPasskeyBusy(true);
+    setPasskeyMessage(t("Verifying with your passkey…"));
+    try {
+      const codes = await issueRecoveryCodes();
+      setRecoveryCodes(codes);
+      setPasskeyMessage(t("Recovery codes created. Save them now; they will not be shown again."));
+      await refreshPasskeySecurity();
+    } catch (reason) {
+      setPasskeyMessage(passkeyErrorMessage(reason));
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function logoutAllWithPasskey() {
+    setLogoutPasskeyBusy(true);
+    setLogoutMessage(t("Verifying with your passkey…"));
+    try {
+      const proof = await verifyPasskeyAction("logout_all");
+      await sendJson("/api/account/logout-all", "POST", proof);
+      router.replace("/login");
+    } catch (reason) {
+      setLogoutMessage(passkeyErrorMessage(reason));
+      setLogoutPasskeyBusy(false);
     }
   }
 
@@ -651,7 +860,7 @@ export default function AccountSettings({
               <form className="acct-form acct-inline-editor" id="account-email-editor" onSubmit={saveEmail}>
                 <label className="acct-field">
                   <span>{t("Email address")}</span>
-                  <input type="email" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
+                  <input ref={emailInputRef} type="email" autoComplete="email" maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} />
                 </label>
                 <label className="acct-field">
                   {account.has_password ? (
@@ -664,6 +873,11 @@ export default function AccountSettings({
                   )}
                 </label>
                 <div className="acct-form-actions">
+                  {passkeyFeatureState === "enabled" && passkeyBrowserSupported && passkeyMethods?.passkey_count ? (
+                    <button className="btn" type="button" disabled={emailPasskeyBusy || pending} onClick={() => void saveEmailWithPasskey()}>
+                      {t(emailPasskeyBusy ? "Verifying with your passkey…" : "Save email with passkey")}
+                    </button>
+                  ) : null}
                   {!account.has_password && account.google_oauth_enabled ? (
                     <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("email_change")}>
                       {t("Verify with Google")}
@@ -695,7 +909,7 @@ export default function AccountSettings({
               {t(passwordEditorOpen ? "Cancel" : "Change password")}
             </button>
             {passwordEditorOpen ? (
-              <form className="acct-form acct-inline-editor" id="account-password-editor" onSubmit={savePassword}>
+              <form ref={passwordFormRef} className="acct-form acct-inline-editor" id="account-password-editor" onSubmit={savePassword}>
                 {account.has_password ? (
                   <label className="acct-field">
                     <span>{t("Current password")}</span>
@@ -710,6 +924,11 @@ export default function AccountSettings({
                   <span>{t(account.has_password ? "New password (min 8 characters)" : "Create password (min 8 characters)")}</span>
                   <input name="new_password" type="password" autoComplete="new-password" minLength={8} required />
                 </label>
+                {!account.has_password && passkeyFeatureState === "enabled" && passkeyBrowserSupported && passkeyMethods?.passkey_count ? (
+                  <button className="btn" type="button" disabled={passwordPasskeyBusy || pending} onClick={() => void createPasswordWithPasskey()}>
+                    {t(passwordPasskeyBusy ? "Verifying with your passkey…" : "Create password with passkey")}
+                  </button>
+                ) : null}
                 <button className="btn btn-primary" type="submit">{t(account.has_password ? "Update password" : "Add password")}</button>
                 <div className={`acct-form-msg${passwordMessage === t("Password updated.") ? " ok" : passwordMessage && passwordMessage !== t("Updating…") ? " error" : ""}`} role="status" aria-live="polite">{passwordMessage}</div>
               </form>
@@ -765,6 +984,91 @@ export default function AccountSettings({
             </div>
           </div>
         ) : null}
+        <div className="acct-security-item" aria-labelledby="account-passkeys-title">
+          <div className="acct-setting-copy">
+            <h3 id="account-passkeys-title">{t("Passkeys")}</h3>
+            <p>{t("Use a device screen lock or security key to verify sensitive account changes.")}</p>
+            {passkeyFeatureState === "enabled" && passkeyMethods ? (
+              <>
+                <p>{t("Available verification methods")}: {passkeyMethods.passkey_count > 0 ? t("Passkey") : passkeyMethods.has_password ? t("Password") : passkeyMethods.google_linked ? t("Google account") : t("No additional verification method")}</p>
+                <p>{t("Passkeys enrolled")}: {passkeyMethods.passkey_count}</p>
+                {passkeyMethods.recovery_codes_remaining > 0 ? (
+                  <p>{t("Unused recovery codes")}: {passkeyMethods.recovery_codes_remaining}</p>
+                ) : null}
+              </>
+            ) : passkeyFeatureState === "disabled" ? (
+              <p>{t("Passkeys are not enabled for this service.")}</p>
+            ) : passkeyFeatureState === "loading" ? (
+              <p aria-live="polite">{t("Loading passkey settings…")}</p>
+            ) : null}
+            {!passkeyBrowserSupported && passkeyFeatureState === "enabled" ? (
+              <p role="status">{t("Passkeys are not supported in this browser or connection.")}</p>
+            ) : null}
+            {passkeyEligibility && !passkeyEligibility.eligible ? (
+              <p>{t("Passkey setup is unavailable")}: {t(passkeyEligibility.reason === "password_verification_required" ? "A current password is required to add a passkey." : "The maximum number of passkeys has been reached.")}</p>
+            ) : null}
+          </div>
+          <div className="acct-security-action">
+            {passkeyFeatureState === "enabled" && passkeyEligibility?.eligible && passkeyBrowserSupported ? (
+              <>
+                <label className="acct-field">
+                  <span>{t("Current password")}</span>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={passkeyPassword}
+                    onChange={(event) => setPasskeyPassword(event.target.value)}
+                    disabled={passkeyBusy}
+                  />
+                </label>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={passkeyBusy || pending || !passkeyPassword}
+                  onClick={() => void enrollPasskey()}
+                >
+                  {t(passkeyBusy ? "Setting up passkey…" : "Add a passkey")}
+                </button>
+              </>
+            ) : null}
+            {passkeyFeatureState === "enabled" && passkeyMethods?.passkey_count ? (
+              passkeyMethods.recovery_codes_remaining === 0 ? (
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={passkeyBusy || pending || !passkeyBrowserSupported}
+                  onClick={() => void setupRecoveryCodes()}
+                >
+                  {t(passkeyBusy ? "Verifying with your passkey…" : "Set up recovery codes")}
+                </button>
+              ) : (
+                <p className="acct-form-msg">{t("Recovery-code regeneration and credential replacement are not available.")}</p>
+              )
+            ) : null}
+            {passkeyFeatureState === "error" && passkeyMessage ? (
+              <p className="acct-form-msg error" role="alert">{passkeyMessage}</p>
+            ) : null}
+          </div>
+          {passkeyMessage && passkeyFeatureState !== "error" ? (
+            <p className="acct-form-msg" role="status" aria-live="polite">{passkeyMessage}</p>
+          ) : null}
+          {recoveryCodes ? (
+            <div className="acct-recovery-codes" aria-labelledby="recovery-codes-title">
+              <h4 id="recovery-codes-title">{t("Recovery codes")}</h4>
+              <p>{t("Save these codes somewhere private. They are shown only once and cannot replace a passkey or sign-in method.")}</p>
+              <ol>
+                {recoveryCodes.map((code) => <li key={code}><code>{code}</code></li>)}
+              </ol>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => setRecoveryCodes(null)}
+              >
+                {t("Hide and clear codes")}
+              </button>
+            </div>
+          ) : null}
+        </div>
       </section>
 
       <section className="acct-settings acct-session" aria-labelledby="account-session-title">
@@ -783,6 +1087,11 @@ export default function AccountSettings({
             ) : account.google_oauth_enabled ? (
               <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("logout_all")}>{t("Verify with Google")}</button>
             ) : <p className="acct-form-msg">{t("Google sign-in is currently unavailable.")}</p>}
+            {passkeyFeatureState === "enabled" && passkeyBrowserSupported && passkeyMethods?.passkey_count ? (
+              <button className="btn" type="button" disabled={logoutPasskeyBusy || pending} onClick={() => void logoutAllWithPasskey()}>
+                {t(logoutPasskeyBusy ? "Verifying with your passkey…" : "Sign out of all devices with passkey")}
+              </button>
+            ) : null}
             <button className="btn btn-primary" type="button" disabled={pending} onClick={() => void logoutAll()}>{t("Sign out of all devices")}</button>
             <div className="acct-form-msg" role="status" aria-live="polite">{logoutMessage}</div>
           </div>

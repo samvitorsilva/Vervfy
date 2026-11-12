@@ -280,6 +280,28 @@ class GoogleTokenTests(unittest.TestCase):
         self.assertEqual(claims["sub"], "google-subject")
         self.assertEqual(claims["nonce"], nonce[0])
 
+    def test_real_authlib_preserves_signed_auth_time_and_rejects_missing_freshness(self):
+        now = int(time.time())
+        for value in (None, now, now - 600):
+            with self.subTest(auth_time=value):
+                service, verifier, nonce = self.service_for(
+                    {} if value is None else {"auth_time": value}
+                )
+                _, transaction = self.start_and_consume(service, verifier, nonce)
+                claims = asyncio.run(service.exchange_and_validate(
+                    "authorization-code", transaction
+                ))
+                if value is None:
+                    self.assertNotIn("auth_time", claims)
+                else:
+                    self.assertEqual(claims["auth_time"], value)
+                if value == now:
+                    self.assertEqual(service.require_fresh_authentication(claims), now)
+                else:
+                    # A fresh, correctly signed iat is not authentication evidence.
+                    with self.assertRaises(google_oauth.GoogleTokenError):
+                        service.require_fresh_authentication(claims)
+
     def test_sensitive_authorization_requests_recent_auth_time(self):
         service, _, _ = self.service_for()
         browser = "browser-binding-token-12345678901234567890"
@@ -595,6 +617,7 @@ class CallbackTests(unittest.TestCase):
         )
         client = TestClient(server.app, base_url="https://testserver", follow_redirects=False)
         service = google_oauth.GoogleOAuthService.__new__(google_oauth.GoogleOAuthService)
+        service._clock = time.time
         service.transactions = google_oauth.RedisOAuthTransactionStore("", client=MemoryRedis())
         flow = self._flow(user_id=None, purpose="signup", claims={
             "sub": "synthetic-subject", "email": "synthetic@example.com", "email_verified": True,
@@ -832,6 +855,106 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(proof["session_version"], 2)
         self.assertEqual(proof["auth_time"], flow.lookup_calls[0]["auth_time"])
         self.assertLessEqual(abs(proof["verified_at"] - time.time()), 2)
+
+    def test_missing_auth_time_callback_rejects_without_storing_proof(self):
+        user = {
+            "id": "google-user",
+            "session_version": 2,
+            "password_hash": None,
+        }
+        context = {
+            "user_id": "google-user",
+            "session_id": "active-session",
+            "session_version": 2,
+        }
+        flow = self._flow(
+            claims={
+                "iss": google_oauth.GOOGLE_ISSUER,
+                "sub": "linked-google-subject",
+            },
+            user_id="google-user",
+            purpose="password_add",
+            context=context,
+        )
+        flow.browser_binding = "browser-binding-token-12345678901234567890"
+        request = SimpleNamespace(
+            query_params={
+                "state": "one-time-state",
+                "code": "authorization-code",
+            },
+            cookies={
+                self.config.browser_cookie_name: flow.browser_binding,
+            },
+            session={
+                "user_id": "google-user",
+                "sid": "active-session",
+                "sv": 2,
+            },
+        )
+        with (
+            patch.object(server, "google_oauth_config", self.config),
+            patch.object(server, "google_oauth_service", flow),
+            patch.object(server, "current_user_row", return_value=user),
+            patch.object(
+                server.user_store,
+                "account_security",
+                return_value={"has_password": False, "google_linked": True},
+            ),
+        ):
+            response = asyncio.run(server.google_oauth_callback(request))
+        self.assertIn("google_reauth=failed", response.headers["location"])
+        self.assertEqual(flow.stored_proofs, [])
+        self.assertEqual(request.session["sid"], "active-session")
+
+    def test_missing_auth_time_email_change_rejects_without_storing_proof(self):
+        user = {
+            "id": "google-user",
+            "session_version": 2,
+            "password_hash": None,
+        }
+        context = {
+            "user_id": "google-user",
+            "session_id": "active-session",
+            "session_version": 2,
+        }
+        flow = self._flow(
+            claims={
+                "iss": google_oauth.GOOGLE_ISSUER,
+                "sub": "linked-google-subject",
+            },
+            user_id="google-user",
+            purpose="email_change",
+            context=context,
+        )
+        flow.browser_binding = "browser-binding-token-12345678901234567890"
+        request = SimpleNamespace(
+            query_params={
+                "state": "one-time-state",
+                "code": "authorization-code",
+            },
+            cookies={
+                self.config.browser_cookie_name: flow.browser_binding,
+            },
+            session={
+                "user_id": "google-user",
+                "sid": "active-session",
+                "sv": 2,
+            },
+        )
+        with (
+            patch.object(server, "google_oauth_config", self.config),
+            patch.object(server, "google_oauth_service", flow),
+            patch.object(server, "current_user_row", return_value=user),
+            patch.object(
+                server.user_store,
+                "account_security",
+                return_value={"has_password": False, "google_linked": True},
+            ),
+        ):
+            response = asyncio.run(server.google_oauth_callback(request))
+        self.assertIn("google_reauth=failed", response.headers["location"])
+        self.assertEqual(flow.stored_proofs, [])
+        self.assertEqual(request.session["sid"], "active-session")
 
     def test_google_routes_are_not_exposed_while_disabled(self):
         with (

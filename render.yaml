@@ -40,6 +40,8 @@ services:
         value: songs
       - key: GOOGLE_OAUTH_ENABLED
         value: "0"
+      - key: VERVFY_WEBAUTHN_ENABLED
+        value: "0"
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET

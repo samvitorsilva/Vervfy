@@ -1109,6 +1109,11 @@ span.artist-photo{
 .acct-form-msg.ok{ color:var(--cyan); }
 .acct-form-msg.error{ color:var(--danger); }
 .acct-form-actions{ grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:8px; }
+.acct-recovery-codes{ grid-column:1 / -1; width:100%; padding-top:14px; border-top:1px solid var(--border); }
+.acct-recovery-codes h4{ font-size:14px; font-weight:650; }
+.acct-recovery-codes p{ max-width:68ch; margin-top:5px; color:var(--text-mid); font-size:12px; line-height:1.55; }
+.acct-recovery-codes ol{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 20px; margin:14px 0; padding-left:22px; }
+.acct-recovery-codes code{ display:inline-block; padding:5px 8px; border:1px solid var(--border); border-radius:var(--radius-s); background:var(--bg-2); color:var(--text); font-size:12px; font-variant-numeric:tabular-nums; user-select:all; }
 .acct-delete-form{ max-width:600px; }
 .acct-session-actions{ display:flex; flex-wrap:wrap; gap:10px; }
 .acct-form .btn,.acct-session-actions .btn{ min-height:44px; }
@@ -1906,6 +1911,7 @@ span.artist-photo{
   .acct-security-item{ grid-template-columns:minmax(0,1fr); gap:12px; }
   .acct-form{ grid-template-columns:minmax(0,1fr); }
   .acct-form-actions{ grid-column:1; }
+  .acct-recovery-codes ol{ grid-template-columns:minmax(0,1fr); }
   .sleep-timer-popover{ right:12px; bottom:calc(var(--mobile-player-clear) + 12px); }
   body{ overflow:hidden; }
   .shell{ display:block; }

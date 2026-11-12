@@ -3,14 +3,19 @@ import { expect, test } from "@playwright/test";
 test("Google sign-in and sign-up appear only when the server enables OAuth", async ({
   page,
 }) => {
+  let googleOAuthEnabled = false;
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({
+      json: {
+        lyrics_provider_lrclib: true,
+        google_oauth_enabled: googleOAuthEnabled,
+      },
+    });
+  });
   await page.goto("/login");
   await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(0);
 
-  await page.route("**/api/config", async (route) => {
-    await route.fulfill({
-      json: { lyrics_provider_lrclib: true, google_oauth_enabled: true },
-    });
-  });
+  googleOAuthEnabled = true;
   await page.reload();
   await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveAttribute(
     "href",

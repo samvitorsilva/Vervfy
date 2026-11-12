@@ -36,6 +36,10 @@ class ProviderPostgresTests(unittest.TestCase):
         cls.engine = sa.create_engine(sa.URL.create('postgresql+psycopg', username='test_admin', database='postgres', query={'host': str(root)}))
         cls.addClassCleanup(cls.engine.dispose)
         with cls.engine.begin() as connection:
+            connection.exec_driver_sql(
+                'CREATE ROLE postgres LOGIN CREATEROLE BYPASSRLS'
+            )
+            connection.exec_driver_sql('CREATE ROLE supabase_admin NOLOGIN CREATEROLE')
             connection.exec_driver_sql('CREATE ROLE migration_owner LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
             connection.exec_driver_sql('GRANT CREATE ON DATABASE postgres TO migration_owner')
             connection.exec_driver_sql('CREATE ROLE app_user NOSUPERUSER NOBYPASSRLS')
@@ -46,11 +50,35 @@ class ProviderPostgresTests(unittest.TestCase):
             )
             for role in ('vervfy_identity_lookup_owner', 'vervfy_identity_lookup'):
                 connection.exec_driver_sql(f'CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT')
-            connection.exec_driver_sql('GRANT vervfy_identity_lookup_owner TO migration_owner')
+            for role in (
+                'google_auth_lookup',
+                'vervfy_identity_lookup_owner',
+                'vervfy_identity_lookup',
+            ):
+                connection.exec_driver_sql(
+                    f'GRANT {role} TO postgres '
+                    'WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'
+                )
+                connection.execute(
+                    sa.text("""
+                        UPDATE pg_catalog.pg_auth_members
+                        SET grantor='supabase_admin'::regrole
+                        WHERE roleid=CAST(:role AS regrole)
+                          AND member='postgres'::regrole
+                          AND grantor=current_user::regrole
+                    """),
+                    {'role': role},
+                )
+            connection.exec_driver_sql('SET ROLE postgres')
+            connection.exec_driver_sql(
+                'GRANT vervfy_identity_lookup_owner TO migration_owner '
+                'WITH ADMIN FALSE, INHERIT FALSE, SET TRUE'
+            )
             connection.exec_driver_sql(
                 'GRANT vervfy_identity_lookup TO google_auth_lookup '
                 'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE'
             )
+            connection.exec_driver_sql('RESET ROLE')
         path = Path(__file__).resolve().parents[1] / 'alembic/versions/0021_provider_identities.py'
         spec = importlib.util.spec_from_file_location('migration_0021', path)
         cls.migration = importlib.util.module_from_spec(spec)
@@ -372,7 +400,104 @@ class ProviderPostgresTests(unittest.TestCase):
         self.sql('RESET ROLE')
         self.sql('GRANT vervfy_identity_lookup_owner TO app_user')
         self.sql('SET LOCAL ROLE migration_owner')
-        with self.assertRaisesRegex(RuntimeError, 'isolated'), Operations.context(MigrationContext.configure(self.connection)):
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup_owner'
+        ), Operations.context(MigrationContext.configure(self.connection)):
+            self.lookup_migration.upgrade()
+        self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_accepts_supabase_admin_only_memberships(self):
+        self.install_lookup()
+        memberships = self.sql("""
+            SELECT r.rolname, grantor.rolname, admin_option,
+                   inherit_option, set_option
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+            JOIN pg_catalog.pg_roles grantor ON grantor.oid = m.grantor
+            WHERE m.member = 'postgres'::regrole
+              AND r.rolname IN (
+                  'vervfy_identity_lookup_owner', 'vervfy_identity_lookup'
+              )
+        """).all()
+        self.assertEqual(
+            set(memberships),
+            {
+                ('vervfy_identity_lookup_owner', 'supabase_admin', True, False, False),
+                ('vervfy_identity_lookup', 'supabase_admin', True, False, False),
+            },
+        )
+        self.assertIsNotNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_rejects_supabase_membership_that_can_inherit(self):
+        self.sql('RESET ROLE')
+        self.sql("""
+            UPDATE pg_catalog.pg_auth_members
+            SET inherit_option = TRUE
+            WHERE roleid = 'vervfy_identity_lookup'::regrole
+              AND member = 'postgres'::regrole
+        """)
+        self.sql('SET LOCAL ROLE migration_owner')
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+        ), Operations.context(MigrationContext.configure(self.connection)):
+            self.lookup_migration.upgrade()
+        self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_rejects_supabase_membership_that_can_set(self):
+        self.sql('RESET ROLE')
+        self.sql("""
+            UPDATE pg_catalog.pg_auth_members
+            SET set_option = TRUE
+            WHERE roleid = 'vervfy_identity_lookup'::regrole
+              AND member = 'postgres'::regrole
+        """)
+        self.sql('SET LOCAL ROLE migration_owner')
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+        ), Operations.context(MigrationContext.configure(self.connection)):
+            self.lookup_migration.upgrade()
+        self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_rejects_non_admin_supabase_membership(self):
+        self.sql('RESET ROLE')
+        self.sql("""
+            UPDATE pg_catalog.pg_auth_members
+            SET admin_option = FALSE
+            WHERE roleid = 'vervfy_identity_lookup'::regrole
+              AND member = 'postgres'::regrole
+        """)
+        self.sql('SET LOCAL ROLE migration_owner')
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+        ), Operations.context(MigrationContext.configure(self.connection)):
+            self.lookup_migration.upgrade()
+        self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_rejects_unverified_supabase_membership_grantor(self):
+        self.sql('RESET ROLE')
+        self.sql("""
+            UPDATE pg_catalog.pg_auth_members
+            SET grantor = 'test_admin'::regrole
+            WHERE roleid = 'vervfy_identity_lookup'::regrole
+              AND member = 'postgres'::regrole
+        """)
+        self.sql('SET LOCAL ROLE migration_owner')
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+        ), Operations.context(MigrationContext.configure(self.connection)):
+            self.lookup_migration.upgrade()
+        self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
+
+    def test_lookup_migration_rejects_membership_held_by_owner_role(self):
+        self.sql('RESET ROLE')
+        self.sql(
+            'GRANT app_user TO vervfy_identity_lookup_owner '
+            'WITH ADMIN FALSE, INHERIT FALSE, SET TRUE'
+        )
+        self.sql('SET LOCAL ROLE migration_owner')
+        with self.assertRaisesRegex(
+            RuntimeError, 'Unexpected memberships held by vervfy_identity_lookup_owner'
+        ), Operations.context(MigrationContext.configure(self.connection)):
             self.lookup_migration.upgrade()
         self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
 
@@ -393,7 +518,7 @@ class ProviderPostgresTests(unittest.TestCase):
                 'GRANT vervfy_identity_lookup TO app_user '
                 'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE'
             ],
-            'Only google_auth_lookup may inherit',
+            'Unexpected membership graph for vervfy_identity_lookup',
         )
 
     def test_lookup_migration_rejects_nested_executor_membership(self):
@@ -405,7 +530,7 @@ class ProviderPostgresTests(unittest.TestCase):
                 'GRANT lookup_group TO app_user '
                 'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE',
             ],
-            'Only google_auth_lookup may inherit',
+            'Unexpected membership graph for vervfy_identity_lookup',
         )
 
     def test_lookup_migration_rejects_delegation_through_trusted_login_role(self):
@@ -422,7 +547,7 @@ class ProviderPostgresTests(unittest.TestCase):
         )
         self.sql('SET LOCAL ROLE migration_owner')
         with self.assertRaisesRegex(
-            RuntimeError, 'no other role memberships or nested members'
+            RuntimeError, 'Unexpected membership graph for google_auth_lookup'
         ), Operations.context(MigrationContext.configure(self.connection)):
             self.lookup_migration.upgrade()
         self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
@@ -435,7 +560,7 @@ class ProviderPostgresTests(unittest.TestCase):
                 'GRANT unrelated_capability TO google_auth_lookup '
                 'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE',
             ],
-            'no other role memberships or nested members',
+            'Unexpected memberships held by google_auth_lookup',
         )
 
     def test_deleted_identity_no_longer_resolves(self):

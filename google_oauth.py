@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import secrets
@@ -77,6 +78,26 @@ class GoogleProviderError(RuntimeError):
 
 class GoogleTokenError(RuntimeError):
     pass
+
+
+def local_diagnostic(stage: str) -> None:
+    """Temporary opt-in local diagnostics: never log request or claim values."""
+    if (
+        os.environ.get("VERVFY_ENVIRONMENT", "").lower() in {"local", "development", "test"}
+        and os.environ.get("VERVFY_GOOGLE_OAUTH_DIAGNOSTICS") == "1"
+    ):
+        logging.getLogger("vervfy.oauth").warning("Google OAuth stage: %s", stage)
+
+
+class OAuthAccessLogFilter(logging.Filter):
+    """Remove OAuth callback parameters before Uvicorn formats access records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            client, method, target, version, status = record.args
+            if isinstance(target, str) and target.split("?", 1)[0] == CALLBACK_PATH:
+                record.args = (client, method, CALLBACK_PATH, version, status)
+        return True
 
 
 def _origin_parts(value: str):
@@ -568,6 +589,8 @@ class GoogleOAuthService:
             )
             if userinfo is None:
                 raise GoogleTokenError("Google response did not contain an ID token")
+            # Authlib UserInfo preserves the verified JWT claims; do not use
+            # UserInfo.filter(), which would discard non-profile claims.
             claims = dict(userinfo)
             self._validate_required_claims(claims, transaction["nonce"])
             return claims
@@ -643,8 +666,18 @@ class GoogleOAuthService:
         return None
 
     def require_fresh_authentication(self, claims: dict[str, Any]) -> int:
+        # Google may omit this opt-in claim and does not guarantee forced
+        # reauthentication. A new token (iat) cannot prove a new authentication.
         auth_time = claims.get("auth_time")
         now = self._clock()
+        if auth_time is None:
+            local_diagnostic("freshness_missing_auth_time")
+        elif isinstance(auth_time, bool) or not isinstance(auth_time, int):
+            local_diagnostic("freshness_invalid_auth_time")
+        elif auth_time > now + CLOCK_SKEW_SECONDS:
+            local_diagnostic("freshness_future_auth_time")
+        elif now - auth_time > FRESH_AUTH_MAX_AGE_SECONDS:
+            local_diagnostic("freshness_stale_auth_time")
         if (
             isinstance(auth_time, bool)
             or not isinstance(auth_time, int)
@@ -655,12 +688,23 @@ class GoogleOAuthService:
         return auth_time
 
     def store_pending_signup(
-        self, browser_binding: str, claims: dict[str, Any]
+        self, browser_binding: str, claims: dict[str, Any],
+        *, original_signup: dict[str, Any] | None = None,
     ) -> bool:
+        # Preserve the original signup receipt through username-conflict retries.
+        # This context is server-owned pending data, never ID-token/client claims.
+        receipt = (
+            {key: original_signup[key] for key in ("signup_transaction", "signup_verified_at")
+             if key in original_signup}
+            if original_signup is not None
+            else {"signup_transaction": secrets.token_hex(32),
+                  "signup_verified_at": int(self._clock())}
+        )
         return self.transactions.put_once(
             "signup",
             self.transactions.binding_digest(browser_binding),
             {
+                **receipt,
                 "issuer": GOOGLE_ISSUER,
                 "subject": claims["sub"],
                 "email": claims.get("email")

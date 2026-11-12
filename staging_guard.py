@@ -1,4 +1,5 @@
 """Fail-closed staging execution boundary. Validation never opens a connection."""
+import ast
 import hashlib
 import json
 import os
@@ -15,6 +16,14 @@ ROOT = Path(__file__).resolve().parent
 ROLES = {'MIGRATION_DATABASE_URL': 'vervfy_oauth_staging_user',
          'DATABASE_URL': 'app_runtime',
          'GOOGLE_IDENTITY_LOOKUP_DATABASE_URL': 'google_auth_lookup'}
+STAGING_PROJECT_REF = 'xgqvwqogdtktgfuubzwk'
+STAGING_HOST = 'aws-0-us-east-1.pooler.supabase.com'
+STAGING_DATABASE = 'postgres'
+STAGING_CA_SHA256 = '700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7'
+MIGRATION_HEAD = '0028_webauthn_enrollment'
+MIGRATION_COUNT = 28
+AUTHORIZED_OPERATIONS = {'preflight', 'postflight', 'upgrade'}
+UTC_TIMESTAMP = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z')
 LOCAL_PROFILE = 'local-disposable'
 LOCAL_DATABASE = 'vervfy_oauth_staging'
 LOCAL_HOST = '127.0.0.1'
@@ -217,6 +226,65 @@ def _validate_local_database_url(raw, role):
     return u
 
 
+RUNTIME_ENVIRONMENTS = {
+    'development', 'dev', 'test', 'local', 'local-test', 'staging',
+    'production', 'prod',
+}
+
+
+def validate_runtime_redis_url(raw, environment, env=None):
+    """Require authenticated, TLS-verified Redis for hosted staging."""
+    env = os.environ if env is None else env
+    if environment not in RUNTIME_ENVIRONMENTS:
+        raise RuntimeError('Staging guard: unsupported runtime environment')
+    if environment != 'staging':
+        return None
+
+    if any(
+        re.search(r'(?:^|_)(?:PROD|PRODUCTION)(?:_|$)', key)
+        for key in env
+    ):
+        raise RuntimeError(
+            'Staging guard: production configuration is forbidden'
+        )
+    if raw in (None, ''):
+        return None
+    expected_host = env.get('VERVFY_STAGING_REDIS_HOST')
+    if not isinstance(expected_host, str) or not re.fullmatch(
+        r'[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?', expected_host
+    ) or '..' in expected_host:
+        raise RuntimeError(
+            'Staging guard: explicit staging Redis hostname is required'
+        )
+    if not isinstance(raw, str) or any(
+        char.isspace() or ord(char) < 32 for char in raw
+    ):
+        raise RuntimeError('Staging guard: invalid staging REDIS_URL')
+
+    try:
+        url = urlsplit(raw)
+        port = url.port
+    except ValueError:
+        raise RuntimeError('Staging guard: malformed staging REDIS_URL') from None
+    if not (
+        url.scheme == 'rediss'
+        and url.hostname
+        and port is not None
+        and 1 <= port <= 65535
+        and url.username
+        and url.password
+        and url.path in ('', '/0')
+        and not url.query
+        and not url.fragment
+        and url.hostname.lower() == expected_host.lower()
+    ):
+        raise RuntimeError(
+            'Staging guard: REDIS_URL must match the authenticated staging '
+            'rediss endpoint without TLS overrides'
+        )
+    return url
+
+
 def _validate_local_redis_url(raw, valkey_config, state):
     require(isinstance(raw, str) and raw
             and not any(c.isspace() or ord(c) < 32 for c in raw),
@@ -357,54 +425,33 @@ def unique(pairs):
 
 
 def tls_mode(approval):
-    """Default to authenticated TLS; a bounded approval permits Render staging only."""
-    if 'tls_exception' not in approval:
-        return 'verify-full'
-    e = approval['tls_exception']
-    require(isinstance(e, dict) and set(e) == {
-        'provider', 'isolated_staging', 'sslmode', 'expected_roles', 'approver',
-        'risk_acceptance', 'approved_at', 'expires_at'}, 'invalid TLS exception fields')
-    require(e['provider'] == 'render' and e['isolated_staging'] is True
-            and e['sslmode'] == 'require', 'exception is only for isolated Render staging')
-    require(re.fullmatch(r'dpg-[a-z0-9-]+', approval['resource_id']) is not None
-            and re.fullmatch(r'dpg-[a-z0-9-]+\.[a-z0-9-]+-postgres\.render\.com',
-                             approval['hostname']) is not None,
-            'exception requires a direct Render PostgreSQL resource')
-    require(approval['database'] == 'vervfy_oauth_staging' and approval['port'] == 5432
-            and e['expected_roles'] == ROLES, 'exception identity/roles mismatch')
-    require(all(isinstance(e[k], str) and e[k].strip()
-                for k in ('approver', 'risk_acceptance')), 'approver and risk acceptance required')
-    try:
-        times = [datetime.strptime(e[k], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                 for k in ('approved_at', 'expires_at')]
-    except (ValueError, TypeError):
-        raise RuntimeError('Staging guard: invalid exception UTC timestamps') from None
-    start, end = times
-    require(start <= datetime.now(timezone.utc) < end and end - start <= timedelta(days=7),
-            'TLS exception not active or exceeds seven days')
-    return 'require'
+    """Require authenticated TLS to the pinned Supabase staging project."""
+    require('tls_exception' not in approval, 'TLS exceptions are not permitted')
+    return 'verify-full'
 
 
 def tls_parameters(approval):
-    """One exact TLS parameter set for URLs and psql, with no partial CA approval."""
+    """One exact TLS parameter set, pinned to the reviewed staging CA."""
     mode = tls_mode(approval)
     ca_keys = {'ca_file', 'ca_sha256'} & approval.keys()
-    require(ca_keys in (set(), {'ca_file', 'ca_sha256'}), 'incomplete CA approval')
-    require(mode == 'require' or bool(ca_keys), 'verify-full requires approved CA')
+    require(ca_keys == {'ca_file', 'ca_sha256'}, 'verified staging CA is required')
+    require(isinstance(approval['ca_file'], str)
+            and Path(approval['ca_file']).is_absolute()
+            and approval['ca_sha256'] == STAGING_CA_SHA256,
+            'staging CA does not match the reviewed certificate')
     params = {'sslmode': mode, 'gssencmode': 'disable'}
-    if ca_keys:
-        require(isinstance(approval['ca_file'], str) and approval['ca_file']
-                and Path(approval['ca_file']).is_absolute(), 'invalid approved CA path')
-        require(isinstance(approval['ca_sha256'], str)
-                and re.fullmatch(r'[0-9a-f]{64}', approval['ca_sha256']) is not None,
-                'invalid approved CA digest')
-        params['sslrootcert'] = approval['ca_file']
+    params['sslrootcert'] = approval['ca_file']
     return params
 
 
 def validate_url(raw, role, approval):
     # Only password may be percent encoded. Reject whitespace and URI fragments.
     require(isinstance(raw, str) and raw and not any(c.isspace() or ord(c)<32 for c in raw), 'missing/invalid URL')
+    require(approval.get('hostname') == STAGING_HOST
+            and approval.get('port') == 5432
+            and approval.get('database') == STAGING_DATABASE
+            and approval.get('resource_id') == STAGING_PROJECT_REF,
+            'approval does not match the pinned Supabase staging target')
     try:
         u = urlsplit(raw)
         port = u.port
@@ -413,39 +460,114 @@ def validate_url(raw, role, approval):
         raise RuntimeError('Staging guard: malformed URL') from None
     require(u.scheme in ('postgresql', 'postgresql+psycopg'), 'unsupported driver')
     require(not u.fragment and u.netloc.count('@') == 1, 'ambiguous authority/fragment')
-    require(u.hostname == approval['hostname'] and u.netloc.rsplit('@',1)[1] == f"{approval['hostname']}:{approval['port']}", 'endpoint mismatch')
-    require(port == approval['port'] and u.username == role and u.password, 'port/login/password mismatch')
-    require(u.path == '/vervfy_oauth_staging', 'database mismatch')
+    expected_login = f'{role}.{STAGING_PROJECT_REF}'
+    require(u.hostname == STAGING_HOST
+            and u.netloc.rsplit('@', 1)[1] == f'{STAGING_HOST}:5432',
+            'endpoint mismatch')
+    require(port == 5432 and u.username == expected_login and u.password,
+            'port/login/password mismatch')
+    require(u.path == f'/{STAGING_DATABASE}', 'database mismatch')
     expected = tls_parameters(approval)
     require(len(query) == len(expected) and dict(query) == expected, 'unsafe TLS/connection parameters')
     require('\x00' not in unquote(u.password), 'invalid password encoding')
     return u
 
 
-def _validate_hosted(env):
+def _validate_operation_approval(approval, operation, now=None):
+    require(isinstance(operation, str) and operation in AUTHORIZED_OPERATIONS,
+            'an explicit authorized operation is required')
+    require(approval.get('operation') == operation,
+            'approval operation does not match the requested action')
+
+    timestamps = {}
+    for key in ('issued_at', 'expires_at'):
+        value = approval.get(key)
+        require(isinstance(value, str) and UTC_TIMESTAMP.fullmatch(value),
+                f'invalid approval {key}')
+        try:
+            timestamps[key] = datetime.strptime(
+                value, '%Y-%m-%dT%H:%M:%SZ'
+            ).replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise RuntimeError(f'Staging guard: invalid approval {key}') from None
+
+    issued_at = timestamps['issued_at']
+    expires_at = timestamps['expires_at']
+    now = datetime.now(timezone.utc) if now is None else now
+    require(now.tzinfo is not None and now.utcoffset() == timedelta(0),
+            'approval validation clock must be UTC')
+    require(issued_at <= now < expires_at,
+            'approval is not currently valid')
+    require(expires_at - issued_at <= timedelta(hours=24),
+            'approval validity exceeds 24 hours')
+
+
+def _validate_hosted(env, operation):
     require(env.get('VERVFY_ENVIRONMENT') == 'staging', 'explicit staging environment required')
     require(not any(k.startswith('PG') for k in env), 'remove all PG* overrides')
     require(not any(k in env for k in ('SSL_CERT_FILE','SSL_CERT_DIR')), 'remove TLS trust overrides')
+    require(isinstance(operation, str) and operation in AUTHORIZED_OPERATIONS,
+            'an explicit authorized operation is required')
     try:
         raw = Path(env['STAGING_APPROVAL_FILE']).read_bytes()
         require(hashlib.sha256(raw).hexdigest() == env['STAGING_APPROVAL_SHA256'], 'approval digest mismatch')
         a = json.loads(raw, object_pairs_hook=unique)
-        require(isinstance(a, dict) and set(a) - {'tls_exception','ca_file','ca_sha256'} == {'hostname','port','database','resource_id','archive','archive_sha256','manifest','manifest_sha256'}, 'approval fields mismatch')
+        require(isinstance(a, dict) and set(a) == {
+            'hostname', 'port', 'database', 'resource_id', 'archive',
+            'archive_sha256', 'manifest', 'manifest_sha256', 'ca_file',
+            'ca_sha256', 'operation', 'issued_at', 'expires_at',
+        }, 'approval fields mismatch')
+        _validate_operation_approval(a, operation)
         require(isinstance(a['hostname'],str) and re.fullmatch(r'[a-z0-9]+(?:[.-][a-z0-9]+)+',a['hostname']), 'invalid approved hostname')
-        require(type(a['port']) is int and a['port'] == 5432 and a['database']=='vervfy_oauth_staging' and isinstance(a['resource_id'], str) and a['resource_id'].strip(), 'invalid approved identity')
-        tls = tls_parameters(a)
-        approved_files = [('archive','archive_sha256'),('manifest','manifest_sha256')]
-        if 'sslrootcert' in tls:
-            approved_files.append(('ca_file','ca_sha256'))
+        require(a['hostname'] == STAGING_HOST and type(a['port']) is int
+                and a['port'] == 5432 and a['database'] == STAGING_DATABASE
+                and a['resource_id'] == STAGING_PROJECT_REF,
+                'invalid approved Supabase staging identity')
+        tls_parameters(a)
+        approved_files = [
+            ('archive', 'archive_sha256'), ('manifest', 'manifest_sha256'),
+            ('ca_file', 'ca_sha256'),
+        ]
         for pathkey, hashkey in approved_files:
             p = Path(a[pathkey])
             require(p.is_absolute() and p.is_file() and not p.is_symlink(), 'invalid approved file')
             require(hashlib.sha256(p.read_bytes()).hexdigest() == a[hashkey], 'approved file digest mismatch')
         manifest=json.loads(Path(a['manifest']).read_bytes(), object_pairs_hook=unique)
         versions={str(p.relative_to(ROOT)) for p in (ROOT/'alembic/versions').glob('*.py')}
-        required={'alembic.ini','alembic/env.py','db.py','staging_guard.py','requirements.lock',
+        required={'alembic.ini','alembic/env.py','db.py','staging_guard.py',
+                  'supabase_role_memberships.py','requirements.lock',
                   'docs/staging-alembic-preflight.sql','docs/staging-alembic-postflight.sql'} | versions
-        require(len(versions)==26 and set(manifest)==required, 'execution manifest file set mismatch')
+        require(len(versions) == MIGRATION_COUNT and set(manifest) == required,
+                'execution manifest file set mismatch')
+        migration_parents = {}
+        for path in (ROOT / 'alembic' / 'versions').glob('*.py'):
+            module = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+            values = {}
+            for node in module.body:
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                        and isinstance(node.targets[0], ast.Name) \
+                        and node.targets[0].id in {'revision', 'down_revision'}:
+                    values[node.targets[0].id] = ast.literal_eval(node.value)
+            require(isinstance(values.get('revision'), str)
+                    and ('down_revision' in values),
+                    'invalid migration revision metadata')
+            migration_parents[values['revision']] = values['down_revision']
+        parents = set(migration_parents.values()) - {None}
+        heads = set(migration_parents) - parents
+        require(len(migration_parents) == MIGRATION_COUNT
+                and heads == {MIGRATION_HEAD}
+                and all(parent is None or isinstance(parent, str)
+                        for parent in migration_parents.values())
+                and all(parent is None or parent in migration_parents
+                        for parent in migration_parents.values()),
+                'unexpected Alembic migration chain')
+        seen = set()
+        revision = MIGRATION_HEAD
+        while revision is not None and revision not in seen:
+            seen.add(revision)
+            revision = migration_parents[revision]
+        require(len(seen) == MIGRATION_COUNT and revision is None,
+                'unexpected Alembic migration chain')
         for name,digest in manifest.items():
             p=ROOT/name
             require(not any(x.is_symlink() for x in [p,*p.parents]), 'symlink execution path')
@@ -456,14 +578,14 @@ def _validate_hosted(env):
         raise RuntimeError('Staging guard: missing or invalid approval material') from None
 
 
-def validate(env=None):
+def validate(env=None, operation=None):
     env = os.environ if env is None else env
     profile = env.get('VERVFY_STAGING_PROFILE')
     if profile == LOCAL_PROFILE:
         return _validate_local(env)
     require(profile is None or profile == 'hosted',
             'unknown staging profile')
-    return _validate_hosted(env)
+    return _validate_hosted(env, operation)
 
 
 def require_alembic_execution_enabled(env=None):
@@ -474,8 +596,9 @@ def require_alembic_execution_enabled(env=None):
 
 def main():
     require(len(sys.argv)==2 and sys.argv[1] in ('check','preflight','postflight','upgrade'), 'invalid operation')
-    a, urls=validate()
     action=sys.argv[1]
+    operation = 'preflight' if action == 'check' else action
+    a, urls=validate(operation=operation)
     if action=='check':
         if a.get('profile') == LOCAL_PROFILE:
             print('PASS: local-disposable profile validated (no connection)')
@@ -489,8 +612,9 @@ def main():
         subprocess.run([sys.executable,'-m','alembic','-c',str(ROOT/'alembic.ini'),'upgrade','head'],cwd=ROOT,env=child,check=True)
     else:
         u=urls['MIGRATION_DATABASE_URL']
-        child.update(PGHOST=a['hostname'], PGPORT=str(a['port']), PGDATABASE=a['database'],
-                     PGUSER=ROLES['MIGRATION_DATABASE_URL'], PGPASSWORD=unquote(u.password),
+        child.update(PGHOST=STAGING_HOST, PGPORT='5432', PGDATABASE=STAGING_DATABASE,
+                     PGUSER=f"{ROLES['MIGRATION_DATABASE_URL']}.{STAGING_PROJECT_REF}",
+                     PGPASSWORD=unquote(u.password),
                      PGCONNECT_TIMEOUT='10',
                      PGOPTIONS='-c search_path=public -c default_transaction_read_only=on -c statement_timeout=30s')
         child.update({'PG' + key.upper(): value for key, value in tls_parameters(a).items()})

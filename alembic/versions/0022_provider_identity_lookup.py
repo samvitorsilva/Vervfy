@@ -10,6 +10,10 @@ migration does not manage logins.
 import sqlalchemy as sa
 
 from alembic import op
+from supabase_role_memberships import (
+    assert_member_memberships,
+    assert_role_memberships,
+)
 
 revision = "0022_provider_identity_lookup"
 down_revision = "0021_provider_identities"
@@ -45,45 +49,26 @@ def upgrade() -> None:
     ):
         raise RuntimeError(f"Provision restricted login role {LOOKUP_LOGIN} before migration")
     role_ids[LOOKUP_LOGIN] = lookup_login.oid
-    unsafe = bind.execute(sa.text("""
-        SELECT 1 FROM pg_catalog.pg_auth_members m
-        WHERE m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = :owner)
-           OR (m.roleid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = :owner)
-               AND m.member <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
-    """), {"owner": OWNER}).first()
-    if unsafe:
-        raise RuntimeError("Lookup owner must be isolated; only the migration role may hold membership")
-
-    executor_memberships = bind.execute(sa.text("""
-        SELECT member, inherit_option, set_option, admin_option
-        FROM pg_catalog.pg_auth_members
-        WHERE roleid = :executor
-    """), {"executor": role_ids[EXECUTOR]}).all()
-    if (
-        len(executor_memberships) != 1
-        or executor_memberships[0].member != role_ids[LOOKUP_LOGIN]
-        or not executor_memberships[0].inherit_option
-        or executor_memberships[0].set_option
-        or executor_memberships[0].admin_option
-    ):
-        raise RuntimeError(
-            f"Only {LOOKUP_LOGIN} may inherit {EXECUTOR}; SET and ADMIN must be disabled"
-        )
-    unexpected_lookup_membership = bind.execute(sa.text("""
-        SELECT 1 FROM pg_catalog.pg_auth_members
-        WHERE member = :lookup_login AND roleid <> :executor
-        UNION ALL
-        SELECT 1 FROM pg_catalog.pg_auth_members
-        WHERE roleid = :lookup_login
-        LIMIT 1
-    """), {
-        "lookup_login": role_ids[LOOKUP_LOGIN],
-        "executor": role_ids[EXECUTOR],
-    }).first()
-    if unexpected_lookup_membership:
-        raise RuntimeError(
-            f"{LOOKUP_LOGIN} must have no other role memberships or nested members"
-        )
+    migration_role = bind.execute(
+        sa.text("SELECT current_user")
+    ).scalar_one()
+    assert_role_memberships(
+        bind,
+        OWNER,
+        [(migration_role, "postgres", False, False, True)],
+    )
+    assert_member_memberships(bind, OWNER, [])
+    assert_role_memberships(
+        bind,
+        EXECUTOR,
+        [(LOOKUP_LOGIN, "postgres", False, True, False)],
+    )
+    assert_role_memberships(bind, LOOKUP_LOGIN, [])
+    assert_member_memberships(
+        bind,
+        LOOKUP_LOGIN,
+        [(EXECUTOR, "postgres", False, True, False)],
+    )
     unexpected_executor_access = bind.execute(sa.text("""
         SELECT r.rolname
         FROM pg_catalog.pg_roles r

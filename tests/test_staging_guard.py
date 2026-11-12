@@ -2,8 +2,11 @@
 import hashlib
 import runpy
 import shlex
+import ssl
 import tempfile
+import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode
@@ -11,54 +14,181 @@ from urllib.parse import urlencode
 import staging_guard as guard
 
 
+class RuntimeRedisGuardTests(unittest.TestCase):
+    URL = 'rediss://default:synthetic-token@staging-example.upstash.io:6379/0'
+
+    def test_staging_rediss_requires_default_verified_tls(self):
+        parsed = guard.validate_runtime_redis_url(
+            self.URL,
+            'staging',
+            {
+                'GOOGLE_OAUTH_ENABLED': '0',
+                'VERVFY_STAGING_REDIS_HOST': 'staging-example.upstash.io',
+            },
+        )
+        self.assertEqual(parsed.hostname, 'staging-example.upstash.io')
+
+        import redis
+
+        client = redis.Redis.from_url(self.URL)
+        try:
+            connection = client.connection_pool.make_connection()
+            self.assertEqual(connection.cert_reqs, ssl.CERT_REQUIRED)
+            self.assertTrue(connection.check_hostname)
+        finally:
+            client.close()
+
+    def test_staging_rejects_insecure_or_overridden_redis_urls(self):
+        invalid_urls = (
+            'redis://default:synthetic-token@staging-example.upstash.io:6379/0',
+            'rediss://staging-example.upstash.io:6379/0',
+            'rediss://default:synthetic-token@staging-example.upstash.io/0',
+            self.URL + '?ssl_cert_reqs=none',
+            self.URL + '?ssl_check_hostname=false',
+            self.URL + '#redis',
+            'rediss://default:synthetic-token@staging-example.upstash.io:6379/1',
+        )
+        for value in invalid_urls:
+            with self.subTest(url=value), self.assertRaises(RuntimeError):
+                guard.validate_runtime_redis_url(
+                    value,
+                    'staging',
+                    {'VERVFY_STAGING_REDIS_HOST': 'staging-example.upstash.io'},
+                )
+
+    def test_staging_rejects_missing_or_mismatched_host_allowlist(self):
+        with self.assertRaises(RuntimeError):
+            guard.validate_runtime_redis_url(self.URL, 'staging', {})
+        with self.assertRaises(RuntimeError):
+            guard.validate_runtime_redis_url(
+                self.URL,
+                'staging',
+                {'VERVFY_STAGING_REDIS_HOST': 'production-example.upstash.io'},
+            )
+
+    def test_staging_rejects_production_redis_environment_variables(self):
+        for key in ('PRODUCTION_REDIS_URL', 'REDIS_PRODUCTION_URL'):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                guard.validate_runtime_redis_url(
+                    self.URL,
+                    'staging',
+                    {
+                        'VERVFY_STAGING_REDIS_HOST': 'staging-example.upstash.io',
+                        key: self.URL,
+                    },
+                )
+
+    def test_unexpected_environments_are_rejected(self):
+        for environment in ('preview', ' staging ', ''):
+            with self.subTest(environment=environment), self.assertRaises(
+                RuntimeError
+            ):
+                guard.validate_runtime_redis_url(self.URL, environment, {})
+
+    def test_nonstaging_redis_behavior_and_optional_staging_redis_are_unchanged(self):
+        for environment, url in (
+            ('development', 'redis://127.0.0.1:6379/0'),
+            ('local-test', 'redis://127.0.0.1:6379/0'),
+            ('production', 'redis://internal:6379/0'),
+        ):
+            with self.subTest(environment=environment):
+                self.assertIsNone(
+                    guard.validate_runtime_redis_url(url, environment, {})
+                )
+        self.assertIsNone(
+            guard.validate_runtime_redis_url(None, 'staging', {})
+        )
+
+
 class StagingGuardTests(unittest.TestCase):
     def setUp(self):
-        self.approval={'hostname':'staging.example.test','port':5432,'ca_file':'/approved/ca.pem','ca_sha256':hashlib.sha256(b'CA').hexdigest()}
-        self.url='postgresql+psycopg://app_runtime:p%40ss@staging.example.test:5432/vervfy_oauth_staging?'+urlencode({'sslmode':'verify-full','sslrootcert':'/approved/ca.pem','gssencmode':'disable'})
+        self.approval = {
+            'hostname': guard.STAGING_HOST,
+            'port': 5432,
+            'database': guard.STAGING_DATABASE,
+            'resource_id': guard.STAGING_PROJECT_REF,
+            'ca_file': '/approved/prod-ca-2021.crt',
+            'ca_sha256': guard.STAGING_CA_SHA256,
+        }
+
+    def url(self, role='app_runtime', **overrides):
+        parts = {
+            'role': f'{role}.{guard.STAGING_PROJECT_REF}',
+            'host': guard.STAGING_HOST,
+            'port': '5432',
+            'database': guard.STAGING_DATABASE,
+            'query': urlencode({
+                'sslmode': 'verify-full',
+                'sslrootcert': self.approval['ca_file'],
+                'gssencmode': 'disable',
+            }),
+        }
+        parts.update(overrides)
+        return (
+            f"postgresql+psycopg://{parts['role']}:p%40ss@{parts['host']}:"
+            f"{parts['port']}/{parts['database']}?{parts['query']}"
+        )
 
     def test_valid_all_three_principals(self):
         for role in guard.ROLES.values():
-            guard.validate_url(self.url.replace('app_runtime',role),role,self.approval)
+            guard.validate_url(self.url(role), role, self.approval)
 
-    def test_production_host_rejected_for_every_principal(self):
-        for role in guard.ROLES.values():
-            with self.assertRaises(RuntimeError):
-                guard.validate_url(self.url.replace('app_runtime',role).replace('staging.example.test','production.example.test'),role,self.approval)
+    def test_actual_target_and_tls_ca_are_pinned(self):
+        for approval, url in (
+            ({**self.approval, 'resource_id': 'another-project'}, self.url()),
+            ({**self.approval, 'database': 'production'}, self.url()),
+            ({**self.approval, 'ca_sha256': '0' * 64}, self.url()),
+            ({**self.approval, 'ca_file': 'relative-ca.crt'}, self.url()),
+            (self.approval, self.url(host='production.example.test')),
+            (self.approval, self.url(database='production')),
+            (self.approval, self.url(role='postgres')),
+            (self.approval, self.url(role='app_runtime', port='5433')),
+            (self.approval, self.url(query='sslmode=require')),
+        ):
+            with self.subTest(approval=approval, url=url), self.assertRaises(RuntimeError):
+                guard.validate_url(url, 'app_runtime', approval)
 
     def test_mismatches_and_ambiguities(self):
-        variants=[None,'',self.url.replace(':5432',''),self.url.replace(':5432',':5433'),
-          self.url.replace('app_runtime','postgres'),self.url.replace('vervfy_oauth_staging','production'),
-          self.url.replace('verify-full','require'),self.url+'&host=production.example.test',
-          self.url+'&hostaddr=127.0.0.1',self.url+'&service=production',self.url+'&options=-crole=postgres',
-          self.url.replace('gssencmode=disable','gssencmode=prefer'),self.url+'&sslmode=require',self.url+'#fragment',self.url+' ',
-          self.url.replace('staging.example.test','staging.example.test.'),
-          self.url.replace('staging.example.test','staging.example.test,production.example.test'),
-          self.url.replace('staging.example.test','%73taging.example.test'),
-          self.url.replace('p%40ss','p@ss'),self.url.replace('/approved/ca.pem','/other.pem')]
-        # CA path is URL encoded; explicitly exercise changed trust root too.
-        variants.append(self.url.replace('%2Fapproved%2Fca.pem','%2Fother.pem'))
+        valid = self.url()
+        variants = [
+            None, '', valid.replace(':5432', ''), valid + '&host=production.example.test',
+            valid + '&hostaddr=127.0.0.1', valid + '&service=production',
+            valid + '&options=-crole=postgres',
+            valid.replace('gssencmode=disable', 'gssencmode=prefer'),
+            valid + '&sslmode=require', valid + '#fragment', valid + ' ',
+            valid.replace(guard.STAGING_HOST, guard.STAGING_HOST + '.'),
+            valid.replace(guard.STAGING_HOST, guard.STAGING_HOST + ',production.example.test'),
+            valid.replace(guard.STAGING_HOST, '%61ws-0-us-east-1.pooler.supabase.com'),
+            valid.replace('p%40ss', 'p@ss'),
+            valid.replace(
+                '%2Fapproved%2Fprod-ca-2021.crt',
+                '%2Ftmp%2Fother.crt',
+            ),
+        ]
         for value in variants:
-            if value==self.url:
-                continue
             with self.subTest(value=value), self.assertRaises(RuntimeError):
-                guard.validate_url(value,'app_runtime',self.approval)
+                guard.validate_url(value, 'app_runtime', self.approval)
 
     def test_environment_overrides_rejected_before_reading_approval(self):
         for key in ['PGHOST','PGHOSTADDR','PGSERVICE','PGOPTIONS','PGPASSWORD','PGSSLMODE','SSL_CERT_FILE','SSL_CERT_DIR']:
             with self.subTest(key=key), patch.object(guard.Path,'read_bytes',side_effect=AssertionError('must not read approval')):
                 with self.assertRaises(RuntimeError):
-                    guard.validate({'VERVFY_ENVIRONMENT':'staging',key:'unsafe'})
+                    guard.validate(
+                        {'VERVFY_ENVIRONMENT':'staging',key:'unsafe'},
+                        operation='preflight',
+                    )
 
     def test_missing_approval_and_environment_fail_closed(self):
         for env in [{},{'VERVFY_ENVIRONMENT':'production'},{'VERVFY_ENVIRONMENT':'staging'}]:
-            with self.assertRaises(RuntimeError): guard.validate(env)
+            with self.assertRaises(RuntimeError):
+                guard.validate(env, operation='preflight')
 
     def test_duplicate_approval_keys_rejected(self):
         with self.assertRaises(RuntimeError):guard.unique([('hostname','staging'),('hostname','production')])
 
     def test_alembic_guard_precedes_database_import(self):
         source=(guard.ROOT/'alembic/env.py').read_text()
-        self.assertLess(source.index('    validate()'),source.index('from db import'))
+        self.assertLess(source.index('    validate(operation="upgrade")'),source.index('from db import'))
         self.assertLess(source.index('require_alembic_execution_enabled()'),
                         source.index('from db import'))
 
@@ -67,69 +197,112 @@ class StagingGuardTests(unittest.TestCase):
             env = {'VERVFY_STAGING_PROFILE': guard.LOCAL_PROFILE}
             if environment is not None:
                 env['VERVFY_ENVIRONMENT'] = environment
+            alembic_stub = types.ModuleType('alembic')
+            alembic_stub.context = object()
             with self.subTest(environment=environment), \
                  patch.dict(guard.os.environ, env, clear=True), \
-                 patch.dict(guard.sys.modules, {'db': None}), \
+                 patch.dict(guard.sys.modules, {'alembic': alembic_stub, 'db': None}), \
                  self.assertRaisesRegex(RuntimeError, 'local-disposable migrations are disabled'):
                 runpy.run_path(str(guard.ROOT / 'alembic' / 'env.py'))
 
     def test_complete_approval_validation_without_connections(self):
-        import hashlib
         import json
-        files=['alembic.ini','alembic/env.py','db.py','staging_guard.py','requirements.lock',
-               'docs/staging-alembic-preflight.sql','docs/staging-alembic-postflight.sql']
-        files += [str(p.relative_to(guard.ROOT)) for p in (guard.ROOT/'alembic/versions').glob('*.py')]
-        digest=lambda b:hashlib.sha256(b).hexdigest()
-        manifest=json.dumps({name:digest((guard.ROOT/name).read_bytes()) for name in files}).encode()
-        approval=dict(self.approval,database='vervfy_oauth_staging',resource_id='approved-test-resource',
-                      ca_sha256=digest(b'CA'),archive='/approved/source.tar.gz',archive_sha256=digest(b'archive'),
-                      manifest='/approved/manifest.json',manifest_sha256=digest(manifest))
-        raw=json.dumps(approval).encode()
-        virtual={'/approved/approval.json':raw,'/approved/ca.pem':b'CA',
-                 '/approved/source.tar.gz':b'archive','/approved/manifest.json':manifest}
-        original=guard.Path.read_bytes
+        files = [
+            'alembic.ini', 'alembic/env.py', 'db.py', 'staging_guard.py',
+            'supabase_role_memberships.py', 'requirements.lock',
+            'docs/staging-alembic-preflight.sql', 'docs/staging-alembic-postflight.sql',
+        ]
+        files += [
+            str(path.relative_to(guard.ROOT))
+            for path in (guard.ROOT / 'alembic/versions').glob('*.py')
+        ]
+        digest = lambda data: hashlib.sha256(data).hexdigest()
+        manifest = json.dumps({
+            name: digest((guard.ROOT / name).read_bytes()) for name in files
+        }).encode()
+        ca_digest = digest(b'CA')
+        issued_at = datetime.now(timezone.utc).replace(microsecond=0)
+        approval = {
+            **self.approval,
+            'ca_sha256': ca_digest,
+            'archive': '/approved/source.tar.gz',
+            'archive_sha256': digest(b'archive'),
+            'manifest': '/approved/manifest.json',
+            'manifest_sha256': digest(manifest),
+            'operation': 'preflight',
+            'issued_at': issued_at.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'expires_at': (issued_at + timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        }
+        raw = json.dumps(approval).encode()
+        virtual = {
+            '/approved/approval.json': raw,
+            approval['ca_file']: b'CA',
+            '/approved/source.tar.gz': b'archive',
+            '/approved/manifest.json': manifest,
+        }
+        original = guard.Path.read_bytes
+
         def read(path):
             return virtual[str(path)] if str(path) in virtual else original(path)
-        env={'VERVFY_ENVIRONMENT':'staging','STAGING_APPROVAL_FILE':'/approved/approval.json',
-             'STAGING_APPROVAL_SHA256':digest(raw)}
-        env.update({key:self.url.replace('app_runtime',role) for key,role in guard.ROLES.items()})
-        with patch.object(guard.Path,'read_bytes',read), patch.object(guard.Path,'is_file',return_value=True), patch.object(guard.Path,'is_symlink',return_value=False), patch.object(guard.subprocess,'run',side_effect=AssertionError('no subprocess')):
-            self.assertEqual(guard.validate(env)[0],approval)
+
+        env = {
+            'VERVFY_ENVIRONMENT': 'staging',
+            'STAGING_APPROVAL_FILE': '/approved/approval.json',
+            'STAGING_APPROVAL_SHA256': digest(raw),
+        }
+        env.update({
+            key: self.url(role)
+            for key, role in guard.ROLES.items()
+        })
+        with patch.object(guard, 'STAGING_CA_SHA256', ca_digest), \
+             patch.object(guard.Path, 'read_bytes', read), \
+             patch.object(guard.Path, 'is_file', return_value=True), \
+             patch.object(guard.Path, 'is_symlink', return_value=False), \
+             patch.object(guard.subprocess, 'run',
+                          side_effect=AssertionError('no subprocess')):
+            self.assertEqual(guard.validate(env, operation='preflight')[0], approval)
+            with self.assertRaisesRegex(RuntimeError, 'approval operation'):
+                guard.validate(env, operation='upgrade')
             for key in guard.ROLES:
-                wrong=dict(env);wrong[key]=wrong[key].replace('staging.example.test','production.example.test')
-                with self.assertRaises(RuntimeError):guard.validate(wrong)
-            fixture = RenderExceptionTests(); fixture.setUp()
-            approval.update(fixture.approval)
-            virtual['/approved/approval.json'] = json.dumps(approval).encode()
-            env['STAGING_APPROVAL_SHA256'] = digest(virtual['/approved/approval.json'])
-            env.update({key: fixture.url(role) for key, role in guard.ROLES.items()})
-            self.assertEqual(guard.validate(env)[0], approval)
-            virtual['/approved/ca.pem'] = b'tampered CA'
-            with self.assertRaisesRegex(RuntimeError, 'digest mismatch'): guard.validate(env)
-            virtual['/approved/ca.pem'] = b'CA'
-            saved_ca = {key: approval.pop(key) for key in ('ca_file', 'ca_sha256')}
-            virtual['/approved/approval.json'] = json.dumps(approval).encode()
-            env['STAGING_APPROVAL_SHA256'] = digest(virtual['/approved/approval.json'])
-            # A CA-free approval must reject URLs that still specify a CA.
-            with self.assertRaisesRegex(RuntimeError, 'unsafe TLS'): guard.validate(env)
-            env.update({key: value.replace('&sslrootcert=%2Fapproved%2Fca.pem', '')
-                        for key, value in env.items() if key in guard.ROLES})
-            self.assertEqual(guard.validate(env)[0], approval)
-            approval.update(saved_ca)
-            env.update({key: fixture.url(role) for key, role in guard.ROLES.items()})
-            approval['tls_exception']['expires_at'] = '2000-01-01T00:00:00Z'
-            virtual['/approved/approval.json'] = json.dumps(approval).encode()
-            env['STAGING_APPROVAL_SHA256'] = digest(virtual['/approved/approval.json'])
-            with self.assertRaisesRegex(RuntimeError, 'not active'): guard.validate(env)
-            del approval['tls_exception']
-            virtual['/approved/approval.json'] = json.dumps(approval).encode()
-            env['STAGING_APPROVAL_SHA256'] = digest(virtual['/approved/approval.json'])
-            with self.assertRaises(RuntimeError): guard.validate(env)
-            env.update({key: fixture.url(role).replace('sslmode=require', 'sslmode=verify-full')
-                        for key, role in guard.ROLES.items()})
-            guard.validate(env)
-            virtual['/approved/source.tar.gz']=b'tampered'
-            with self.assertRaises(RuntimeError):guard.validate(env)
+                wrong = dict(env)
+                wrong[key] = wrong[key].replace(guard.STAGING_HOST, 'production.example.test')
+                with self.assertRaises(RuntimeError):
+                    guard.validate(wrong, operation='preflight')
+            virtual[approval['ca_file']] = b'tampered CA'
+            with self.assertRaisesRegex(RuntimeError, 'approved file digest mismatch'):
+                guard.validate(env, operation='preflight')
+            virtual[approval['ca_file']] = b'CA'
+            virtual['/approved/source.tar.gz'] = b'tampered'
+            with self.assertRaisesRegex(RuntimeError, 'approved file digest mismatch'):
+                guard.validate(env, operation='preflight')
+
+    def test_operation_approval_is_explicit_unexpired_and_limited_to_24_hours(self):
+        now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+        approved = {
+            'operation': 'preflight',
+            'issued_at': '2026-11-11T11:00:00Z',
+            'expires_at': '2026-11-12T11:00:00Z',
+        }
+        guard._validate_operation_approval(approved, 'preflight', now)
+        guard._validate_operation_approval(
+            {**approved, 'operation': 'upgrade'}, 'upgrade', now
+        )
+        invalid = (
+            ({**approved, 'operation': 'upgrade'}, 'preflight'),
+            ({**approved, 'operation': 'preflight'}, 'upgrade'),
+            ({key: value for key, value in approved.items() if key != 'operation'}, 'preflight'),
+            ({key: value for key, value in approved.items() if key != 'issued_at'}, 'preflight'),
+            ({key: value for key, value in approved.items() if key != 'expires_at'}, 'preflight'),
+            ({**approved, 'issued_at': '2026-11-11'}, 'preflight'),
+            ({**approved, 'expires_at': '2026-02-30T11:00:00Z'}, 'preflight'),
+            ({**approved, 'expires_at': '2026-11-11T12:00:00Z'}, 'preflight'),
+            ({**approved, 'issued_at': '2026-11-11T12:01:00Z'}, 'preflight'),
+            ({**approved, 'expires_at': '2026-11-12T11:00:01Z'}, 'preflight'),
+        )
+        for approval, operation in invalid:
+            with self.subTest(approval=approval, operation=operation), \
+                 self.assertRaises(RuntimeError):
+                guard._validate_operation_approval(approval, operation, now)
 
 
 class LocalProfileTests(unittest.TestCase):
@@ -424,6 +597,7 @@ class LocalProfileTests(unittest.TestCase):
         })
 
 
+@unittest.skip('Replaced by strict Supabase staging guard coverage')
 class RenderExceptionTests(unittest.TestCase):
     def setUp(self):
         from datetime import datetime, timedelta, timezone
@@ -548,3 +722,60 @@ class RenderExceptionTests(unittest.TestCase):
                     self.assertEqual(child['PGSSLMODE'], 'require')
                     self.assertEqual(child['PGGSSENCMODE'], 'disable')
                     self.assertEqual(child['PGHOST'], self.approval['hostname'])
+
+
+class HostedSupabaseDispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.approval = {
+            'hostname': guard.STAGING_HOST,
+            'port': 5432,
+            'database': guard.STAGING_DATABASE,
+            'resource_id': guard.STAGING_PROJECT_REF,
+            'ca_file': '/approved/prod-ca-2021.crt',
+            'ca_sha256': guard.STAGING_CA_SHA256,
+        }
+
+    def test_readonly_dispatch_uses_pinned_pooler_identity_and_tls(self):
+        fixture = StagingGuardTests()
+        fixture.setUp()
+        migration_url = fixture.url('vervfy_oauth_staging_user')
+        urls = {'MIGRATION_DATABASE_URL': guard.urlsplit(migration_url)}
+        for action in ('preflight', 'postflight'):
+            with patch.dict(guard.os.environ, {'VERVFY_ENVIRONMENT': 'staging'}, clear=True), \
+                 patch.object(guard, 'validate', return_value=(self.approval, urls)) as validate, \
+                 patch.object(guard.sys, 'argv', ['guard', action]), \
+                 patch.object(guard.subprocess, 'run') as run:
+                guard.main()
+                validate.assert_called_once_with(
+                    operation='preflight' if action == 'preflight' else 'postflight'
+                )
+                child = run.call_args.kwargs['env']
+                self.assertEqual(child['PGHOST'], guard.STAGING_HOST)
+                self.assertEqual(child['PGPORT'], '5432')
+                self.assertEqual(child['PGDATABASE'], 'postgres')
+                self.assertEqual(
+                    child['PGUSER'],
+                    f"vervfy_oauth_staging_user.{guard.STAGING_PROJECT_REF}",
+                )
+                self.assertEqual(child['PGSSLMODE'], 'verify-full')
+                self.assertEqual(child['PGSSLROOTCERT'], self.approval['ca_file'])
+                self.assertEqual(child['PGGSSENCMODE'], 'disable')
+
+    def test_upgrade_dispatch_uses_pooler_url_without_bypassing_guard(self):
+        fixture = StagingGuardTests()
+        fixture.setUp()
+        migration_url = fixture.url('vervfy_oauth_staging_user')
+        urls = {'MIGRATION_DATABASE_URL': guard.urlsplit(migration_url)}
+        env = {
+            'VERVFY_ENVIRONMENT': 'staging',
+            'MIGRATION_DATABASE_URL': migration_url,
+        }
+        with patch.dict(guard.os.environ, env, clear=True), \
+             patch.object(guard, 'validate', return_value=(self.approval, urls)) as validate, \
+             patch.object(guard.sys, 'argv', ['guard', 'upgrade']), \
+             patch.object(guard.subprocess, 'run') as run:
+            guard.main()
+            validate.assert_called_once_with(operation='upgrade')
+            child = run.call_args.kwargs['env']
+            self.assertEqual(child['MIGRATION_DATABASE_URL'], migration_url)
+            self.assertIn('alembic', run.call_args.args[0])

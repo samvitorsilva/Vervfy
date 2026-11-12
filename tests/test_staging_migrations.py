@@ -19,7 +19,7 @@ from sqlalchemy.exc import DBAPIError
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '0026_application_runtime_grants'
+HEAD = '0028_webauthn_enrollment'
 PRE_ACCOUNT_MIGRATION_HEAD = '0020_playlist_last_played'
 ACCOUNT_TABLES = {
     'users', 'tracks', 'favorites', 'playlists', 'playlist_tracks',
@@ -39,12 +39,14 @@ class MigrationChainTests(unittest.TestCase):
         script = ScriptDirectory.from_config(Config(str(ROOT / 'alembic.ini')))
         self.assertEqual(script.get_heads(), [HEAD])
         chain = list(script.walk_revisions())
-        self.assertEqual(len(chain), 26)
+        self.assertEqual(len(chain), 28)
         for newer, older in zip(chain, chain[1:]):
             self.assertEqual(newer.down_revision, older.revision)
         self.assertIsNone(chain[-1].down_revision)
         self.assertTrue({'0021_provider_identities', '0022_provider_identity_lookup',
-                         '0023_missing_media_columns', '0024_provider_identity_access'} <= {r.revision for r in chain})
+                         '0023_missing_media_columns', '0024_provider_identity_access',
+                         '0027_webauthn_foundation', '0028_webauthn_enrollment'}
+                        <= {r.revision for r in chain})
 
     def test_sqlite_cover_constraint_preserves_rows(self):
         engine = sa.create_engine('sqlite://')
@@ -63,7 +65,12 @@ class MigrationChainTests(unittest.TestCase):
             engine.dispose()
 
     def test_new_migrations_refuse_downgrade(self):
-        for name in ('0025_track_cover_sources.py', '0026_application_runtime_grants.py'):
+        for name in (
+            '0023_missing_media_columns.py',
+            '0024_provider_identity_runtime_access.py',
+            '0025_track_cover_sources.py',
+            '0026_application_runtime_grants.py',
+        ):
             with self.assertRaisesRegex(RuntimeError, 'forward-only'):
                 migration(name).downgrade()
 
@@ -84,6 +91,8 @@ class StagingPostgresTests(unittest.TestCase):
         cls.engine = sa.create_engine(cls.url)
         cls.addClassCleanup(cls.engine.dispose)
         with cls.engine.begin() as c:
+            c.exec_driver_sql('CREATE ROLE postgres LOGIN CREATEROLE BYPASSRLS')
+            c.exec_driver_sql('CREATE ROLE supabase_admin NOLOGIN CREATEROLE')
             c.exec_driver_sql('CREATE ROLE migration_owner LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
             c.exec_driver_sql('GRANT CREATE ON DATABASE postgres TO migration_owner')
             c.exec_driver_sql('ALTER SCHEMA public OWNER TO migration_owner')
@@ -92,8 +101,32 @@ class StagingPostgresTests(unittest.TestCase):
                 c.exec_driver_sql(f'CREATE ROLE {name} LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
             for name in ('vervfy_identity_lookup_owner', 'vervfy_identity_lookup'):
                 c.exec_driver_sql(f'CREATE ROLE {name} NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
-            c.exec_driver_sql('GRANT vervfy_identity_lookup_owner TO migration_owner WITH INHERIT FALSE, SET TRUE')
-            c.exec_driver_sql('GRANT vervfy_identity_lookup TO google_auth_lookup WITH INHERIT TRUE, SET FALSE')
+            for name in (
+                'google_auth_lookup',
+                'vervfy_identity_lookup_owner',
+                'vervfy_identity_lookup',
+            ):
+                c.exec_driver_sql(
+                    f'GRANT {name} TO postgres '
+                    'WITH ADMIN TRUE, INHERIT FALSE, SET FALSE'
+                )
+                c.execute(sa.text("""
+                    UPDATE pg_catalog.pg_auth_members
+                    SET grantor='supabase_admin'::regrole
+                    WHERE roleid=CAST(:role AS regrole)
+                      AND member='postgres'::regrole
+                      AND grantor=current_user::regrole
+                """), {'role': name})
+            c.exec_driver_sql('SET ROLE postgres')
+            c.exec_driver_sql(
+                'GRANT vervfy_identity_lookup_owner TO migration_owner '
+                'WITH ADMIN FALSE, INHERIT FALSE, SET TRUE'
+            )
+            c.exec_driver_sql(
+                'GRANT vervfy_identity_lookup TO google_auth_lookup '
+                'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE'
+            )
+            c.exec_driver_sql('RESET ROLE')
         cls.migration_url = cls.url.set(username='migration_owner').render_as_string(hide_password=False)
         # Both URLs are explicit local sockets; never consult a hosted URL.
         with patch.dict(os.environ, {'DATABASE_URL': cls.migration_url, 'MIGRATION_DATABASE_URL': cls.migration_url}):
@@ -300,7 +333,19 @@ class StagingPostgresTests(unittest.TestCase):
             for privilege in ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'):
                 actual = self.c.execute(sa.text('SELECT has_table_privilege(:role,:table,:p)'), {'role':'app_runtime','table':table,'p':privilege}).scalar_one()
                 self.assertEqual(actual, privilege in ('SELECT','INSERT','UPDATE') or (privilege=='DELETE' and table in grants.CRUD_TABLES), (table, privilege))
-        self.assertEqual(self.sql("SELECT count(*) FROM pg_class WHERE relnamespace='public'::regnamespace AND relrowsecurity AND relforcerowsecurity").scalar_one(), 8)
+        rls_tables = set(self.sql("""
+            SELECT relname FROM pg_class
+            WHERE relnamespace='public'::regnamespace
+              AND relrowsecurity AND relforcerowsecurity
+        """).scalars())
+        self.assertEqual(rls_tables, {
+            'tracks', 'favorites', 'playlists', 'playlist_tracks', 'upload_jobs',
+            'artist_photos', 'track_listens', 'provider_identities',
+            'webauthn_handles', 'webauthn_credentials', 'account_action_intents',
+            'account_verification_proofs', 'account_recovery_codes',
+            'account_recovery_states',
+            'webauthn_enrollments',
+        })
         self.assertFalse(self.sql("SELECT has_table_privilege('app_runtime','alembic_version','SELECT')").scalar_one())
         self.sql('SET LOCAL ROLE app_runtime')
         self.assertEqual(self.sql('SELECT count(*) FROM tracks').scalar_one(), 0)
@@ -327,6 +372,31 @@ class StagingPostgresTests(unittest.TestCase):
                     login.exec_driver_sql('SET ROLE vervfy_identity_lookup_owner')
         finally:
             login_engine.dispose()
+
+    def test_web_authn_downgrade_refuses_retained_recovery_and_enrollment_data(self):
+        self.sql("""
+            INSERT INTO account_recovery_codes(id, user_id, code_hash, created_at)
+            VALUES (
+                'retained-recovery-code', 'a',
+                decode(repeat('00', 32), 'hex'), 1
+            )
+        """)
+        with self.assertRaisesRegex(RuntimeError, 'security data exists'):
+            with Operations.context(MigrationContext.configure(self.c)):
+                migration('0027_webauthn_foundation.py').downgrade()
+
+        self.sql("""
+            INSERT INTO webauthn_enrollments(
+                id, user_id, session_binding, session_version, method,
+                signup_transaction, created_at, expires_at
+            ) VALUES (
+                'retained-enrollment', 'a', 'session-binding', 1, 'password',
+                NULL, 1, 301
+            )
+        """)
+        with self.assertRaisesRegex(RuntimeError, 'retained enrollment/recovery security data'):
+            with Operations.context(MigrationContext.configure(self.c)):
+                migration('0028_webauthn_enrollment.py').downgrade()
 
     def test_sequences_are_scoped_and_only_usage_is_granted(self):
         self.sql('SET LOCAL ROLE migration_owner')

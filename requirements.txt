@@ -13,3 +13,6 @@ alembic>=1.14.0
 redis>=5.0.0
 Authlib>=1.9.2,<2
 httpx2>=2,<3
+
+# Server-side WebAuthn verification; feature remains disabled.
+webauthn==3.0.1

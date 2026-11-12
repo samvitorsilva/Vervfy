@@ -1,17 +1,15 @@
 import type { NextConfig } from "next";
+import {
+  getBackendOrigin,
+  validateStagingSiteUrl,
+} from "./staging-backend-url";
 
-const configuredBackendUrl = process.env.BACKEND_URL?.trim();
-
-if (!configuredBackendUrl) {
-  throw new Error("BACKEND_URL must be set to the FastAPI service URL.");
-}
-
-const backendUrl = new URL(configuredBackendUrl);
-if (!["http:", "https:"].includes(backendUrl.protocol)) {
-  throw new Error("BACKEND_URL must use http:// or https://.");
-}
-
-const backendOrigin = backendUrl.origin + backendUrl.pathname.replace(/\/+$/, "");
+const environment = process.env.VERVFY_ENVIRONMENT;
+const backendOrigin = getBackendOrigin(
+  process.env.BACKEND_URL,
+  environment,
+);
+validateStagingSiteUrl(process.env.SITE_URL, environment);
 
 const nextConfig: NextConfig = {
   devIndicators: false,

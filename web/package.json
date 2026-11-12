@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:google-auth": "PLAYWRIGHT_USE_PRODUCTION_SERVER=1 playwright test tests/google-auth.spec.ts"
   },
   "dependencies": {
     "next": "16.4.3",

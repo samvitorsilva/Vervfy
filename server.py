@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 
 import httpx
+import redis
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -37,7 +39,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import selectinload
@@ -47,7 +49,20 @@ from starlette.middleware.sessions import SessionMiddleware
 import audio_store
 import auth
 import google_oauth
+import staging_guard
 import upload_queue
+
+# Password/Google authentication must not require the optional WebAuthn stack.
+# Keep its implementation and migrations intact, but load them only on opt-in.
+_webauthn_enabled = os.environ.get("VERVFY_WEBAUTHN_ENABLED", "0")
+if _webauthn_enabled not in {"0", "1"}:
+    raise RuntimeError("Invalid WebAuthn enable flag")
+account_transactions = passkey_enrollment = passkey_schema = passkeys = None
+if _webauthn_enabled == "1":
+    import account_transactions
+    import passkey_enrollment
+    import passkey_schema
+    import passkeys
 from artist_images import (
     TheAudioDBQueue,
     artists_from_credit,
@@ -57,7 +72,7 @@ from artist_images import (
     is_stale as artist_image_is_stale,
 )
 from cover_art import schedule_cover_resolution
-from database import Base, engine
+from database import engine
 from db import (
     ArtistImage,
     ArtistPhoto,
@@ -149,6 +164,9 @@ environment = (
     os.environ.get("VERVFY_ENVIRONMENT")
     or os.environ.get("ENVIRONMENT", "development")
 ).lower()
+staging_guard.validate_runtime_redis_url(
+    os.environ.get("REDIS_URL"), environment, os.environ
+)
 is_production = environment in {"production", "prod"}
 async_uploads = os.environ.get("VERVFY_ASYNC_UPLOADS") == "1"
 https_only = (
@@ -206,6 +224,14 @@ def limit_upload_processing(handler):
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     path = request.url.path
+    if passkey_config is None and (
+        path.startswith("/api/account/passkeys/")
+        or path == "/api/account/security-methods"
+    ):
+        return JSONResponse(
+            {"detail": "Not found"}, status_code=404,
+            headers={"Cache-Control": "private, no-store"},
+        )
     if path in {
         "/api/auth/google/start",
         "/api/auth/google/callback",
@@ -277,6 +303,13 @@ async def add_security_headers(request: Request, call_next):
                     headers={"Retry-After": "900", "Cache-Control": "no-store"},
                 )
     response = await call_next(request)
+    if path.startswith("/api/account/passkeys/") or path in {
+        "/api/account/email",
+        "/api/account/password",
+        "/api/account/logout-all",
+    }:
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Pragma"] = "no-cache"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -308,6 +341,123 @@ audiodb_queue = TheAudioDBQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
+passkey_config = passkeys.Config.from_environment() if passkeys is not None else None
+passkey_redis = None
+passkey_assertions = None
+passkey_registration = None
+passkey_recovery = None
+if passkey_config is not None:
+    passkey_redis_url = os.environ.get("REDIS_URL", "").strip()
+    if not passkey_redis_url:
+        raise RuntimeError("REDIS_URL is required when WebAuthn is enabled")
+    passkey_redis = redis.Redis.from_url(
+        passkey_redis_url,
+        decode_responses=True,
+        socket_connect_timeout=2.0,
+        socket_timeout=2.0,
+    )
+    passkey_challenges = passkeys.ChallengeStore(passkey_redis)
+    passkey_gate = passkey_enrollment.SecurityGate(passkey_redis, session_store)
+    passkey_assertions = passkeys.AssertionService(passkey_config, passkey_challenges)
+    passkey_registration = passkey_enrollment.RegistrationService(
+        passkey_config, passkey_challenges, passkey_gate
+    )
+    passkey_recovery = passkey_enrollment.RecoveryCodes(passkey_config, passkey_gate)
+
+
+class PasskeyRequestLimiter:
+    SCRIPT = """
+    local allowed=1
+    for i=1,#KEYS do
+        local count=redis.call('INCR',KEYS[i])
+        if count==1 then redis.call('EXPIRE',KEYS[i],ARGV[1]) end
+        if count>tonumber(ARGV[2]) then allowed=0 end
+    end
+    return allowed
+    """
+
+    def __init__(self, client):
+        self.client = client
+
+    def check(self, request: Request, binding: passkeys.Binding, scope: str) -> None:
+        ip_digest = hashlib.sha256(auth.client_ip(request).encode()).hexdigest()
+        session_digest = binding.session_digest
+        account_digest = hashlib.sha256(binding.user_id.encode()).hexdigest()
+        keys = [
+            f"vervfy:passkey:api:{scope}:account:{account_digest}",
+            f"vervfy:passkey:api:{scope}:session:{session_digest}",
+            f"vervfy:passkey:api:{scope}:ip:{ip_digest}",
+        ]
+        try:
+            allowed = self.client.eval(self.SCRIPT, len(keys), *keys, 900, 30)
+        except redis.RedisError:
+            raise HTTPException(
+                status_code=503, detail="Passkey service temporarily unavailable"
+            ) from None
+        if int(allowed) != 1:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many passkey requests",
+                headers={"Retry-After": "900"},
+            )
+
+
+passkey_request_limiter = (
+    PasskeyRequestLimiter(passkey_redis) if passkey_redis is not None else None
+)
+
+
+def _passkey_services():
+    if passkey_config is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    if (
+        passkey_assertions is None
+        or passkey_registration is None
+        or passkey_recovery is None
+        or passkey_request_limiter is None
+    ):
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        )
+    return (
+        passkey_assertions,
+        passkey_registration,
+        passkey_recovery,
+        passkey_request_limiter,
+    )
+
+
+def _passkey_binding(request: Request, user: User, action: str) -> passkeys.Binding:
+    session_id = request.session.get("sid")
+    session_version = request.session.get("sv")
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or type(session_version) is not int
+        or session_version != user["session_version"]
+    ):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return passkeys.Binding(user["id"], session_id, session_version, action)
+    except passkeys.PasskeyError:
+        raise HTTPException(status_code=400, detail="Invalid passkey request") from None
+
+
+def _check_passkey_rate(
+    request: Request, binding: passkeys.Binding, scope: str
+) -> None:
+    _passkey_services()
+    passkey_request_limiter.check(request, binding, scope)
+
+
+def _passkey_error(exc: passkeys.PasskeyError) -> HTTPException:
+    if isinstance(exc, passkeys.PasskeyUnavailable):
+        return HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        )
+    return HTTPException(status_code=400, detail="Passkey request could not be completed")
+
+
 google_oauth_config = google_oauth.GoogleOAuthConfig.from_environment()
 if google_oauth_config is not None and configured_same_site != "lax":
     raise RuntimeError("Google OAuth requires VERVFY_COOKIE_SAME_SITE=lax")
@@ -317,6 +467,7 @@ google_oauth_service = (
     else None
 )
 log = logging.getLogger("vervfy")
+logging.getLogger("uvicorn.access").addFilter(google_oauth.OAuthAccessLogFilter())
 USER_QUOTA_BYTES = int(os.environ.get("VERVFY_USER_QUOTA_MB", "150")) * 1024 * 1024
 MAX_TRACKS_PER_USER = int(os.environ.get("VERVFY_MAX_TRACKS_PER_USER", "200"))
 MAX_PROFILE_PHOTO_BYTES = 5 * 1024 * 1024
@@ -1375,7 +1526,7 @@ def _require_migrated_schema() -> None:
         raise RuntimeError(
             "Database schema is incomplete for this application "
             f"(missing_tables_or_columns={missing_schema}); inspect and migrate "
-            "it with `alembic upgrade head` using the authorized migration "
+            "it to the explicitly reviewed migration revision using the authorized migration "
             "connection before starting Vervfy."
         )
 
@@ -1732,6 +1883,7 @@ def google_account_onboarding(
             binding,
             {"sub": pending["subject"], "email": pending.get("email"),
              "email_verified": pending.get("email") is not None},
+            original_signup=pending,
         ):
             return _google_oauth_unavailable()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1755,6 +1907,12 @@ async def google_oauth_callback(request: Request) -> Response:
     if service is None or config is None:
         raise HTTPException(status_code=404, detail="Not found")
 
+    stage = "transaction"
+
+    def failed(*args, **kwargs):
+        google_oauth.local_diagnostic(stage)
+        return _google_oauth_failed(*args, **kwargs)
+
     state = request.query_params.get("state", "")
     browser_binding = request.cookies.get(config.browser_cookie_name, "")
     if not state or not browser_binding:
@@ -1766,30 +1924,35 @@ async def google_oauth_callback(request: Request) -> Response:
     try:
         transaction = await service.consume_transaction(state, browser_binding)
     except google_oauth.OAuthBackendUnavailable:
+        google_oauth.local_diagnostic(stage + "_unavailable")
         return _google_oauth_unavailable()
     except google_oauth.OAuthTransactionError:
-        return _google_oauth_failed(config, clear_browser_binding=False)
+        return failed(config, clear_browser_binding=False)
     purpose = transaction.get("purpose", "login")
 
+    stage = "authorization_response"
     if request.query_params.get("error") or not request.query_params.get("code"):
-        return _google_oauth_failed(config, purpose)
+        return failed(config, purpose)
+    stage = "token_validation"
     try:
         claims = await service.exchange_and_validate(
             request.query_params["code"], transaction
         )
     except google_oauth.GoogleTokenError:
-        return _google_oauth_failed(config, purpose)
+        return failed(config, purpose)
     except (
         google_oauth.GoogleProviderError,
         google_oauth.OAuthBackendUnavailable,
     ):
+        google_oauth.local_diagnostic(stage + "_unavailable")
         return _google_oauth_unavailable()
 
+    stage = "identity_lookup"
     try:
         user_id = await run_in_threadpool(service.lookup_identity, claims)
         if purpose == "signup" and user_id is None:
             if not service.store_pending_signup(browser_binding, claims):
-                return _google_oauth_failed(config, purpose)
+                return failed(config, purpose)
             response = RedirectResponse("/register?google=complete", status_code=303)
             _set_google_browser_cookie(response, config, browser_binding)
             response.headers["Cache-Control"] = "no-store"
@@ -1797,10 +1960,10 @@ async def google_oauth_callback(request: Request) -> Response:
             return response
         if purpose in {"login", "signup"}:
             if not user_id:
-                return _google_oauth_failed(config, purpose)
+                return failed(config, purpose)
             user = await run_in_threadpool(user_store.get_by_id, user_id)
             if user is None:
-                return _google_oauth_failed(config, purpose)
+                return failed(config, purpose)
             old_session_id = request.session.get("sid")
             if isinstance(old_session_id, str) and old_session_id:
                 await run_in_threadpool(session_store.revoke, old_session_id)
@@ -1815,6 +1978,7 @@ async def google_oauth_callback(request: Request) -> Response:
             _clear_google_browser_cookie(response, config)
             return response
 
+        stage = "account_session_binding"
         user = current_user_row(request)
         expected_user_id = transaction.get("user_id")
         expected_session_id = transaction.get("session_id")
@@ -1833,7 +1997,8 @@ async def google_oauth_callback(request: Request) -> Response:
                 and (not isinstance(user_id, str) or user_id != user["id"])
             )
         ):
-            return _google_oauth_failed(config, purpose)
+            return failed(config, purpose)
+        stage = "freshness"
         auth_time = service.require_fresh_authentication(claims)
         if purpose == "link":
             password_verified_at = transaction.get("password_verified_at")
@@ -1844,7 +2009,7 @@ async def google_oauth_callback(request: Request) -> Response:
                 > google_oauth.FRESH_AUTH_MAX_AGE_SECONDS
                 or password_verified_at > time.time() + google_oauth.CLOCK_SKEW_SECONDS
             ):
-                return _google_oauth_failed(config, purpose)
+                return failed(config, purpose)
             session_version = await run_in_threadpool(
                 user_store.link_google_identity, user["id"], claims["sub"]
             )
@@ -1868,12 +2033,13 @@ async def google_oauth_callback(request: Request) -> Response:
             "account_delete",
             "logout_all",
         }:
-            return _google_oauth_failed(config, purpose)
+            return failed(config, purpose)
+        stage = "account_eligibility"
         security = await run_in_threadpool(
             user_store.account_security, user["id"]
         )
         if security["has_password"] or not security["google_linked"]:
-            return _google_oauth_failed(config, purpose)
+            return failed(config, purpose)
         proof = {
             "purpose": purpose,
             "user_id": user["id"],
@@ -1882,13 +2048,14 @@ async def google_oauth_callback(request: Request) -> Response:
             "auth_time": auth_time,
             "verified_at": int(time.time()),
         }
+        stage = "proof_storage"
         if not await run_in_threadpool(
             service.store_reauthentication_proof,
             expected_session_id,
             purpose,
             proof,
         ):
-            return _google_oauth_failed(config, purpose)
+            return failed(config, purpose)
         response = RedirectResponse(
             f"/?view=account&google_reauth=success&google_action={purpose}",
             status_code=303,
@@ -1898,12 +2065,13 @@ async def google_oauth_callback(request: Request) -> Response:
         _clear_google_browser_cookie(response, config)
         return response
     except google_oauth.GoogleTokenError:
-        return _google_oauth_failed(config, purpose)
+        return failed(config, purpose)
     except ValueError:
-        return _google_oauth_failed(config, purpose)
+        return failed(config, purpose)
     except (SQLAlchemyError, RuntimeError, google_oauth.OAuthBackendUnavailable):
+        google_oauth.local_diagnostic(stage + "_unavailable")
         return _google_oauth_unavailable()
-    return _google_oauth_failed(config, purpose)
+    return failed(config, purpose)
 
 
 @app.post("/register")
@@ -2083,14 +2251,418 @@ def api_csrf(request: Request) -> Response:
     )
 
 
+class PasskeyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PasskeyAuthorizationRequest(PasskeyRequest):
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class PasskeyRegistrationOptionsRequest(PasskeyRequest):
+    authorization_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
+class PasskeyRegistrationCompleteRequest(PasskeyRequest):
+    authorization_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    challenge_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    response: dict[str, object]
+
+
+class PasskeyActionIntentRequest(PasskeyRequest):
+    action: Literal["password_add", "email_change", "logout_all", "recovery_rotate"]
+    new_password: str | None = Field(default=None, max_length=128)
+    email: str | None = Field(default=None, max_length=320)
+
+
+class PasskeyAssertionOptionsRequest(PasskeyRequest):
+    intent_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
+class PasskeyAssertionCompleteRequest(PasskeyRequest):
+    intent_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    challenge_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    response: dict[str, object]
+
+
+class PasskeyRecoverySetupRequest(PasskeyRequest):
+    intent_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    proof_id: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+
+
+class PasskeyRecoveryConsumeRequest(PasskeyRequest):
+    code: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def _passkey_security_status(user: User) -> dict[str, object]:
+    try:
+        security = user_store.account_security(user["id"])
+        with tenant_session(user["id"]) as session:
+            active_credentials = session.scalar(
+                select(func.count())
+                .select_from(passkey_schema.credentials)
+                .where(
+                    passkey_schema.credentials.c.user_id == user["id"],
+                    passkey_schema.credentials.c.revoked_at.is_(None),
+                )
+            ) or 0
+            recovery_codes = session.scalar(
+                select(func.count())
+                .select_from(passkey_schema.recovery_codes)
+                .where(
+                    passkey_schema.recovery_codes.c.user_id == user["id"],
+                    passkey_schema.recovery_codes.c.consumed_at.is_(None),
+                )
+            ) or 0
+    except (SQLAlchemyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Security status temporarily unavailable"
+        ) from exc
+    return {
+        "has_password": security["has_password"],
+        "google_linked": security["google_linked"],
+        "passkey_count": active_credentials,
+        "recovery_codes_remaining": recovery_codes,
+    }
+
+
+@app.get("/api/account/security-methods")
+def account_security_methods(
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, object]:
+    _passkey_services()
+    binding = _passkey_binding(request, user, "passkey_add")
+    _check_passkey_rate(request, binding, "security-methods")
+    return _passkey_security_status(user)
+
+
+@app.get("/api/account/passkeys/enrollment-eligibility")
+def passkey_enrollment_eligibility(
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, object]:
+    _passkey_services()
+    binding = _passkey_binding(request, user, "passkey_add")
+    _check_passkey_rate(request, binding, "enrollment-eligibility")
+    status = _passkey_security_status(user)
+    if not status["has_password"]:
+        return {
+            "eligible": False,
+            "reason": "password_verification_required",
+            "passkey_count": status["passkey_count"],
+        }
+    if status["passkey_count"] >= 10:
+        return {
+            "eligible": False,
+            "reason": "credential_limit_reached",
+            "passkey_count": status["passkey_count"],
+        }
+    return {
+        "eligible": True,
+        "reason": None,
+        "passkey_count": status["passkey_count"],
+    }
+
+
+@app.post("/api/account/passkeys/registration/authorize")
+def authorize_passkey_registration(
+    payload: PasskeyAuthorizationRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, str]:
+    _assertions, registration, _recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, "passkey_add")
+    _check_passkey_rate(request, binding, "registration-authorize")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            authorization_id = registration.authorize_password(
+                session, binding, payload.current_password
+            )
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"authorization_id": authorization_id}
+
+
+@app.post("/api/account/passkeys/registration/options")
+def passkey_registration_options(
+    payload: PasskeyRegistrationOptionsRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, object]:
+    _assertions, registration, _recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, "passkey_add")
+    _check_passkey_rate(request, binding, "registration-options")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            challenge_id, options = registration.begin(
+                session, binding, payload.authorization_id
+            )
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"challenge_id": challenge_id, "options": options}
+
+
+@app.post("/api/account/passkeys/registration/complete")
+def complete_passkey_registration(
+    payload: PasskeyRegistrationCompleteRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, bool]:
+    _assertions, registration, _recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, "passkey_add")
+    _check_passkey_rate(request, binding, "registration-complete")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            registration.finish(
+                session,
+                binding,
+                payload.authorization_id,
+                payload.challenge_id,
+                payload.response,
+            )
+            account = session.scalar(
+                select(User).where(User.id == user["id"]).with_for_update()
+            )
+            if account is None:
+                raise passkeys.PasskeyError("Account is unavailable")
+            account.session_version += 1
+            session_version = account.session_version
+            session.flush()
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    rotate_authenticated_session(request, user["id"], session_version)
+    log.info("WebAuthn credential enrolled", extra={"user_id": user["id"]})
+    return {"registered": True}
+
+
+def _passkey_action_digest(user_id: str, action: str, payload: str = "") -> str:
+    message = (
+        "vervfy:passkey-action:v1\0"
+        + user_id
+        + "\0"
+        + action
+        + "\0"
+        + payload
+    ).encode()
+    return hmac.new(SESSION_SECRET.encode(), message, hashlib.sha256).hexdigest()
+
+
+@app.post("/api/account/passkeys/action-intents")
+def prepare_passkey_action_intent(
+    payload: PasskeyActionIntentRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, str]:
+    _assertions, _registration, _recovery, _limiter = _passkey_services()
+    action = payload.action
+    normalized_email = None
+    if action == "password_add":
+        if payload.new_password is None or payload.email is not None:
+            raise HTTPException(status_code=400, detail="Invalid action payload")
+        if user["password_hash"] is not None:
+            raise HTTPException(status_code=409, detail="Password is already set")
+        error = auth.validate_password(payload.new_password)
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        canonical_payload = payload.new_password
+    elif action == "email_change":
+        if payload.email is None or payload.new_password is not None:
+            raise HTTPException(status_code=400, detail="Invalid action payload")
+        normalized_email = payload.email.strip().lower() or None
+        if normalized_email is not None and auth.validate_email(normalized_email):
+            raise HTTPException(status_code=400, detail="Invalid email")
+        canonical_payload = normalized_email or ""
+    else:
+        if payload.email is not None or payload.new_password is not None:
+            raise HTTPException(status_code=400, detail="Invalid action payload")
+        canonical_payload = ""
+
+    binding = _passkey_binding(request, user, action)
+    _check_passkey_rate(request, binding, "action-intent")
+    digest = (
+        passkey_enrollment.RECOVERY_DIGEST
+        if action == "recovery_rotate"
+        else _passkey_action_digest(user["id"], action, canonical_payload)
+    )
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            active_count = session.scalar(
+                select(func.count())
+                .select_from(passkey_schema.credentials)
+                .where(
+                    passkey_schema.credentials.c.user_id == user["id"],
+                    passkey_schema.credentials.c.revoked_at.is_(None),
+                )
+            ) or 0
+            if not active_count:
+                raise HTTPException(
+                    status_code=403, detail="An enrolled passkey is required"
+                )
+            if action == "recovery_rotate":
+                existing_codes = session.scalar(
+                    select(func.count())
+                    .select_from(passkey_schema.recovery_codes)
+                    .where(passkey_schema.recovery_codes.c.user_id == user["id"])
+                ) or 0
+                if existing_codes:
+                    raise HTTPException(
+                        status_code=409, detail="Recovery-code rotation is unavailable"
+                    )
+            intent_id = passkeys.create_intent(session, binding, digest)
+    except HTTPException:
+        raise
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"intent_id": intent_id}
+
+
+@app.post("/api/account/passkeys/actions/{action}/options")
+def passkey_assertion_options(
+    action: Literal["password_add", "email_change", "logout_all", "recovery_rotate"],
+    payload: PasskeyAssertionOptionsRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, object]:
+    assertions, _registration, _recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, action)
+    _check_passkey_rate(request, binding, "assertion-options")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            challenge_id, options = assertions.begin(
+                session, binding, payload.intent_id
+            )
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"challenge_id": challenge_id, "options": options}
+
+
+@app.post("/api/account/passkeys/actions/{action}/complete")
+def complete_passkey_assertion(
+    action: Literal["password_add", "email_change", "logout_all", "recovery_rotate"],
+    payload: PasskeyAssertionCompleteRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, str]:
+    assertions, _registration, _recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, action)
+    _check_passkey_rate(request, binding, "assertion-complete")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            proof_id = assertions.finish(
+                session,
+                binding,
+                payload.intent_id,
+                payload.challenge_id,
+                payload.response,
+            )
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"proof_id": proof_id}
+
+
+@app.post("/api/account/passkeys/recovery/codes")
+def setup_passkey_recovery_codes(
+    payload: PasskeyRecoverySetupRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, list[str]]:
+    _assertions, _registration, recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, "recovery_rotate")
+    _check_passkey_rate(request, binding, "recovery-setup")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            codes = recovery.issue_initial(
+                session, binding, payload.intent_id, payload.proof_id
+            )
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"recovery_codes": codes}
+
+
+@app.post("/api/account/passkeys/recovery/consume")
+def consume_passkey_recovery_code(
+    payload: PasskeyRecoveryConsumeRequest,
+    request: Request,
+    user=Depends(require_api_user),
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict[str, object]:
+    _assertions, _registration, recovery, _limiter = _passkey_services()
+    binding = _passkey_binding(request, user, "recovery_rotate")
+    _check_passkey_rate(request, binding, "recovery-consume")
+    try:
+        with tenant_session(user["id"]) as session, session.begin():
+            recovery.consume(session, binding, payload.code)
+    except passkeys.PasskeyError as exc:
+        raise _passkey_error(exc) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Passkey service temporarily unavailable"
+        ) from None
+    return {"status": "pending", "capabilities": []}
+
+
 class PasswordChangeRequest(BaseModel):
     current_password: str | None = None
     new_password: str
+    passkey_intent_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
+    passkey_proof_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class EmailChangeRequest(BaseModel):
     email: str = Field(max_length=320)
     current_password: str | None = None
+    passkey_intent_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
+    passkey_proof_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class AccountDeletionRequest(BaseModel):
@@ -2100,6 +2672,8 @@ class AccountDeletionRequest(BaseModel):
 
 class LogoutAllRequest(BaseModel):
     current_password: str | None = None
+    passkey_intent_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
+    passkey_proof_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{43}$")
 
 
 class TrackLyricsRequest(BaseModel):
@@ -2392,9 +2966,27 @@ def verify_account_action(
     verify_google_action_proof(request, user, purpose)
 
 
+def _require_passkey_proof_pair(intent_id: str | None, proof_id: str | None) -> bool:
+    if bool(intent_id) != bool(proof_id):
+        raise HTTPException(status_code=400, detail="Both passkey proof identifiers are required")
+    return bool(intent_id and proof_id)
+
+
+def _consume_passkey_proof(
+    session,
+    binding: passkeys.Binding,
+    intent_id: str,
+    proof_id: str,
+    digest: str,
+) -> None:
+    passkeys.consume_proof(session, binding, intent_id, proof_id, digest)
+
+
 def rotate_authenticated_session(
     request: Request, user_id: str, session_version: int
 ) -> None:
+    # The committed version invalidates old cookies even if Redis is unavailable.
+    request.session.clear()
     try:
         session_store.revoke_user(user_id)
         session_id = session_store.create(user_id)
@@ -2407,6 +2999,7 @@ def rotate_authenticated_session(
     request.session["user_id"] = user_id
     request.session["sv"] = session_version
     request.session["sid"] = session_id
+    auth.get_or_create_csrf_token(request)
 
 
 @app.put("/api/account/email")
@@ -2416,18 +3009,52 @@ def change_account_email(
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    verify_account_action(
-        request, user, "email_change", payload.current_password
+    passkey_proof = _require_passkey_proof_pair(
+        payload.passkey_intent_id, payload.passkey_proof_id
     )
+    if not passkey_proof:
+        verify_account_action(
+            request, user, "email_change", payload.current_password
+        )
     email = payload.email.strip().lower()
     if email:
         error = auth.validate_email(email)
         if error:
             raise HTTPException(status_code=400, detail=error)
-    try:
-        session_version = user_store.update_email(user["id"], email or None)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if passkey_proof:
+        _passkey_services()
+        binding = _passkey_binding(request, user, "email_change")
+        _check_passkey_rate(request, binding, "email-change")
+        digest = _passkey_action_digest(user["id"], "email_change", email or "")
+        try:
+            with tenant_session(user["id"]) as session, session.begin():
+                _consume_passkey_proof(
+                    session,
+                    binding,
+                    payload.passkey_intent_id,
+                    payload.passkey_proof_id,
+                    digest,
+                )
+                session_version = account_transactions.change_email(
+                    session, binding, email
+                )
+        except passkeys.PasskeyError as exc:
+            raise HTTPException(
+                status_code=403, detail="Passkey proof is invalid or expired"
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="That email is already in use") from exc
+        except SQLAlchemyError as exc:
+            raise HTTPException(
+                status_code=503, detail="Account update temporarily unavailable"
+            ) from exc
+    else:
+        try:
+            session_version = user_store.update_email(user["id"], email or None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     rotate_authenticated_session(request, user["id"], session_version)
     return {"email": email or None}
 
@@ -2444,20 +3071,61 @@ def change_password(
         if user["password_hash"] is None
         else "password_change"
     )
-    verify_account_action(
-        request, user, purpose, payload.current_password
+    passkey_proof = _require_passkey_proof_pair(
+        payload.passkey_intent_id, payload.passkey_proof_id
     )
+    if passkey_proof and purpose != "password_add":
+        raise HTTPException(
+            status_code=400, detail="Passkey proof does not authorize this action"
+        )
+    if not passkey_proof:
+        verify_account_action(
+            request, user, purpose, payload.current_password
+        )
     error = auth.validate_password(payload.new_password)
     if error:
         raise HTTPException(status_code=400, detail=error)
-    try:
-        session_version = user_store.set_password_and_bump_version(
-            user["id"],
-            auth.hash_password(payload.new_password),
-            expected_password_hash=user["password_hash"],
+    if passkey_proof:
+        _passkey_services()
+        binding = _passkey_binding(request, user, "password_add")
+        _check_passkey_rate(request, binding, "password-add")
+        digest = _passkey_action_digest(
+            user["id"], "password_add", payload.new_password
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            with tenant_session(user["id"]) as session, session.begin():
+                _consume_passkey_proof(
+                    session,
+                    binding,
+                    payload.passkey_intent_id,
+                    payload.passkey_proof_id,
+                    digest,
+                )
+                session_version = account_transactions.set_password(
+                    session,
+                    binding,
+                    payload.new_password,
+                    expected_password_hash=None,
+                )
+        except passkeys.PasskeyError as exc:
+            raise HTTPException(
+                status_code=403, detail="Passkey proof is invalid or expired"
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SQLAlchemyError as exc:
+            raise HTTPException(
+                status_code=503, detail="Account update temporarily unavailable"
+            ) from exc
+    else:
+        try:
+            session_version = user_store.set_password_and_bump_version(
+                user["id"],
+                auth.hash_password(payload.new_password),
+                expected_password_hash=user["password_hash"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     rotate_authenticated_session(request, user["id"], session_version)
     return {"ok": True}
 
@@ -2469,10 +3137,38 @@ def logout_all(
     user=Depends(require_api_user),
     _csrf=Depends(auth.verify_api_csrf),
 ) -> dict:
-    verify_account_action(
-        request, user, "logout_all", payload.current_password
+    passkey_proof = _require_passkey_proof_pair(
+        payload.passkey_intent_id, payload.passkey_proof_id
     )
-    user_store.bump_session_version(user["id"])
+    if passkey_proof:
+        _passkey_services()
+        binding = _passkey_binding(request, user, "logout_all")
+        _check_passkey_rate(request, binding, "logout-all")
+        digest = _passkey_action_digest(user["id"], "logout_all")
+        try:
+            with tenant_session(user["id"]) as session, session.begin():
+                _consume_passkey_proof(
+                    session,
+                    binding,
+                    payload.passkey_intent_id,
+                    payload.passkey_proof_id,
+                    digest,
+                )
+                account_transactions.bump_logout_version(session, binding)
+        except passkeys.PasskeyError as exc:
+            raise HTTPException(
+                status_code=403, detail="Passkey proof is invalid or expired"
+            ) from exc
+        except SQLAlchemyError as exc:
+            raise HTTPException(
+                status_code=503, detail="Account update temporarily unavailable"
+            ) from exc
+    else:
+        verify_account_action(
+            request, user, "logout_all", payload.current_password
+        )
+        user_store.bump_session_version(user["id"])
+    request.session.clear()
     try:
         session_store.revoke_user(user["id"])
     except RuntimeError as exc:

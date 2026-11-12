@@ -233,7 +233,9 @@ class StartupSchemaTests(unittest.TestCase):
         count.assert_not_called()
 
     def test_fresh_database_requires_explicit_migration_without_creating_tables(self):
-        with self.assertRaisesRegex(RuntimeError, 'alembic upgrade head'):
+        with self.assertRaisesRegex(
+            RuntimeError, 'explicitly reviewed migration revision'
+        ):
             self.start()
         self.assertEqual(sa.inspect(self.engine).get_table_names(), [])
 

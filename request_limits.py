@@ -21,6 +21,16 @@ class RequestSizeLimitMiddleware:
             return self.image_bytes + self.overhead
         if path in {"/login", "/register", "/logout"}:
             return 16 * 1024
+        if path.startswith("/api/account/passkeys/"):
+            if path.endswith("/complete"):
+                return 64 * 1024
+            return 16 * 1024
+        if path in {
+            "/api/account/password",
+            "/api/account/email",
+            "/api/account/logout-all",
+        }:
+            return 16 * 1024
         return 16 * 1024 * 1024
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
