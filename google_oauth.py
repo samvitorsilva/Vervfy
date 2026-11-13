@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -128,6 +129,17 @@ class GoogleOAuthConfig:
     frontend_origin: str
     redis_url: str
     identity_lookup_database_url: str
+    test_user_email: str = ""
+
+    def require_test_user(self, email: Any, *, email_verified: Any) -> None:
+        """Accept only the configured email from verified server-owned claims."""
+        if (
+            not self.test_user_email
+            or email_verified is not True
+            or not isinstance(email, str)
+            or email.casefold() != self.test_user_email.casefold()
+        ):
+            raise GoogleTokenError("Google authentication is restricted")
 
     @classmethod
     def from_environment(cls) -> GoogleOAuthConfig | None:
@@ -136,6 +148,21 @@ class GoogleOAuthConfig:
             return None
         if enabled not in {"1", "true", "on", "yes"}:
             raise OAuthConfigurationError("GOOGLE_OAUTH_ENABLED must be boolean")
+
+        test_user_email = os.environ.get("GOOGLE_OAUTH_TEST_USER_EMAIL", "").strip()
+        if (
+            len(test_user_email) > 254
+            or not re.fullmatch(
+                r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+                r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+                r"[A-Za-z]{2,63}",
+                test_user_email,
+            )
+            or len(test_user_email.split("@", 1)[0]) > 64
+        ):
+            raise OAuthConfigurationError(
+                "GOOGLE_OAUTH_TEST_USER_EMAIL must contain one valid email address"
+            )
 
         client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
         client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
@@ -248,6 +275,7 @@ class GoogleOAuthConfig:
             frontend_origin=frontend_origin.rstrip("/"),
             redis_url=redis_url,
             identity_lookup_database_url=lookup_url,
+            test_user_email=test_user_email.casefold(),
         )
 
     @property

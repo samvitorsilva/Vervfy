@@ -66,6 +66,7 @@ def oauth_config():
         frontend_origin="http://localhost:3000",
         redis_url="redis://unused",
         identity_lookup_database_url="postgresql+psycopg://unused",
+        test_user_email="verified@example.com",
     )
 
 
@@ -161,10 +162,40 @@ class ConfigurationTests(unittest.TestCase):
         ), self.assertRaises(google_oauth.OAuthConfigurationError):
             google_oauth.GoogleOAuthConfig.from_environment()
 
+    def test_enabled_requires_exactly_one_valid_test_email(self):
+        invalid_emails = (
+            "",
+            "not-an-email",
+            "a@example.com,b@example.com",
+            "a@example.com;b@example.com",
+            "Name <a@example.com>",
+            "a@-example.com",
+            "a..b@example.com",
+            "a@example.com\nb@example.com",
+        )
+        for email in invalid_emails:
+            with (
+                self.subTest(email=email),
+                patch.dict(
+                    os.environ,
+                    {
+                        "GOOGLE_OAUTH_ENABLED": "1",
+                        "GOOGLE_OAUTH_TEST_USER_EMAIL": email,
+                    },
+                    clear=True,
+                ),
+                self.assertRaisesRegex(
+                    google_oauth.OAuthConfigurationError,
+                    "GOOGLE_OAUTH_TEST_USER_EMAIL",
+                ),
+            ):
+                google_oauth.GoogleOAuthConfig.from_environment()
+
     def test_https_configuration_uses_host_cookie_and_separate_lookup_role(self):
         values = {
             "GOOGLE_OAUTH_ENABLED": "1",
             "GOOGLE_CLIENT_ID": "client-id",
+            "GOOGLE_OAUTH_TEST_USER_EMAIL": " Verified@Example.COM ",
             "GOOGLE_CLIENT_SECRET": "client-secret",
             "GOOGLE_REDIRECT_URI": (
                 "https://app.example/api/auth/google/callback"
@@ -181,6 +212,7 @@ class ConfigurationTests(unittest.TestCase):
             config = google_oauth.GoogleOAuthConfig.from_environment()
         self.assertEqual(config.browser_cookie_name, "__Host-vervfy_google_oauth")
         self.assertTrue(config.cookie_secure)
+        self.assertEqual(config.test_user_email, "verified@example.com")
 
 
 class GoogleTokenTests(unittest.TestCase):
@@ -421,12 +453,15 @@ class CallbackTests(unittest.TestCase):
             async def exchange_and_validate(self, code, transaction):
                 if error:
                     raise error
-                return claims or {
+                verified_claims = {
                     "iss": google_oauth.GOOGLE_ISSUER,
                     "sub": "subject-a",
                     "aud": "test-client",
-                    "email": "other-account@example.com",
+                    "email": "verified@example.com",
+                    "email_verified": True,
                 }
+                verified_claims.update(claims or {})
+                return verified_claims
 
             def lookup_identity(self, verified_claims):
                 self.lookup_calls.append(verified_claims)
@@ -501,8 +536,65 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(cookie["path"], "/")
         self.assertFalse(cookie["domain"])
 
+    def test_disallowed_google_claims_never_reach_identity_lookup(self):
+        for purpose in google_oauth.GOOGLE_FLOW_PURPOSES:
+            for claims in (
+                {"email": "other@example.com", "email_verified": True},
+                {"email": "verified@example.com", "email_verified": False},
+                {"email": "verified@example.com", "email_verified": "true"},
+                {"email": "verified@example.com", "email_verified": None},
+                {"email": None, "email_verified": True},
+            ):
+                with self.subTest(purpose=purpose, claims=claims):
+                    flow = self._flow(claims=claims, purpose=purpose)
+                    flow.browser_binding = "test-browser-binding"
+                    request = SimpleNamespace(
+                        query_params={"state": "one-time-state", "code": "code"},
+                        cookies={self.config.browser_cookie_name: flow.browser_binding},
+                    )
+                    with (
+                        patch.object(server, "google_oauth_config", self.config),
+                        patch.object(server, "google_oauth_service", flow),
+                        patch.object(server.user_store, "create_google_user") as create_user,
+                        patch.object(server.session_store, "create") as create_session,
+                    ):
+                        response = asyncio.run(server.google_oauth_callback(request))
+                    self.assertEqual(response.status_code, 303)
+                    self.assertEqual(flow.lookup_calls, [])
+                    self.assertIsNone(flow.pending_signup)
+                    self.assertEqual(flow.stored_proofs, [])
+                    create_user.assert_not_called()
+                    create_session.assert_not_called()
+
+    def test_onboarding_rechecks_current_test_email_before_creation(self):
+        for email in (None, "previous-test-user@example.com"):
+            with self.subTest(email=email):
+                flow = SimpleNamespace(consume_pending_signup=lambda _: {
+                    "issuer": google_oauth.GOOGLE_ISSUER,
+                    "subject": "pending-subject", "email": email,
+                })
+                request = SimpleNamespace(cookies={}, headers={}, client=None)
+                with (
+                    patch.object(server, "google_oauth_config", self.config),
+                    patch.object(server, "google_oauth_service", flow),
+                    patch.object(server.auth, "client_ip", return_value="127.0.0.1"),
+                    patch.object(server.signup_throttle, "is_limited", return_value=False),
+                    patch.object(server.user_store, "create_google_user") as create_user,
+                    self.assertRaises(server.HTTPException) as rejected,
+                ):
+                    server.google_account_onboarding(
+                        server.GoogleOnboardingRequest(username="new-user"), request,
+                    )
+                self.assertEqual(rejected.exception.status_code, 400)
+                create_user.assert_not_called()
+
     def test_callback_authenticates_only_verified_subject_and_issues_session(self):
-        flow = self._flow()
+        flow = self._flow(
+            claims={
+                "email": "VERIFIED@EXAMPLE.COM",
+                "email_verified": True,
+            }
+        )
         user = {
             "id": "mapped-user",
             "session_version": 9,
@@ -620,7 +712,7 @@ class CallbackTests(unittest.TestCase):
         service._clock = time.time
         service.transactions = google_oauth.RedisOAuthTransactionStore("", client=MemoryRedis())
         flow = self._flow(user_id=None, purpose="signup", claims={
-            "sub": "synthetic-subject", "email": "synthetic@example.com", "email_verified": True,
+            "sub": "synthetic-subject", "email": "verified@example.com", "email_verified": True,
         })
         binding = "synthetic-browser-binding-12345678901234567890"
         flow.browser_binding = binding
@@ -658,7 +750,7 @@ class CallbackTests(unittest.TestCase):
             success = client.post("/api/auth/google/onboarding", json={"username": "available-name"}, headers=headers)
             self.assertEqual(success.status_code, 303)
             self.assertEqual(success.headers["location"], "/")
-            create_user.assert_called_with("available-name", "synthetic@example.com", "synthetic-subject")
+            create_user.assert_called_with("available-name", "verified@example.com", "synthetic-subject")
             session_create.assert_called_once_with("synthetic-user")
             self.assertIn("Max-Age=0", success.headers["set-cookie"])
             self.assertIsNone(service.consume_pending_signup(binding))

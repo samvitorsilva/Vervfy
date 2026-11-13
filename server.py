@@ -1861,6 +1861,14 @@ def google_account_onboarding(
                 status_code=400, detail="Google sign-up expired; start again"
             )
         email = pending.get("email")
+        # Pending email is stored only from a verified Google token. Recheck the
+        # current restriction before creation, including after configuration changes.
+        try:
+            config.require_test_user(email, email_verified=True)
+        except google_oauth.GoogleTokenError:
+            raise HTTPException(
+                status_code=400, detail="Google sign-up could not be completed"
+            ) from None
         if email is not None and (
             not isinstance(email, str) or auth.validate_email(email)
         ):
@@ -1937,6 +1945,9 @@ async def google_oauth_callback(request: Request) -> Response:
     try:
         claims = await service.exchange_and_validate(
             request.query_params["code"], transaction
+        )
+        config.require_test_user(
+            claims.get("email"), email_verified=claims.get("email_verified")
         )
     except google_oauth.GoogleTokenError:
         return failed(config, purpose)
