@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import LibraryApp from "@/components/library-app";
+import Homepage from "@/components/homepage";
+import { websiteMetadata } from "@/lib/site-metadata";
 
-export const metadata: Metadata = {
-  robots: { index: false, follow: false },
-  title: "Your music library",
-  description: "Listen to and organize your personal music library with Vervfy.",
-};
+export const metadata: Metadata = websiteMetadata(
+  "Your music. Your rules.",
+  "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.",
+  "/",
+);
 
 export default function HomePage() {
-  return <LibraryApp />;
+  return <Homepage />;
 }

@@ -40,6 +40,10 @@ const translations: Record<string, string> = {
   "Could not load the form.": "Não foi possível carregar o formulário.",
   "The authentication request could not be completed.": "Não foi possível concluir o login. Tente novamente.",
   "Your personal music library.": "Sua coleção pessoal de músicas.",
+  "Your music. Your rules.": "Sua música. Suas regras.",
+  "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.": "Seu espaço pessoal para música. Envie suas faixas, crie playlists, descubra letras e ouça sua coleção — tudo em um só lugar.",
+  "Your library. Your experience. Vervfy.": "Sua biblioteca. Sua experiência. Vervfy.",
+  "We couldn’t check your library right now.": "Não foi possível verificar sua biblioteca agora.",
   "Email address": "Endereço de e-mail",
   Edit: "Editar",
   "Save email": "Salvar e-mail",
@@ -642,6 +646,10 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "Could not load the form.": ["Impossible de charger le formulaire.", "No se pudo cargar el formulario."],
   "The authentication request could not be completed.": ["La demande d’authentification n’a pas abouti.", "No se pudo completar la solicitud de autenticación."],
   "Your personal music library.": ["Votre bibliothèque musicale personnelle.", "Tu biblioteca personal de música."],
+  "Your music. Your rules.": ["Votre musique. Vos règles.", "Tu música. Tus reglas."],
+  "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.": ["Votre espace musical personnel. Importez vos morceaux, créez des playlists, découvrez les paroles et écoutez votre collection au même endroit.", "Tu espacio personal para la música. Sube tus canciones, crea listas, descubre letras y escucha tu colección, todo en un mismo lugar."],
+  "Your library. Your experience. Vervfy.": ["Votre bibliothèque. Votre expérience. Vervfy.", "Tu biblioteca. Tu experiencia. Vervfy."],
+  "We couldn’t check your library right now.": ["Impossible de vérifier votre bibliothèque pour le moment.", "No se pudo comprobar tu biblioteca en este momento."],
   "Email address": ["Adresse e-mail", "Dirección de correo electrónico"],
   "Save email": ["Enregistrer l’e-mail", "Guardar correo electrónico"],
   "Clear email": ["Supprimer l’e-mail", "Quitar correo electrónico"],
@@ -1257,7 +1265,7 @@ const LanguageContext = createContext<LanguageContextValue>({
 let activeLanguage: Language | null = null;
 const languageListeners = new Set<() => void>();
 const pageMetadata: Record<string, readonly [string, string]> = {
-  "/": ["Your music library", "Listen to and organize your personal music library with Vervfy."],
+  "/": ["Your music. Your rules.", "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place."],
   "/login": ["Log in", "Log in to your Vervfy account to access your music library."],
   "/register": ["Create an account", "Create a Vervfy account to organize and listen to your music library."],
   "/credits": ["Credits and data sources", "Attribution, licenses, and data sources used by Vervfy."],
