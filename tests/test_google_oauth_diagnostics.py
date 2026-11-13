@@ -1,5 +1,8 @@
 """Local diagnostics and access-log privacy regression tests (no network)."""
+import asyncio
 import logging
+import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -37,10 +40,128 @@ def test_missing_auth_time_fails_closed_with_safe_diagnostic(caplog):
     with patch.dict("os.environ", {
         "VERVFY_ENVIRONMENT": "development",
         "VERVFY_GOOGLE_OAUTH_DIAGNOSTICS": "1",
-    }), pytest.raises(google_oauth.GoogleTokenError):
+    }), pytest.raises(google_oauth.GoogleFreshnessError) as error:
         service.require_fresh_authentication({"sub": "private-subject", "iat": 1000})
     assert "freshness_missing_auth_time" in caplog.text
     assert "private-subject" not in caplog.text
+    assert error.value.failure_stage == "freshness_missing_auth_time"
+
+
+@pytest.mark.parametrize(
+    "failure,expected_stage",
+    [
+        ("missing_auth_time", "freshness_missing_auth_time"),
+        ("stale_auth_time", "freshness_stale_auth_time"),
+        ("session_binding", "account_session_binding"),
+        ("transaction", "transaction"),
+        ("token_validation", "other_validation"),
+        ("login_validation", None),
+    ],
+)
+def test_production_reauth_failure_logs_only_fixed_stage(
+    caplog, failure, expected_stage
+):
+    import server
+
+    now = int(time.time())
+
+    class ReauthService:
+        _clock = staticmethod(lambda: now)
+
+        async def consume_transaction(self, state, browser_binding):
+            if failure == "transaction":
+                raise google_oauth.OAuthTransactionError(state)
+            return {
+                "purpose": "login" if failure == "login_validation" else "password_add",
+                "user_id": "private-user",
+                "session_id": "session-1",
+                "session_version": 3,
+            }
+
+        async def exchange_and_validate(self, code, transaction):
+            if failure in {"token_validation", "login_validation"}:
+                raise google_oauth.GoogleTokenError(code)
+            claims = {
+                "email": "private@example.com",
+                "email_verified": True,
+                "sub": "private-subject",
+            }
+            if failure == "stale_auth_time":
+                claims["auth_time"] = now - 301
+            elif failure != "missing_auth_time":
+                claims["auth_time"] = now
+            return claims
+
+        def lookup_identity(self, claims):
+            return "private-user"
+
+        def require_fresh_authentication(self, claims):
+            return google_oauth.GoogleOAuthService.require_fresh_authentication(
+                self, claims
+            )
+
+    config = SimpleNamespace(
+        browser_cookie_name="google_binding",
+        cookie_secure=True,
+        require_test_user=lambda email, *, email_verified: None,
+    )
+    request = SimpleNamespace(
+        query_params={"state": "private-state", "code": "private-code"},
+        cookies={config.browser_cookie_name: "private-cookie"},
+        session={
+            "user_id": "private-user",
+            "sid": "other-session" if failure == "session_binding" else "session-1",
+            "sv": 3,
+        },
+    )
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with (
+        patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "production"}),
+        patch.object(server, "google_oauth_config", config),
+        patch.object(server, "google_oauth_service", ReauthService()),
+        patch.object(
+            server,
+            "current_user_row",
+            return_value={"id": "private-user", "session_version": 3},
+        ),
+    ):
+        response = asyncio.run(server.google_oauth_callback(request))
+
+    assert response.status_code == 303
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "vervfy.oauth"
+    ]
+    if expected_stage is None:
+        assert records == []
+    else:
+        message = (
+            "Google OAuth callback failure"
+            if expected_stage == "transaction"
+            else "Google reauthentication failure"
+        )
+        assert [record.getMessage() for record in records] == [
+            f"{message} stage={expected_stage}"
+        ]
+    for private_value in (
+        "private-state",
+        "private-code",
+        "private-cookie",
+        "private@example.com",
+        "private-user",
+    ):
+        assert private_value not in caplog.text
+
+
+def test_production_failure_logger_reduces_unknown_stage_to_fixed_value(caplog):
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "production"}):
+        google_oauth.log_google_reauthentication_failure("private-authorization-code")
+    assert caplog.text.strip().endswith(
+        "Google reauthentication failure stage=other_validation"
+    )
+    assert "private-authorization-code" not in caplog.text
 
 
 def test_google_only_password_creation_consumes_bound_proof():

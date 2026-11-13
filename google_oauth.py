@@ -50,6 +50,18 @@ GOOGLE_FLOW_PURPOSES = {
     "account_delete",
     "logout_all",
 }
+GOOGLE_REAUTHENTICATION_PURPOSES = frozenset(
+    {"password_add", "email_change", "account_delete", "logout_all"}
+)
+GOOGLE_REAUTHENTICATION_FAILURE_STAGES = frozenset(
+    {
+        "freshness_missing_auth_time",
+        "freshness_stale_auth_time",
+        "account_session_binding",
+        "transaction",
+        "other_validation",
+    }
+)
 
 _CONSUME_TRANSACTION_SCRIPT = """
 local raw = redis.call('GET', KEYS[1])
@@ -81,6 +93,18 @@ class GoogleTokenError(RuntimeError):
     pass
 
 
+class GoogleFreshnessError(GoogleTokenError):
+    def __init__(self, failure_stage: str):
+        if failure_stage not in {
+            "freshness_missing_auth_time",
+            "freshness_stale_auth_time",
+            "other_validation",
+        }:
+            failure_stage = "other_validation"
+        self.failure_stage = failure_stage
+        super().__init__("Google authentication is not recent")
+
+
 def local_diagnostic(stage: str) -> None:
     """Temporary opt-in local diagnostics: never log request or claim values."""
     if (
@@ -88,6 +112,27 @@ def local_diagnostic(stage: str) -> None:
         and os.environ.get("VERVFY_GOOGLE_OAUTH_DIAGNOSTICS") == "1"
     ):
         logging.getLogger("vervfy.oauth").warning("Google OAuth stage: %s", stage)
+
+
+def log_google_reauthentication_failure(stage: str) -> None:
+    if os.environ.get("VERVFY_ENVIRONMENT", "").lower() not in {
+        "production",
+        "prod",
+    }:
+        return
+    safe_stage = (
+        stage
+        if stage in GOOGLE_REAUTHENTICATION_FAILURE_STAGES
+        else "other_validation"
+    )
+    message = (
+        "Google OAuth callback failure stage=%s"
+        if safe_stage == "transaction"
+        else "Google reauthentication failure stage=%s"
+    )
+    logging.getLogger("vervfy.oauth").warning(
+        message, safe_stage
+    )
 
 
 class OAuthAccessLogFilter(logging.Filter):
@@ -698,21 +743,24 @@ class GoogleOAuthService:
         # reauthentication. A new token (iat) cannot prove a new authentication.
         auth_time = claims.get("auth_time")
         now = self._clock()
+        failure_stage = "other_validation"
         if auth_time is None:
             local_diagnostic("freshness_missing_auth_time")
+            failure_stage = "freshness_missing_auth_time"
         elif isinstance(auth_time, bool) or not isinstance(auth_time, int):
             local_diagnostic("freshness_invalid_auth_time")
         elif auth_time > now + CLOCK_SKEW_SECONDS:
             local_diagnostic("freshness_future_auth_time")
         elif now - auth_time > FRESH_AUTH_MAX_AGE_SECONDS:
             local_diagnostic("freshness_stale_auth_time")
+            failure_stage = "freshness_stale_auth_time"
         if (
             isinstance(auth_time, bool)
             or not isinstance(auth_time, int)
             or auth_time > now + CLOCK_SKEW_SECONDS
             or now - auth_time > FRESH_AUTH_MAX_AGE_SECONDS
         ):
-            raise GoogleTokenError("Google authentication is not recent")
+            raise GoogleFreshnessError(failure_stage)
         return auth_time
 
     def store_pending_signup(

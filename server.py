@@ -1916,14 +1916,19 @@ async def google_oauth_callback(request: Request) -> Response:
         raise HTTPException(status_code=404, detail="Not found")
 
     stage = "transaction"
+    purpose = "login"
 
     def failed(*args, **kwargs):
-        google_oauth.local_diagnostic(stage)
+        if purpose in google_oauth.GOOGLE_REAUTHENTICATION_PURPOSES:
+            google_oauth.log_google_reauthentication_failure(stage)
+        else:
+            google_oauth.local_diagnostic(stage)
         return _google_oauth_failed(*args, **kwargs)
 
     state = request.query_params.get("state", "")
     browser_binding = request.cookies.get(config.browser_cookie_name, "")
     if not state or not browser_binding:
+        google_oauth.log_google_reauthentication_failure("transaction")
         return JSONResponse(
             {"detail": "Google sign-in could not be completed"},
             status_code=400,
@@ -1935,6 +1940,7 @@ async def google_oauth_callback(request: Request) -> Response:
         google_oauth.local_diagnostic(stage + "_unavailable")
         return _google_oauth_unavailable()
     except google_oauth.OAuthTransactionError:
+        google_oauth.log_google_reauthentication_failure("transaction")
         return failed(config, clear_browser_binding=False)
     purpose = transaction.get("purpose", "login")
 
@@ -1949,7 +1955,9 @@ async def google_oauth_callback(request: Request) -> Response:
         config.require_test_user(
             claims.get("email"), email_verified=claims.get("email_verified")
         )
-    except google_oauth.GoogleTokenError:
+    except google_oauth.GoogleTokenError as exc:
+        if isinstance(exc, google_oauth.GoogleFreshnessError):
+            stage = exc.failure_stage
         return failed(config, purpose)
     except (
         google_oauth.GoogleProviderError,
@@ -2075,7 +2083,9 @@ async def google_oauth_callback(request: Request) -> Response:
         response.headers["Referrer-Policy"] = "no-referrer"
         _clear_google_browser_cookie(response, config)
         return response
-    except google_oauth.GoogleTokenError:
+    except google_oauth.GoogleTokenError as exc:
+        if isinstance(exc, google_oauth.GoogleFreshnessError):
+            stage = exc.failure_stage
         return failed(config, purpose)
     except ValueError:
         return failed(config, purpose)
