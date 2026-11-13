@@ -51,13 +51,26 @@ GOOGLE_FLOW_PURPOSES = {
     "logout_all",
 }
 GOOGLE_REAUTHENTICATION_PURPOSES = frozenset(
-    {"password_add", "email_change", "account_delete", "logout_all"}
+    {"email_change", "account_delete", "logout_all"}
 )
+GOOGLE_IDENTITY_CONFIRMATION_PURPOSES = frozenset({"password_add"})
 GOOGLE_REAUTHENTICATION_FAILURE_STAGES = frozenset(
     {
         "freshness_missing_auth_time",
         "freshness_stale_auth_time",
         "account_session_binding",
+        "transaction",
+        "other_validation",
+    }
+)
+GOOGLE_IDENTITY_CONFIRMATION_FAILURE_STAGES = frozenset(
+    {
+        "account_session_binding",
+        "account_eligibility",
+        "authorization_response",
+        "identity_lookup",
+        "proof_storage",
+        "token_validation",
         "transaction",
         "other_validation",
     }
@@ -136,6 +149,24 @@ def log_google_reauthentication_failure(stage: str) -> None:
     )
     logging.getLogger("vervfy.oauth").warning(
         message, safe_stage
+    )
+
+
+def log_google_identity_confirmation_failure(stage: str) -> None:
+    environment = (
+        os.environ.get("VERVFY_ENVIRONMENT")
+        or os.environ.get("ENVIRONMENT", "")
+    ).strip().lower()
+    if environment not in {"production", "prod"}:
+        return
+    safe_stage = (
+        stage
+        if stage in GOOGLE_IDENTITY_CONFIRMATION_FAILURE_STAGES
+        else "other_validation"
+    )
+    logging.getLogger("vervfy.oauth").warning(
+        "Google password setup identity confirmation failure stage=%s",
+        safe_stage,
     )
 
 
@@ -559,7 +590,11 @@ class GoogleOAuthService:
             "code_verifier": verifier,
             "redirect_uri": self.config.redirect_uri,
         }
-        if purpose not in {"login", "signup"}:
+        if purpose in GOOGLE_IDENTITY_CONFIRMATION_PURPOSES:
+            # Account selection is a documented identity confirmation prompt;
+            # it is not treated as proof of recent Google credential entry.
+            authorization_params["prompt"] = "select_account"
+        elif purpose not in {"login", "signup"}:
             # Google returns auth_time only when this claim is requested and
             # the project's Session age claims setting is enabled.
             authorization_params.update(
@@ -815,6 +850,23 @@ class GoogleOAuthService:
     ) -> dict[str, Any] | None:
         return self.transactions.consume_once(
             f"proof:{purpose}", session_id
+        )
+
+    def store_password_add_identity_proof(
+        self, session_id: str, proof: dict[str, Any]
+    ) -> bool:
+        return self.transactions.put_once(
+            "proof:password_add:identity",
+            session_id,
+            proof,
+            CREDENTIAL_PROOF_TTL_SECONDS,
+        )
+
+    def consume_password_add_identity_proof(
+        self, session_id: str
+    ) -> dict[str, Any] | None:
+        return self.transactions.consume_once(
+            "proof:password_add:identity", session_id
         )
 
     def close(self) -> None:

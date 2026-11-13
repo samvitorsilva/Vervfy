@@ -47,32 +47,36 @@ test("homepage explains Vervfy publicly, translates its message, and links to si
   const response = await page.goto("/");
   expect(response?.status()).toBe(200);
   const html = await response!.text();
-  expect(html).toContain("Your music. Your rules.");
-  expect(html).toContain("Your personal space for music.");
-  await expect(page.getByRole("heading", { level: 1, name: "Your music. Your rules." })).toBeVisible();
-  await expect(page.getByText("Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.")).toBeVisible();
-  await expect(page.getByText("Your library. Your experience. Vervfy.")).toBeVisible();
+  expect(html).toContain("Your personal music library, accessible from anywhere.");
+  expect(html).toContain("Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.");
+  expect(html).not.toContain("self-hosted");
+  await expect(page.getByRole("heading", { level: 1, name: "Your personal music library, accessible from anywhere." })).toBeVisible();
+  await expect(page.getByText("Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your music library" })).toBeVisible();
+  await expect(page.getByText("Each account has its own separate music library.")).toBeVisible();
+  await expect(page.locator(".player-mockup, .mini-stats, .mock-controls")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Create account" }).first()).toHaveAttribute("href", "/register");
   await expect(page.getByRole("link", { name: "Log in" }).first()).toHaveAttribute("href", "/login");
-  await expect(page.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+  await expect(page.getByRole("link", { name: "Read the privacy policy" })).toHaveAttribute("href", "/privacy");
+  await expect(page.getByRole("link", { name: "Privacy Policy", exact: true })).toHaveAttribute("href", "/privacy");
   await expect(page.getByRole("link", { name: "Terms and Conditions" })).toHaveAttribute("href", "/terms");
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",
-    "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.",
+    "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.",
   );
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /index/);
 
   const languageSelect = page.locator(".site-footer-language select");
-  for (const [language, heading, description, tagline] of [
-    ["pt-BR", "Sua música. Suas regras.", "Seu espaço pessoal para música. Envie suas faixas, crie playlists, descubra letras e ouça sua coleção — tudo em um só lugar.", "Sua biblioteca. Sua experiência. Vervfy."],
-    ["fr", "Votre musique. Vos règles.", "Votre espace musical personnel. Importez vos morceaux, créez des playlists, découvrez les paroles et écoutez votre collection au même endroit.", "Votre bibliothèque. Votre expérience. Vervfy."],
-    ["es", "Tu música. Tus reglas.", "Tu espacio personal para la música. Sube tus canciones, crea listas, descubre letras y escucha tu colección, todo en un mismo lugar.", "Tu biblioteca. Tu experiencia. Vervfy."],
-    ["en", "Your music. Your rules.", "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.", "Your library. Your experience. Vervfy."],
+  for (const [language, heading, description, privacyLink] of [
+    ["pt-BR", "Sua biblioteca pessoal de música, acessível de qualquer lugar.", "Envie suas músicas, organize playlists e favoritos e encontre letras e informações sobre artistas em um só lugar.", "Leia a política de privacidade"],
+    ["fr", "Votre bibliothèque musicale personnelle, accessible partout.", "Importez votre musique, organisez vos playlists et vos favoris, et retrouvez des paroles et des informations sur les artistes au même endroit.", "Lire la politique de confidentialité"],
+    ["es", "Tu biblioteca personal de música, accesible desde cualquier lugar.", "Sube tu música, organiza listas y favoritos, y encuentra letras e información de artistas en un solo lugar.", "Lee la política de privacidad"],
+    ["en", "Your personal music library, accessible from anywhere.", "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.", "Read the privacy policy"],
   ]) {
     await languageSelect.selectOption(language);
     await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
     await expect(page.getByText(description, { exact: true })).toBeVisible();
-    await expect(page.getByText(tagline)).toBeVisible();
+    await expect(page.getByRole("link", { name: privacyLink })).toBeVisible();
   }
 
   for (const viewport of [
@@ -86,10 +90,56 @@ test("homepage explains Vervfy publicly, translates its message, and links to si
       width: document.documentElement.scrollWidth,
       viewport: innerWidth,
       headingTop: document.querySelector("h1")!.getBoundingClientRect().top,
+      headerBottom: document.querySelector(".homepage-header")!.getBoundingClientRect().bottom,
+      heroTop: document.querySelector(".landing-hero")!.getBoundingClientRect().top,
+      brandLogoSize: document.querySelector(".homepage-brand img")!.getBoundingClientRect().width,
+      brandFontSize: Number.parseFloat(getComputedStyle(document.querySelector(".homepage-brand")!).fontSize),
     }));
     expect(layout.width, `homepage at ${viewport.width}px`).toBeLessThanOrEqual(layout.viewport);
     expect(layout.headingTop, `homepage heading at ${viewport.width}px`).toBeGreaterThanOrEqual(0);
+    expect(layout.heroTop - layout.headerBottom, `header-to-content gap at ${viewport.width}px`).toBeLessThan(56);
+    expect(layout.brandLogoSize).toBe(42);
+    expect(layout.brandFontSize).toBeGreaterThan(20);
   }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const footerLayout = await page.evaluate(() => {
+    const footer = document.querySelector(".site-footer")!;
+    const [language, copyright] = [...footer.children];
+    return {
+      languageTop: language.getBoundingClientRect().top,
+      copyrightTop: copyright.getBoundingClientRect().top,
+      privacyBottom: document.querySelector(".homepage-privacy")!.getBoundingClientRect().bottom,
+      footerTop: footer.getBoundingClientRect().top,
+    };
+  });
+  expect(footerLayout.languageTop).toBe(footerLayout.copyrightTop);
+  expect(footerLayout.footerTop - footerLayout.privacyBottom).toBeLessThan(32);
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  const homepage = page.locator(".homepage-page");
+  await homepage.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+  expect(await homepage.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(page.getByRole("link", { name: "Terms and Conditions" })).toBeInViewport();
+});
+
+test("homepage session-check error can be retried", async ({ page }) => {
+  let attempts = 0;
+  let retryRequested = false;
+  await page.route("**/api/me", (route) => {
+    attempts += 1;
+    return route.fulfill({
+      status: retryRequested ? 401 : 503,
+      contentType: "application/json",
+      body: '{"detail":"Not authenticated"}',
+    });
+  });
+  await page.goto("/");
+  await expect(page.locator(".homepage-error")).toContainText("Unable to confirm your sign-in status.");
+  retryRequested = true;
+  await page.locator(".homepage-error button").click();
+  await expect(page.locator(".homepage-error")).toHaveCount(0);
+  expect(attempts).toBeGreaterThan(0);
 });
 
 for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 1280, height: 720 }]) {

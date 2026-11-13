@@ -1716,6 +1716,37 @@ class GoogleReauthStartRequest(BaseModel):
     ]
 
 
+def _check_google_password_setup_rate(
+    request: Request, user_id: str, stage: Literal["start", "submit"]
+) -> None:
+    window_seconds = 15 * 60
+    user_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+    ip_key = hashlib.sha256(
+        auth.client_ip(request).encode("utf-8")
+    ).hexdigest()
+    try:
+        user_allowed = request_throttle.allow(
+            f"google-password-setup:{stage}:user:{user_key}",
+            5,
+            window_seconds,
+        )
+        ip_allowed = request_throttle.allow(
+            f"google-password-setup:{stage}:ip:{ip_key}",
+            20,
+            window_seconds,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Rate-limit service unavailable"
+        ) from exc
+    if not user_allowed or not ip_allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many password setup attempts. Try again later.",
+            headers={"Retry-After": str(window_seconds)},
+        )
+
+
 class GoogleOnboardingRequest(BaseModel):
     username: str = Field(min_length=3, max_length=32)
 
@@ -1823,7 +1854,15 @@ async def google_account_reauth_start(
     if security["has_password"] or not security["google_linked"]:
         raise HTTPException(
             status_code=400,
-            detail="Google reauthentication is not available for this account",
+            detail=(
+                "Google account confirmation is not available for this account"
+                if payload.purpose == "password_add"
+                else "Google reauthentication is not available for this account"
+            ),
+        )
+    if payload.purpose == "password_add":
+        await run_in_threadpool(
+            _check_google_password_setup_rate, request, user["id"], "start"
         )
     return await _start_account_google_flow(
         request, config, service, purpose=payload.purpose, user=user
@@ -1919,7 +1958,9 @@ async def google_oauth_callback(request: Request) -> Response:
     purpose = "login"
 
     def failed(*args, **kwargs):
-        if purpose in google_oauth.GOOGLE_REAUTHENTICATION_PURPOSES:
+        if purpose in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES:
+            google_oauth.log_google_identity_confirmation_failure(stage)
+        elif purpose in google_oauth.GOOGLE_REAUTHENTICATION_PURPOSES:
             google_oauth.log_google_reauthentication_failure(stage)
         else:
             google_oauth.local_diagnostic(stage)
@@ -2017,8 +2058,11 @@ async def google_oauth_callback(request: Request) -> Response:
             )
         ):
             return failed(config, purpose)
-        stage = "freshness"
-        auth_time = service.require_fresh_authentication(claims)
+        auth_time = None
+        identity_verified_at = None
+        if purpose not in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES:
+            stage = "freshness"
+            auth_time = service.require_fresh_authentication(claims)
         if purpose == "link":
             password_verified_at = transaction.get("password_verified_at")
             if (
@@ -2059,20 +2103,33 @@ async def google_oauth_callback(request: Request) -> Response:
         )
         if security["has_password"] or not security["google_linked"]:
             return failed(config, purpose)
-        proof = {
-            "purpose": purpose,
-            "user_id": user["id"],
-            "session_id": expected_session_id,
-            "session_version": expected_version,
-            "auth_time": auth_time,
-            "verified_at": int(time.time()),
-        }
+        if purpose in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES:
+            identity_verified_at = int(time.time())
+            proof = {
+                "proof_type": "google_identity_assertion",
+                "purpose": purpose,
+                "user_id": user["id"],
+                "session_id": expected_session_id,
+                "session_version": expected_version,
+                "identity_verified_at": identity_verified_at,
+            }
+            store_proof = service.store_password_add_identity_proof
+            store_args = (expected_session_id, proof)
+        else:
+            proof = {
+                "purpose": purpose,
+                "user_id": user["id"],
+                "session_id": expected_session_id,
+                "session_version": expected_version,
+                "auth_time": auth_time,
+                "verified_at": int(time.time()),
+            }
+            store_proof = service.store_reauthentication_proof
+            store_args = (expected_session_id, purpose, proof)
         stage = "proof_storage"
         if not await run_in_threadpool(
-            service.store_reauthentication_proof,
-            expected_session_id,
-            purpose,
-            proof,
+            store_proof,
+            *store_args,
         ):
             return failed(config, purpose)
         response = RedirectResponse(
@@ -2925,6 +2982,14 @@ def verify_current_password(user: User, password: str) -> None:
 def verify_google_action_proof(
     request: Request, user: User, purpose: str
 ) -> None:
+    identity_confirmation = (
+        purpose in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES
+    )
+    failure_detail = (
+        "Google account confirmation expired. Verify again."
+        if identity_confirmation
+        else "Recent Google verification required"
+    )
     service = google_oauth_service
     session_id = request.session.get("sid")
     session_version = request.session.get("sv")
@@ -2936,18 +3001,24 @@ def verify_google_action_proof(
         or isinstance(session_version, bool)
         or session_version != user["session_version"]
     ):
-        raise HTTPException(status_code=403, detail="Recent Google verification required")
+        raise HTTPException(status_code=403, detail=failure_detail)
     try:
-        proof = service.consume_reauthentication_proof(session_id, purpose)
+        if identity_confirmation:
+            proof = service.consume_password_add_identity_proof(session_id)
+        else:
+            proof = service.consume_reauthentication_proof(session_id, purpose)
     except google_oauth.OAuthBackendUnavailable as exc:
         raise HTTPException(
             status_code=503, detail="Authentication service temporarily unavailable"
         ) from exc
     if not isinstance(proof, dict):
-        raise HTTPException(status_code=403, detail="Recent Google verification required")
+        raise HTTPException(status_code=403, detail=failure_detail)
     now = int(time.time())
-    verified_at = proof.get("verified_at")
-    auth_time = proof.get("auth_time")
+    verified_at = (
+        proof.get("identity_verified_at")
+        if identity_confirmation
+        else proof.get("verified_at")
+    )
     if (
         proof.get("purpose") != purpose
         or proof.get("user_id") != user["id"]
@@ -2957,12 +3028,23 @@ def verify_google_action_proof(
         or not isinstance(verified_at, int)
         or now - verified_at > google_oauth.CREDENTIAL_PROOF_TTL_SECONDS
         or verified_at > now + google_oauth.CLOCK_SKEW_SECONDS
-        or isinstance(auth_time, bool)
-        or not isinstance(auth_time, int)
-        or now - auth_time > google_oauth.FRESH_AUTH_MAX_AGE_SECONDS
-        or auth_time > now + google_oauth.CLOCK_SKEW_SECONDS
+        or (
+            identity_confirmation
+            and proof.get("proof_type") != "google_identity_assertion"
+        )
+        or (
+            not identity_confirmation
+            and (
+                isinstance(proof.get("auth_time"), bool)
+                or not isinstance(proof.get("auth_time"), int)
+                or now - proof["auth_time"]
+                > google_oauth.FRESH_AUTH_MAX_AGE_SECONDS
+                or proof["auth_time"]
+                > now + google_oauth.CLOCK_SKEW_SECONDS
+            )
+        )
     ):
-        raise HTTPException(status_code=403, detail="Recent Google verification required")
+        raise HTTPException(status_code=403, detail=failure_detail)
 
 
 def verify_account_action(
@@ -3099,6 +3181,8 @@ def change_password(
         raise HTTPException(
             status_code=400, detail="Passkey proof does not authorize this action"
         )
+    if purpose == "password_add" and not passkey_proof:
+        _check_google_password_setup_rate(request, user["id"], "submit")
     if not passkey_proof:
         verify_account_action(
             request, user, purpose, payload.current_password

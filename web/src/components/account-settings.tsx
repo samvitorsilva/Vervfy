@@ -287,13 +287,21 @@ export default function AccountSettings({
       } else if (linkStatus === "failed") {
         setGoogleMessage(t("Google account could not be linked. Try again."));
       } else if (reauthStatus === "success") {
-        setGoogleMessage(t("Google verification complete. Repeat your action now."));
+        setGoogleMessage(
+          t(action === "password_add"
+            ? "Google account confirmed. Create your password within five minutes."
+            : "Google verification complete. Repeat your action now."),
+        );
         if (action === "email_change") setEmailEditorOpen(true);
         if (action === "password_add") setPasswordEditorOpen(true);
         if (action === "account_delete") setDeleteEditorOpen(true);
         if (action === "logout_all") setLogoutEditorOpen(true);
       } else if (reauthStatus === "failed") {
-        setGoogleMessage(t("Google verification failed. Try again."));
+        setGoogleMessage(
+          t(action === "password_add"
+            ? "Google account confirmation failed. Try again."
+            : "Google verification failed. Try again."),
+        );
       } else {
         return;
       }

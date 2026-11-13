@@ -70,27 +70,33 @@ no automatic recovery through unverified email, and verified email alone does
 not authorize recovery or linking. Additional recovery mechanisms are outside
 this initial scope and require a separate security design.
 
-Decision: Google-only users may add a password after fresh Google authentication
-for their already-linked identity. Validate and hash the new password using the
-existing password policy. Bind the reauthentication proof to the account,
-session, and intended action, expire it promptly, and consume it once. Require
-fresh authentication for deletion, email changes, password addition/change,
-and provider linking/unlinking. Password-bearing accounts retain the current
-password check; linking additionally requires fresh Google authentication.
+Decision: Google-only users may add their first password after a validated
+Google identity assertion for their already-linked identity. This is limited to
+`password_add`: use a fresh, state/nonce/PKCE-protected OIDC transaction with
+`prompt=select_account`, then require the returned issuer and subject to map to
+the same account and active Vervfy session. Do not require or infer Google
+`auth_time` for this operation. The server-issued `google_identity_assertion`
+records successful identity and session binding, not recent Google
+credential-entry or MFA. Bind it to the action, user, session, and session
+version; store and consume it once in Redis; expire it after 300 seconds.
+Validate and hash the new password using the existing password policy and
+create it only while the password is still absent.
 
-Sensitive actions require authentication within five minutes (300 seconds),
-tracked server-side in Redis rather than trusted from browser input or cookie
-timestamps. Store the verified authentication time, method, user ID, session ID,
-session version, and intended action. Check age and session validity at action
-execution and atomically consume the proof. Expiry, logout, credential changes,
-deletion, or missing server-side state invalidate it. Password proof starts at
-successful password verification. Google proof must use validated recent
-`auth_time` for the expected linked subject; callback arrival does not establish
-freshness. Request fresh provider authentication with the appropriate OIDC
-parameters and reject missing, stale, or implausibly future authentication times.
-An account-selection screen or newly issued token alone is insufficient.
-Google support for the required request/claim contract remains a verification
-gate; do not weaken the five-minute requirement if it cannot be demonstrated.
+All other Google-sensitive actions that use provider reauthentication retain
+the signed `auth_time` requirement: linking, email changes, account deletion,
+and logout-all require a validated timestamp no older than 300 seconds and no
+more than 60 seconds in the future. Missing, stale, malformed, or implausibly
+future values fail closed. Account-selection, token issuance time (`iat`), and
+callback time are not substitutes. Password-bearing accounts retain their
+current-password checks for password changes and other actions.
+
+Proofs and sessions are tracked server-side in Redis rather than trusted from
+browser input or cookie timestamps. Check session ID/version and proof binding
+at action execution; expiry, replay, logout, credential changes, deletion, or
+missing server-side state must deny the action. If Google cannot provide valid
+`auth_time`, the other Google-only sensitive actions remain unavailable. The
+password-add identity assertion does not claim to protect against an attacker
+who controls both the active Google session and the Vervfy session.
 
 ## Session revocation and logout-all
 
@@ -135,9 +141,10 @@ using a stale session version after revocation or deletion.
    Vervfy session. Missing configuration leaves the routes disabled; Redis and
    token failures fail closed. Only already-linked identities can sign in.
 4. **Account lifecycle and UI.** Username onboarding, explicit linking,
-   password addition, unlink safeguards, fresh authentication, session
-   invalidation, and provider-identity deletion are implemented. The login,
-   signup, and account-settings UI preserve password flows. The Next.js
+   first-password addition through its scoped identity assertion, unlink
+   safeguards, `auth_time` freshness for other provider-sensitive actions,
+   session invalidation, and provider-identity deletion are implemented. The
+   login, signup, and account-settings UI preserve password flows. The Next.js
    `/api/:path*` rewrite proxies OAuth endpoints to FastAPI.
 5. **Mocked verification and release review.** `tests/test_google_oauth.py`
    covers mocked code exchange, PKCE, signed ID-token validation, invalid
@@ -423,8 +430,9 @@ Phase 1 is complete only when the following are documented and reviewed;
 unchecked items remain verification gates, not unresolved product defaults:
 
 - [x] Credential, onboarding, no-auto-linking, existing-email conflicts,
-  last-login-method, recovery, five-minute fresh-authentication, and session
-  invalidation policies are recorded above.
+  last-login-method, recovery, five-minute Google `auth_time` requirements,
+  the scoped first-password identity assertion, and session invalidation
+  policies are recorded above.
 - [x] Decision: use the public HTTPS frontend and one exact configured URI per
   environment; Authlib is selected subject to the >=1.9.2 minimum.
 - [x] Define the exact callback path, per-environment URI configuration,
@@ -456,10 +464,13 @@ Do not enable Google login until all are met:
 - [ ] Set and register the exact HTTPS callback URI for each deployed frontend;
   verify the Next rewrite, callback query, cookies, log redaction, and no-store
   behavior end to end. Development uses only the documented localhost URI.
-- [ ] Enable Google's `auth_time` claim setting and demonstrate that a
-  `max_age=300` reauthentication returns a validated timestamp within 300
-  seconds. Prove missing/stale/future claims deny sensitive actions; verify
-  password fallback and Google-only denial behavior.
+- [ ] For Google-sensitive actions other than first-password creation, enable
+  Google's `auth_time` claim setting and demonstrate that a `max_age=300`
+  reauthentication returns a validated timestamp within 300 seconds. Prove
+  missing/stale/future claims deny those actions. Separately verify first
+  password creation succeeds without `auth_time` only through the bound,
+  one-time identity assertion and rejects replay/expiry. Verify password
+  accounts retain their current-password path.
 - [ ] Test Redis expiry, eviction/missing state, backend outage, parallel
   callbacks, state/nonce/browser/session mismatch, one-time consumption, and
   invalidation after logout, session-version change, or deletion. Every failure

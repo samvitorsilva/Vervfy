@@ -263,8 +263,9 @@ issue.
   authorized JavaScript origin for the selected client configuration, add
   only `https://<STAGING_FRONTEND_HOST>`; never add a broad origin.
 - [ ] Enable the Google OIDC `auth_time` behavior described in the readiness
-  document for the staging client/project. Record the setting and verify the
-  actual returned claim during step 6; configuration alone is not evidence.
+  document for the staging client/project for sensitive actions other than
+  first-password creation. Record the setting and verify the actual returned
+  claim during step 6; configuration alone is not evidence.
 - [ ] Store the client ID and secret only in the staging API secret store as
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Set
   `GOOGLE_REDIRECT_URI=https://<STAGING_FRONTEND_HOST>/api/auth/google/callback`
@@ -359,15 +360,18 @@ attempt, never complete it from process memory.
   `(issuer, subject)` to that account. An identity already linked elsewhere
   must be rejected without moving data.
 - [ ] Test unlink and password lifecycle: unlink is refused if it would remove
-  the last usable login method; Google-only account password creation requires
-  fresh provider authentication. Confirm credential changes rotate the active
-  session, invalidate other sessions/proofs, and do not leave old sessions
-  usable.
-- [ ] For sensitive actions, capture only non-secret test evidence that Google
-  returned a validated `auth_time` within 300 seconds after the configured
-  `max_age=300`/essential claim request. Verify missing, stale, malformed, and
-  more-than-60-seconds-future values are rejected. Do not substitute `iat`,
-  callback time, account selection, or an old Vervfy session.
+  the last usable login method; a Google-only user can create a first password
+  through the account-bound, one-time identity assertion without `auth_time`.
+  Verify wrong identity/session, replay, and expiry are rejected. Confirm
+  credential changes rotate the active session, invalidate other sessions and
+  proofs, and do not leave old sessions usable. Account selection is not recent
+  Google credential-entry or MFA proof.
+- [ ] For Google-sensitive actions other than first-password creation, capture
+  only non-secret test evidence that Google returned a validated `auth_time`
+  within 300 seconds after the configured `max_age=300`/essential claim
+  request. Verify missing, stale, malformed, and more-than-60-seconds-future
+  values are rejected. Do not substitute `iat`, callback time, account
+  selection, or an old Vervfy session.
 - [ ] Exercise JWKS key rotation with Google's live key set in staging. Confirm
   a valid token signed by a newly published trusted key succeeds after refresh;
   unknown key IDs, unsupported algorithms, bad signatures, and unavailable

@@ -148,6 +148,19 @@ class TransactionTests(unittest.TestCase):
             store.consume_once("proof:password_add", "session"), value
         )
         self.assertIsNone(store.consume_once("proof:password_add", "session"))
+        identity_proof = {"proof_type": "google_identity_assertion"}
+        self.assertTrue(
+            store.put_once(
+                "proof:password_add:identity", "session", identity_proof, 300
+            )
+        )
+        self.assertEqual(
+            store.consume_once("proof:password_add:identity", "session"),
+            identity_proof,
+        )
+        self.assertIsNone(
+            store.consume_once("proof:password_add:identity", "session")
+        )
         self.assertTrue(store.put_once("signup", "browser", value, 600))
         now[0] += 601
         self.assertIsNone(store.consume_once("signup", "browser"))
@@ -362,6 +375,25 @@ class GoogleTokenTests(unittest.TestCase):
         self.assertEqual(transaction["purpose"], "link")
         self.assertEqual(transaction["user_id"], "user-1")
 
+    def test_password_add_requests_identity_selection_without_auth_time(self):
+        service, _, _ = self.service_for()
+        browser = "browser-binding-token-12345678901234567890"
+        authorization_url = asyncio.run(
+            service.create_authorization_url(
+                browser,
+                purpose="password_add",
+                context={
+                    "user_id": "user-1",
+                    "session_id": "session-1",
+                    "session_version": 2,
+                },
+            )
+        )
+        query = parse_qs(urlsplit(authorization_url).query)
+        self.assertEqual(query["prompt"], ["select_account"])
+        self.assertNotIn("max_age", query)
+        self.assertNotIn("claims", query)
+
     def test_fresh_authentication_rejects_missing_stale_and_future_times(self):
         service, _, _ = self.service_for()
         service._clock = lambda: 1000
@@ -428,6 +460,8 @@ class CallbackTests(unittest.TestCase):
             def __init__(self):
                 self.lookup_calls = []
                 self.stored_proofs = []
+                self.stored_identity_proofs = []
+                self.freshness_calls = []
                 self.pending_signup = None
                 self.purpose = purpose
                 self.context = context or {}
@@ -468,6 +502,7 @@ class CallbackTests(unittest.TestCase):
                 return user_id
 
             def require_fresh_authentication(self, verified_claims):
+                self.freshness_calls.append(verified_claims)
                 auth_time = verified_claims.get("auth_time")
                 if (
                     not isinstance(auth_time, int)
@@ -482,6 +517,10 @@ class CallbackTests(unittest.TestCase):
                 self, session_id, proof_purpose, proof
             ):
                 self.stored_proofs.append((session_id, proof_purpose, proof))
+                return True
+
+            def store_password_add_identity_proof(self, session_id, proof):
+                self.stored_identity_proofs.append((session_id, proof))
                 return True
 
             def store_pending_signup(self, browser_binding, verified_claims):
@@ -892,7 +931,7 @@ class CallbackTests(unittest.TestCase):
             {"user_id": "password-user", "sv": 5, "sid": "rotated"},
         )
 
-    def test_google_only_reauthentication_stores_action_bound_proof(self):
+    def test_google_only_password_setup_stores_bound_identity_proof(self):
         user = {
             "id": "google-user",
             "session_version": 2,
@@ -907,7 +946,6 @@ class CallbackTests(unittest.TestCase):
             claims={
                 "iss": google_oauth.GOOGLE_ISSUER,
                 "sub": "linked-google-subject",
-                "auth_time": int(time.time()),
             },
             user_id="google-user",
             purpose="password_add",
@@ -922,6 +960,8 @@ class CallbackTests(unittest.TestCase):
             cookies={
                 self.config.browser_cookie_name: flow.browser_binding,
             },
+            client=None,
+            headers={},
             session={
                 "user_id": "google-user",
                 "sid": "active-session",
@@ -940,15 +980,17 @@ class CallbackTests(unittest.TestCase):
         ):
             response = asyncio.run(server.google_oauth_callback(request))
         self.assertIn("google_action=password_add", response.headers["location"])
-        self.assertEqual(flow.stored_proofs[0][0], "active-session")
-        self.assertEqual(flow.stored_proofs[0][1], "password_add")
-        proof = flow.stored_proofs[0][2]
+        self.assertEqual(flow.stored_identity_proofs[0][0], "active-session")
+        proof = flow.stored_identity_proofs[0][1]
+        self.assertEqual(proof["proof_type"], "google_identity_assertion")
+        self.assertEqual(proof["purpose"], "password_add")
         self.assertEqual(proof["user_id"], "google-user")
+        self.assertEqual(proof["session_id"], "active-session")
         self.assertEqual(proof["session_version"], 2)
-        self.assertEqual(proof["auth_time"], flow.lookup_calls[0]["auth_time"])
-        self.assertLessEqual(abs(proof["verified_at"] - time.time()), 2)
+        self.assertLessEqual(abs(proof["identity_verified_at"] - time.time()), 2)
+        self.assertEqual(flow.freshness_calls, [])
 
-    def test_missing_auth_time_callback_rejects_without_storing_proof(self):
+    def test_password_setup_rejects_identity_from_another_account(self):
         user = {
             "id": "google-user",
             "session_version": 2,
@@ -964,7 +1006,7 @@ class CallbackTests(unittest.TestCase):
                 "iss": google_oauth.GOOGLE_ISSUER,
                 "sub": "linked-google-subject",
             },
-            user_id="google-user",
+            user_id="different-user",
             purpose="password_add",
             context=context,
         )
@@ -977,6 +1019,8 @@ class CallbackTests(unittest.TestCase):
             cookies={
                 self.config.browser_cookie_name: flow.browser_binding,
             },
+            client=None,
+            headers={},
             session={
                 "user_id": "google-user",
                 "sid": "active-session",
@@ -995,7 +1039,7 @@ class CallbackTests(unittest.TestCase):
         ):
             response = asyncio.run(server.google_oauth_callback(request))
         self.assertIn("google_reauth=failed", response.headers["location"])
-        self.assertEqual(flow.stored_proofs, [])
+        self.assertEqual(flow.stored_identity_proofs, [])
         self.assertEqual(request.session["sid"], "active-session")
 
     def test_missing_auth_time_email_change_rejects_without_storing_proof(self):

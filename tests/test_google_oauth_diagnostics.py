@@ -72,7 +72,7 @@ def test_production_reauth_failure_logs_only_fixed_stage(
             if failure == "transaction":
                 raise google_oauth.OAuthTransactionError(state)
             return {
-                "purpose": "login" if failure == "login_validation" else "password_add",
+                "purpose": "login" if failure == "login_validation" else "email_change",
                 "user_id": "private-user",
                 "session_id": "session-1",
                 "session_version": 3,
@@ -199,22 +199,89 @@ def test_google_only_password_creation_consumes_bound_proof():
     import server
 
     user = {"id": "local-user", "password_hash": None, "session_version": 2}
-    request = SimpleNamespace(session={"sid": "local-session", "sv": 2})
-    proof = dict(purpose="password_add", user_id=user["id"],
-                 session_id="local-session", session_version=2,
-                 auth_time=int(time.time()), verified_at=int(time.time()))
+    sessions = server.auth.SessionStore()
+    old_session = sessions.create(user["id"])
+    request = SimpleNamespace(
+        session={"sid": old_session, "sv": 2, "user_id": user["id"]},
+        client=None,
+        headers={},
+    )
+    proof = dict(
+        proof_type="google_identity_assertion",
+        purpose="password_add",
+        user_id=user["id"],
+        session_id=old_session,
+        session_version=2,
+        identity_verified_at=int(time.time()),
+    )
     service = Mock()
-    service.consume_reauthentication_proof.side_effect = [proof, None]
-    with patch.object(server, "google_oauth_service", service), patch.object(
+    service.consume_password_add_identity_proof.side_effect = [proof, None]
+    with patch.object(server, "session_store", sessions), patch.object(
+        server, "google_oauth_service", service
+    ), patch.object(
         server.user_store, "account_security", return_value={"google_linked": True}
     ), patch.object(server.user_store, "set_password_and_bump_version", return_value=3) as save, patch.object(
-        server, "rotate_authenticated_session"
-    ) as rotate:
+        server, "request_throttle"
+    ) as throttle:
+        throttle.allow.return_value = True
         payload = server.PasswordChangeRequest(new_password="local-strong-password-123")
         assert server.change_password(payload, request, user) == {"ok": True}
         assert save.call_args.kwargs["expected_password_hash"] is None
-        rotate.assert_called_once_with(request, "local-user", 3)
+        assert not sessions.is_valid(old_session, user["id"])
+        assert sessions.is_valid(request.session["sid"], user["id"])
+        assert request.session["sv"] == 3
         with pytest.raises(server.HTTPException) as error:
             server.change_password(payload, request, user)
         assert error.value.status_code == 403
         assert save.call_count == 1
+
+
+def test_google_only_password_setup_rejects_expired_identity_proof():
+    import server
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    user = {"id": "local-user", "session_version": 2}
+    request = SimpleNamespace(session={"sid": "local-session", "sv": 2})
+    service = Mock()
+    service.consume_password_add_identity_proof.return_value = {
+        "proof_type": "google_identity_assertion",
+        "purpose": "password_add",
+        "user_id": "local-user",
+        "session_id": "local-session",
+        "session_version": 2,
+        "identity_verified_at": int(time.time()) - 301,
+    }
+    with patch.object(server, "google_oauth_service", service), pytest.raises(
+        server.HTTPException
+    ) as error:
+        server.verify_google_action_proof(request, user, "password_add")
+    assert error.value.status_code == 403
+    assert error.value.detail == "Google account confirmation expired. Verify again."
+    service.consume_password_add_identity_proof.assert_called_once_with(
+        "local-session"
+    )
+
+
+def test_google_password_setup_rate_limit_is_bounded_and_fails_closed():
+    import server
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    request = SimpleNamespace(client=None, headers={})
+    limiter = Mock()
+    limiter.allow.side_effect = [True, False]
+    with patch.object(server, "request_throttle", limiter), pytest.raises(
+        server.HTTPException
+    ) as error:
+        server._check_google_password_setup_rate(request, "local-user", "start")
+    assert error.value.status_code == 429
+    assert error.value.headers["Retry-After"] == "900"
+    assert limiter.allow.call_count == 2
+
+    limiter.allow.side_effect = RuntimeError("offline")
+    with patch.object(server, "request_throttle", limiter), pytest.raises(
+        server.HTTPException
+    ) as error:
+        server._check_google_password_setup_rate(request, "local-user", "submit")
+    assert error.value.status_code == 503

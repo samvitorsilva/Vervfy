@@ -68,7 +68,9 @@ class CredentialTests(unittest.TestCase):
 
     def test_passwordless_account_routes_never_mutate_data(self):
         user = User(id='a', username='someone', password_hash=None)
-        request = SimpleNamespace(session={'sid': 'existing', 'sv': 3})
+        request = SimpleNamespace(
+            session={'sid': 'existing', 'sv': 3}, client=None, headers={}
+        )
         actions = (
             lambda: server.change_account_email(
                 server.EmailChangeRequest(email='new@example.com', current_password='guess'), request, user, None),
