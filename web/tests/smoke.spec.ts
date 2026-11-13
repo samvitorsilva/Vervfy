@@ -91,6 +91,12 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
   await expect(
     page.getByText(/This document describes the current implementation/),
   ).toBeVisible();
+  await expect(
+    page.getByText(/Google sign-in requests OpenID Connect identity/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/not a promise of immediate physical erasure/),
+  ).toBeVisible();
   const privacyContactLinks = page.getByRole("link", { name: "vervfy.dev@proton.me" });
   await expect(privacyContactLinks).toHaveCount(2);
   for (let index = 0; index < 2; index += 1) {
@@ -103,7 +109,11 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
   await expect(page).toHaveTitle("Terms and Conditions | Vervfy");
   await expect(page.getByRole("heading", { name: "Terms and Conditions" })).toBeVisible();
   await expect(
-    page.getByText(/These terms do not limit consumer or data-protection rights/),
+    page.getByText(/does not provide a licensed music catalogue/),
+  ).toBeVisible();
+  await expect(page.getByText(/restrict or suspend an account/)).toBeVisible();
+  await expect(
+    page.getByText(/Nothing here limits mandatory consumer or data-protection rights/),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Privacy Policy" }).first()).toHaveAttribute(
     "href",
@@ -552,6 +562,7 @@ test("language changes translate legal pages, navigation, and document metadata"
   await expect(page).toHaveTitle("Politique de confidentialité | Vervfy");
   await expect(page.getByRole("heading", { name: "Qui exploite Vervfy" })).toBeVisible();
   await expect(page.getByText("Informations traitées par le service")).toBeVisible();
+  await expect(page.getByText(/Les recherches facultatives de paroles sur LRCLIB/)).toBeVisible();
   await expect(
     page.getByText(
       "Ce document décrit l’implémentation actuelle et ne constitue pas une certification de conformité juridique.",
@@ -562,12 +573,13 @@ test("language changes translate legal pages, navigation, and document metadata"
   await page.goto("/terms");
   await expect(page).toHaveTitle("Conditions générales | Vervfy");
   await expect(page.getByRole("heading", { name: "Votre musique et vos autres contenus" })).toBeVisible();
-  await expect(page.getByText(/notamment le droit brésilien lorsqu’il s’applique/)).toBeVisible();
+  await expect(page.getByText(/y compris la LGPD lorsqu’elle s’applique/)).toBeVisible();
 
   await page.locator(".site-footer-language select").selectOption("es");
   await expect(page).toHaveTitle("Términos y condiciones | Vervfy");
   await expect(page.getByRole("heading", { name: "Tu música y otros contenidos" })).toBeVisible();
-  await expect(page.getByText(/incluida la legislación brasileña cuando corresponda/)).toBeVisible();
+  await expect(page.getByText(/Vervfy puede restringir o suspender una cuenta/)).toBeVisible();
+  await expect(page.getByText(/incluida la LGPD cuando corresponda/)).toBeVisible();
 
   await page.goto("/credits");
   await expect(page).toHaveTitle("Créditos y fuentes de datos | Vervfy");

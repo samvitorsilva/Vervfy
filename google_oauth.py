@@ -560,9 +560,10 @@ class GoogleOAuthService:
             "redirect_uri": self.config.redirect_uri,
         }
         if purpose not in {"login", "signup"}:
+            # Google returns auth_time only when this claim is requested and
+            # the project's Session age claims setting is enabled.
             authorization_params.update(
                 {
-                    "prompt": "login",
                     "max_age": FRESH_AUTH_MAX_AGE_SECONDS,
                     "claims": json.dumps(
                         {"id_token": {"auth_time": {"essential": True}}},

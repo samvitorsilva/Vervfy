@@ -18,7 +18,7 @@ export default function LegalDocument({
     month: "long",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date("2026-11-01T00:00:00Z"));
+  }).format(new Date("2026-11-13T00:00:00Z"));
 
   return (
     <main className="credits-page">

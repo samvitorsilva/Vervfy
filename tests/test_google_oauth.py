@@ -334,7 +334,7 @@ class GoogleTokenTests(unittest.TestCase):
                     with self.assertRaises(google_oauth.GoogleTokenError):
                         service.require_fresh_authentication(claims)
 
-    def test_sensitive_authorization_requests_recent_auth_time(self):
+    def test_sensitive_authorization_requests_documented_auth_time_claim(self):
         service, _, _ = self.service_for()
         browser = "browser-binding-token-12345678901234567890"
         authorization_url = asyncio.run(
@@ -350,7 +350,7 @@ class GoogleTokenTests(unittest.TestCase):
             )
         )
         query = parse_qs(urlsplit(authorization_url).query)
-        self.assertEqual(query["prompt"], ["login"])
+        self.assertNotIn("prompt", query)
         self.assertEqual(query["max_age"], ["300"])
         self.assertEqual(
             json.loads(query["claims"][0]),

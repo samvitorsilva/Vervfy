@@ -11,7 +11,7 @@ export default function PrivacyPolicyContent() {
       <section className="credits-source">
         <h2>{t("Who operates Vervfy")}</h2>
         <p>
-          {t("Vervfy is an independent project operated by its individual maintainer, not a registered company. For privacy questions or requests, contact the maintainer at")}{" "}
+          {t("Vervfy is an independent project operated by an individual maintainer. For privacy questions or requests, contact the maintainer at")}{" "}
           <a href="mailto:vervfy.dev@proton.me">vervfy.dev@proton.me</a>.
         </p>
       </section>
@@ -19,7 +19,13 @@ export default function PrivacyPolicyContent() {
       <section className="credits-source">
         <h2>{t("Information handled by the service")}</h2>
         <p>
-          {t("Vervfy processes an internal account ID, username, password hash, optional email and its verification state, account creation time, profile and artist photos, uploaded audio and its filename and tags, cover images, lyrics you save, playlists, favorites, and listening history.")}
+          {t("Vervfy processes an internal account ID, username, password hash (not your password), optional email and its verification state, Google account identifier when Google sign-in is used, account creation time, profile and artist photos, uploaded audio and its filename and tags, cover images, lyrics you save, playlists, favorites, and listening history.")}
+        </p>
+        <p>
+          {t("Vervfy supports username/password accounts and Google sign-in. Google sign-in requests OpenID Connect identity, email, and basic profile scopes. Google processes the sign-in request; Vervfy receives the stable Google account identifier and may store an email when Google marks it verified. Vervfy does not receive your Google password, request Gmail or Drive access, or store your Google profile name or photo.")}
+        </p>
+        <p>
+          {t("For username/password accounts, email is optional and is not used to sign in; email verification and email-based password recovery are not implemented. You can link or unlink Google in account settings. Google-only accounts must add a password before unlinking Google. Sensitive actions may require your current password or a fresh Google sign-in.")}
         </p>
         <p>
           {t("The app and its hosting infrastructure also process technical request information, including IP address and browser or network details, to deliver the service, manage sessions, prevent abuse, and apply rate limits. Hosting and service-provider log retention has not been independently verified.")}
@@ -29,47 +35,47 @@ export default function PrivacyPolicyContent() {
       <section className="credits-source">
         <h2>{t("How information is used and shared")}</h2>
         <p>
-          {t("Account and library information is used to authenticate you, store and play your library, sync it across your devices, and provide features such as playlists and listening history. Processing is intended to provide functions you request and to protect the service; the maintainer should confirm and document the legal basis for each operation before broader public or commercial use.")}
+          {t("We use account and library information to create and maintain accounts, store and play your library, sync it across devices, and provide requested features. Technical and security information helps keep accounts signed in, protect the service, and limit abusive requests. The operator should confirm the applicable legal bases under the LGPD and other relevant law.")}
         </p>
         <p>
-          {t("The deployment uses hosting, database, file-storage, and (where configured) Redis infrastructure, currently including Render and Supabase. Lyrics lookups send track, artist, and sometimes album or duration metadata from the app server to LRCLIB. Artwork and artist lookups can send names from audio tags to MusicBrainz, TheAudioDB, or Wikipedia; some lookups happen automatically when artwork or an artist profile is requested. Your audio files are not sent to these lookup services. Their providers receive the server's request data.")}
+          {t("The public website is served from Vercel. The checked project deployment configuration also defines Render application and Redis-compatible key-value services; the app is configured to use Supabase PostgreSQL and private object storage. Those providers process requests, account and library records, session or security data, and uploaded files as needed to provide the service. The live configuration, data regions, and provider log, backup, and retention periods have not been independently verified.")}
         </p>
         <p>
-          {t("The browser loads Google Fonts directly and may load third-party artwork directly from TheAudioDB or Cover Art Archive. Those providers can receive your IP address and normal browser request information. Vervfy does not configure advertising or analytics trackers in the inspected app.")}
+          {t("Optional LRCLIB lookups send track and artist search terms and, where supplied, album or duration metadata or a search query from the app server to LRCLIB. Cover and artist lookups may send track and artist names to MusicBrainz, artist, title, or album metadata to TheAudioDB, or artist names to Wikipedia; some run automatically while resolving artwork or a profile. MusicBrainz and Cover Art Archive also receive server requests to resolve cover art. Uploaded audio files are not sent to these lookup providers. Shared result caches may retain normalized names, provider IDs, URLs, statuses, and timestamps without an account ID. The browser may load images directly from TheAudioDB or Cover Art Archive and fonts from Google Fonts; those providers can receive your IP address and ordinary browser request information.")}
+        </p>
+        <p>
+          {t("Vervfy does not currently configure its own advertising or analytics services. Hosting and service-provider logs may still record technical request data; their retention periods have not been independently verified.")}
         </p>
       </section>
 
       <section className="credits-source">
         <h2>{t("Cookies and browser storage")}</h2>
         <p>
-          {t("Vervfy uses the auralis_session HttpOnly session cookie for sign-in (up to 30 days; Secure is enabled when HTTPS-only mode is configured). Selecting a language stores a vervfy-language preference cookie for one year and saves the language and list-view preference in local storage. LRCLIB lyrics results are cached in local storage; expired entries are removed when accessed, so an unused entry may remain until browser storage is cleared. The service worker caches app shell and static assets, not account API responses.")}
+          {t("Vervfy uses an HttpOnly session cookie for up to 30 days; the Secure attribute is enabled when the deployment is HTTPS-only. Google sign-in also uses a temporary security cookie. CSRF tokens protect account actions. When configured, Redis-compatible storage holds session records and temporary rate-limit or security data. Choosing a language stores a vervfy-language cookie for one year and saves language and list-view preferences in local storage. LRCLIB lyrics results are cached in local storage; expired entries are removed when accessed, so an unused entry may remain until browser storage is cleared. The service worker caches app shell and static assets, not account API responses.")}
         </p>
         <p>
-          {t("Tracks downloaded for offline listening, with optional covers and saved lyrics, are stored in this browser's IndexedDB without an automatic expiry. They remain until removed from offline storage or browser data is cleared; account deletion attempts to remove that account's offline copies from this browser.")}
+          {t("Tracks downloaded for offline listening, with optional covers and saved lyrics, are stored in this browser's IndexedDB without automatic expiry. They remain until removed or browser data is cleared. Account deletion attempts to remove this account's offline copies from the browser where deletion was requested; offline copies on other devices are not reachable through that request.")}
         </p>
         <p>
-          {t("Account API responses, including profile photos and track covers, use private, no-store cache headers. The service worker does not cache account API responses. Responses cached by an older app version may remain until their previous cache expiry or until browser data is cleared.")}
-        </p>
-        <p>
-          {t("The inspected app has no advertising or analytics cookies, so it currently does not show a cookie-consent banner. Browser storage is used for sign-in, preferences, and the lyrics and offline-download features you request. If non-essential tracking or advertising is added, its legal basis and any required consent must be reviewed before deployment.")}
+          {t("Account API responses, including profile photos and track covers, use private, no-store cache headers. The service worker does not cache account API responses.")}
         </p>
       </section>
 
       <section className="credits-source">
         <h2>{t("Retention and deletion")}</h2>
         <p>
-          {t("Account and library information is retained while the account is active. Delete account in account settings removes the account's primary database records and referenced uploaded audio, cover, and artist-photo files from storage. The browser also attempts to clear cached LRCLIB lyrics after successful deletion. Shared artwork lookup caches may retain normalized artist or track names and result URLs without an account ID. Backups, hosting logs, external-provider logs, and expiring infrastructure session or rate-limit entries are outside this deletion flow; their retention periods have not been verified.")}
+          {t("Account and library information is kept while your account is active. Account deletion first attempts to invalidate sessions, then requests deletion of account-referenced objects from Supabase Storage, and then attempts to remove the account's primary database records. Failure at a step can leave partial work and require a retry; this is not a promise of immediate physical erasure from provider systems. After a successful server response, the browser attempts to clear cached LRCLIB lyrics and offline data for that account, but this can fail and only affects the browser used for deletion. Shared artwork caches may retain normalized names and result URLs without an account ID; their cleanup period is not verified. Backups and provider logs are outside this flow, and their retention periods have not been confirmed.")}
         </p>
       </section>
 
       <section className="credits-source">
         <h2>{t("Your choices and requests")}</h2>
         <p>
-          {t("You can correct your email or remove your profile photo in account settings and delete your account there. To request confirmation of processing, access or a copy of your data, correction of other information, anonymization, blocking or deletion where applicable, information about sharing and the consequences of refusing or withdrawing consent, portability or review of automated decisions where applicable, or to exercise another right under the LGPD, email the maintainer at")}{" "}
+          {t("You can update or remove account information in settings, including an optional email or profile photo, change or add a password, link or unlink Google, and request account deletion. To ask about or exercise rights available under the LGPD and other applicable privacy laws, contact the maintainer at")}{" "}
           <a href="mailto:vervfy.dev@proton.me">vervfy.dev@proton.me</a>.
         </p>
         <p>
-          {t("Requests may require reasonable verification that you control the account. Rights are handled within the scope and exceptions provided by law; information that must be retained by law may be kept only for the required purpose and period. You can also clear browser storage in your browser settings.")}
+          {t("We may ask for information reasonably needed to verify that you control the account. The operator should confirm the controller's legal identity, applicable processing bases, and request procedures with Brazilian privacy counsel. You can also clear browser storage in your browser settings.")}
         </p>
       </section>
 
