@@ -14,6 +14,9 @@ export const metadata: Metadata = {
     template: "%s | Vervfy",
   },
   description: "Listen to and organize your personal music library with Vervfy.",
+  verification: {
+    google: "TJcjdYvCNgGT5pSgac4QQfkP-KAybFGY3BR9WfLPVvc",
+  },
   icons: {
     icon: [
       { url: "/gemini-svg.svg", type: "image/svg+xml" },
