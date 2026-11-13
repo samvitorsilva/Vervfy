@@ -164,6 +164,34 @@ def test_production_failure_logger_reduces_unknown_stage_to_fixed_value(caplog):
     assert "private-authorization-code" not in caplog.text
 
 
+def test_production_failure_logger_uses_environment_fallback(caplog):
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with patch.dict("os.environ", {"ENVIRONMENT": "production"}, clear=True):
+        google_oauth.log_google_reauthentication_failure("account_session_binding")
+    assert caplog.text.strip().endswith(
+        "Google reauthentication failure stage=account_session_binding"
+    )
+
+
+def test_callback_missing_state_logs_transaction_before_400(caplog):
+    import server
+
+    config = SimpleNamespace(browser_cookie_name="google_binding")
+    request = SimpleNamespace(query_params={}, cookies={}, session={})
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with (
+        patch.dict("os.environ", {"ENVIRONMENT": "production"}, clear=True),
+        patch.object(server, "google_oauth_config", config),
+        patch.object(server, "google_oauth_service", object()),
+    ):
+        response = asyncio.run(server.google_oauth_callback(request))
+
+    assert response.status_code == 400
+    assert caplog.text.strip().endswith(
+        "Google OAuth callback failure stage=transaction"
+    )
+
+
 def test_google_only_password_creation_consumes_bound_proof():
     import time
     from types import SimpleNamespace

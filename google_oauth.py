@@ -115,7 +115,11 @@ def local_diagnostic(stage: str) -> None:
 
 
 def log_google_reauthentication_failure(stage: str) -> None:
-    if os.environ.get("VERVFY_ENVIRONMENT", "").lower() not in {
+    environment = (
+        os.environ.get("VERVFY_ENVIRONMENT")
+        or os.environ.get("ENVIRONMENT", "")
+    ).strip().lower()
+    if environment not in {
         "production",
         "prod",
     }:
