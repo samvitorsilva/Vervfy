@@ -12,6 +12,7 @@ const backendOrigin = getBackendOrigin(
 validateStagingSiteUrl(process.env.SITE_URL, environment);
 
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
   devIndicators: false,
   async headers() {
     return [
