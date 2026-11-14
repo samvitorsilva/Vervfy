@@ -35,3 +35,15 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Additional security exclusions
+!.env.*.example
+*.pem
+*.key
+data/.secret_key
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/.playwright/
+gitleaks-report.json
+gitleaks-*.json
