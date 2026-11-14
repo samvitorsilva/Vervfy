@@ -35,33 +35,18 @@ def migration(filename):
 
 
 class MigrationChainTests(unittest.TestCase):
-    def test_oauth_webauthn_and_storage_histories_join_at_one_head(self):
+    def test_complete_linear_chain_includes_oauth_migrations(self):
         script = ScriptDirectory.from_config(Config(str(ROOT / 'alembic.ini')))
-        self.assertEqual(script.get_heads(), ['0033_cleanup_activation_gate'])
-        self.assertEqual(
-            script.get_revision('0027_webauthn_foundation').down_revision,
-            '0026_application_runtime_grants',
-        )
-        self.assertEqual(
-            script.get_revision('0028_webauthn_enrollment').down_revision,
-            '0027_webauthn_foundation',
-        )
-        self.assertEqual(
-            script.get_revision('0027_storage_lifecycle').down_revision,
-            '0026_application_runtime_grants',
-        )
-        self.assertEqual(
-            script.get_revision('0028_storage_cleanup_leases').down_revision,
-            '0027_storage_lifecycle',
-        )
-        self.assertEqual(
-            set(script.get_revision('0032_merge_storage_webauthn').down_revision),
-            {'0028_webauthn_enrollment', '0031_operator_revocation'},
-        )
-        self.assertEqual(
-            script.get_revision('0033_cleanup_activation_gate').down_revision,
-            '0032_merge_storage_webauthn',
-        )
+        self.assertEqual(script.get_heads(), [HEAD])
+        chain = list(script.walk_revisions())
+        self.assertEqual(len(chain), 28)
+        for newer, older in zip(chain, chain[1:]):
+            self.assertEqual(newer.down_revision, older.revision)
+        self.assertIsNone(chain[-1].down_revision)
+        self.assertTrue({'0021_provider_identities', '0022_provider_identity_lookup',
+                         '0023_missing_media_columns', '0024_provider_identity_access',
+                         '0027_webauthn_foundation', '0028_webauthn_enrollment'}
+                        <= {r.revision for r in chain})
 
     def test_sqlite_cover_constraint_preserves_rows(self):
         engine = sa.create_engine('sqlite://')
@@ -191,7 +176,7 @@ class StagingPostgresTests(unittest.TestCase):
         with cls.engine.connect() as c:
             cls.pre_upgrade_snapshot = cls.account_snapshot(c)
         with patch.dict(os.environ, {'DATABASE_URL': cls.migration_url, 'MIGRATION_DATABASE_URL': cls.migration_url}):
-            command.upgrade(Config(str(ROOT / 'alembic.ini')), HEAD)
+            command.upgrade(Config(str(ROOT / 'alembic.ini')), 'head')
 
     @staticmethod
     def account_snapshot(connection):

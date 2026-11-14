@@ -8,8 +8,8 @@ import smtplib
 import ssl
 from collections.abc import Callable
 from email.message import EmailMessage
-from html import escape
 from email.utils import parseaddr
+from html import escape
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -108,7 +108,7 @@ class SmtpTransport:
                     client.send_message(message)
         except SmtpConfigError:
             raise
-        except Exception as exc:  # noqa: BLE001 - map all SMTP failures
+        except Exception as exc:
             raise SmtpSendError("Could not send email") from exc
 
 
@@ -237,7 +237,7 @@ class EmailSender:
         except SmtpSendError:
             logger.warning("password reset email failed: SMTP provider error")
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 - avoid logging provider or message details
             logger.warning("password reset email failed: unexpected transport error")
             raise SmtpSendError("Could not send email") from None
 
@@ -258,7 +258,7 @@ class EmailSender:
         except SmtpSendError:
             logger.warning("email verification message failed: SMTP provider error")
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 - avoid logging provider or message details
             logger.warning("email verification message failed: unexpected transport error")
             raise SmtpSendError("Could not send email") from None
 

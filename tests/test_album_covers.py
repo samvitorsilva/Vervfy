@@ -4,7 +4,7 @@ import os
 import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker, undefer
@@ -171,25 +171,18 @@ class AlbumCoverTests(unittest.TestCase):
 
     def test_custom_track_cover_uses_user_scoped_storage_path(self) -> None:
         album_library = library.Library("album-user-a")
-        managed_path = (
-            "v2/00000000-0000-0000-0000-000000000001/"
-            "album-user-a/track-cover/"
-            "00000000-0000-0000-0000-000000000002.jpg"
-        )
         with (
             patch.object(library.audio_store, "enabled", return_value=True),
-            patch.object(
-                library.storage_lifecycle,
-                "upload_bytes",
-                return_value=managed_path,
-            ) as upload,
+            patch.object(library.audio_store, "upload") as upload,
         ):
             track = album_library.set_user_cover("placeholder", b"normalized-jpeg")
 
         self.assertEqual(track.cover_source, "user")
-        self.assertEqual(track.cover_path, managed_path)
+        self.assertEqual(track.cover_path, "covers/album-user-a/placeholder.jpg")
         upload.assert_called_once_with(
-            "album-user-a", "track-cover", b"normalized-jpeg"
+            "covers/album-user-a/placeholder.jpg",
+            b"normalized-jpeg",
+            "image/jpeg",
         )
         with self.sessions() as session:
             row = session.scalar(
@@ -201,7 +194,7 @@ class AlbumCoverTests(unittest.TestCase):
                 )
             )
         self.assertIsNone(row.cover_data)
-        self.assertEqual(row.cover_path, managed_path)
+        self.assertEqual(row.cover_path, "covers/album-user-a/placeholder.jpg")
 
     def test_removing_track_preserves_a_cover_shared_with_other_tracks(self) -> None:
         with self.sessions() as session:
@@ -217,7 +210,7 @@ class AlbumCoverTests(unittest.TestCase):
         with patch.object(library.audio_store, "delete_quietly") as delete:
             self.assertTrue(album_library.remove("placeholder"))
 
-        delete.assert_not_called()
+        self.assertEqual(delete.call_args_list, [call(None)])
         with self.sessions() as session:
             remaining = session.get(
                 TrackRecord,

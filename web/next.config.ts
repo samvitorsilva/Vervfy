@@ -13,10 +13,6 @@ validateStagingSiteUrl(process.env.SITE_URL, environment);
 
 const nextConfig: NextConfig = {
   devIndicators: false,
-  allowedDevOrigins: [
-	"specify-message-arabia-casa.trycloudflare.com",
-    "vervfy.test",
-  ],
   async headers() {
     return [
       {

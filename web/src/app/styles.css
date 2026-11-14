@@ -2194,49 +2194,6 @@ span.artist-photo{
   .rail-btn[data-view][data-tip]::after{ font-size:8px; }
   .rail-btn{ max-width:none; padding:0 1px; }
 }
-@media (max-width:900px) and (max-height:560px){
-  .mobile-player{
-    --mobile-player-head-height:max(60px, calc(env(safe-area-inset-top, 0px) + 44px));
-  }
-  .mobile-player-head{
-    height:var(--mobile-player-head-height);
-    padding:max(8px, env(safe-area-inset-top, 0px))
-      max(18px, env(safe-area-inset-right, 0px)) 8px
-      max(18px, env(safe-area-inset-left, 0px));
-  }
-  .mobile-player-scroll{
-    height:calc(100% - var(--mobile-player-head-height));
-    padding:12px max(18px, min(4vw, 36px), env(safe-area-inset-right, 0px)) 20px
-      max(18px, min(4vw, 36px), env(safe-area-inset-left, 0px));
-    display:grid;
-    grid-template-columns:minmax(0, min(32vh, 220px)) minmax(0, 1fr);
-    align-items:start;
-    align-content:start;
-    gap:clamp(14px, 3vw, 26px);
-  }
-  .mobile-player-art{
-    width:min(32vh, 220px);
-    margin:0;
-    align-self:center;
-  }
-  .mobile-player-info{
-    width:min(100%, 570px);
-    min-width:0;
-    margin:0;
-    justify-self:center;
-    align-self:start;
-  }
-  .mobile-seek-row{ margin-top:8px; }
-  .mobile-transport{ margin-top:8px; }
-  .mobile-lyrics-preview{ margin-top:10px; padding:10px 12px; }
-  .mobile-lyrics-preview p{
-    min-height:2.4em;
-    margin-top:6px;
-    font-size:14px;
-    line-height:1.3;
-  }
-  .mobile-secondary-actions{ margin-top:8px; }
-}
 @media (min-width:641px) and (max-width:900px){
   .lyrics-player{
     bottom:18px; width:min(740px, calc(100% - 36px));

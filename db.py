@@ -7,7 +7,6 @@ URL in tests without changing application code.
 from __future__ import annotations
 
 import os
-import uuid
 from datetime import datetime
 
 from sqlalchemy import (
@@ -22,7 +21,6 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
-    Uuid,
     UniqueConstraint,
     create_engine,
     event,
@@ -54,14 +52,6 @@ def database_url() -> str:
     value = os.environ.get("DATABASE_URL", "").strip()
     if not value:
         raise RuntimeError("DATABASE_URL must be set (use your Supabase PostgreSQL connection string).")
-    if (
-        os.environ.get("VERVFY_ENVIRONMENT", "").strip().lower() == "local-test"
-        or os.environ.get("VERVFY_STORAGE_BACKEND", "").strip().lower()
-        == "filesystem"
-    ):
-        from storage_adapters import validate_local_configuration
-
-        validate_local_configuration()
     value = normalize_database_url(value)
     if os.environ.get("VERVFY_ENVIRONMENT", "").strip().lower() == "production":
         parsed_url = make_url(value)
@@ -176,9 +166,6 @@ class TrackRecord(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cover_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     cover_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
-    media_version: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False, default=uuid.uuid4
-    )
     cover_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -195,9 +182,6 @@ class ArtistPhoto(Base):
     normalized_artist_name: Mapped[str] = mapped_column(String(200), primary_key=True)
     jpeg_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     storage_path: Mapped[str | None] = mapped_column(String(600))
-    media_version: Mapped[uuid.UUID] = mapped_column(
-        Uuid, nullable=False, default=uuid.uuid4
-    )
     source: Mapped[str] = mapped_column(String(10), nullable=False)
     author: Mapped[str | None] = mapped_column(Text)
     license_name: Mapped[str | None] = mapped_column(String(100))
@@ -301,10 +285,7 @@ class UploadJob(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
-    storage_path: Mapped[str | None] = mapped_column(
-        String(600), nullable=True, unique=True
-    )
-    processing_token: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    storage_path: Mapped[str] = mapped_column(String(600), nullable=False, unique=True)
     track_id: Mapped[str | None] = mapped_column(String(64))
     cover_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

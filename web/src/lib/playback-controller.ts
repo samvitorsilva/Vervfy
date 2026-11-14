@@ -818,20 +818,6 @@ export class PlaybackController {
       error && typeof error === "object" && "name" in error && typeof error.name === "string"
         ? error.name
         : "";
-    if (
-      document.visibilityState === "hidden" &&
-      (errorName === "NotAllowedError" || errorName === "AbortError")
-    ) {
-      attempt.loading = false;
-      attempt.recovering = false;
-      attempt.failed = false;
-      attempt.retryableNetworkFailure = false;
-      this.clearAttemptTimers(attempt);
-      const state = usePlayerStore.getState();
-      state.setPlaying(false);
-      state.setPlaybackStatus("buffering");
-      return;
-    }
     const mediaErrorCode = this.audio.error?.code;
     const retryableNetworkError =
       failureKind === "stalled" ||

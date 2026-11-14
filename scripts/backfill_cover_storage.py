@@ -61,10 +61,6 @@ def _extract_legacy_cover(
 
 
 def main() -> int:
-    raise SystemExit(
-        "Retired: unmanaged artwork keys require a separately reviewed lifecycle migration."
-    )
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch-size", type=int, default=10)
     args = parser.parse_args()

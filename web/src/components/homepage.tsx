@@ -38,17 +38,6 @@ export default function Homepage() {
   }, [sessionAttempt]);
 
   if (sessionStatus === "authenticated") return <LibraryApp />;
-  if (sessionStatus === "checking") {
-    return (
-      <main className="homepage-page homepage-session-check">
-        <div className="homepage-content">
-          <p className="homepage-session-loading" role="status" aria-busy="true">
-            {t("Loading library")}
-          </p>
-        </div>
-      </main>
-    );
-  }
 
   return (
     <div className="homepage-page">

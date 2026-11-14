@@ -683,7 +683,6 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   for (const viewport of [
     { width: 360, height: 812 },
     { width: 768, height: 1024 },
-    { width: 844, height: 390 },
   ]) {
     await page.setViewportSize(viewport);
     await nowPlayingButton.click();
@@ -692,28 +691,6 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
     await expect(player.getByRole("button", { name: "Close player" })).toBeFocused();
     await expect(player.locator(".mobile-player-art img, .mobile-player-art .generated-aura")).toBeVisible();
     await expect(player.locator(".mobile-player-context strong")).toHaveText("Library");
-    if (viewport.height <= 560) {
-      const landscapeLayout = await player.locator(".mobile-player-scroll").evaluate((element) => {
-        const bounds = (selector: string) => {
-          const { left, right, top, bottom } = element
-            .querySelector(selector)!
-            .getBoundingClientRect();
-          return { left, right, top, bottom };
-        };
-        return {
-          display: getComputedStyle(element).display,
-          scrollTop: element.getBoundingClientRect().top,
-          artwork: bounds(".mobile-player-art"),
-          details: bounds(".mobile-player-info"),
-          play: bounds(".mobile-play"),
-        };
-      });
-      expect(landscapeLayout.display).toBe("grid");
-      expect(landscapeLayout.artwork.right).toBeLessThan(landscapeLayout.details.left);
-      expect(landscapeLayout.details.top).toBeGreaterThanOrEqual(landscapeLayout.scrollTop);
-      expect(landscapeLayout.play.top).toBeGreaterThanOrEqual(landscapeLayout.scrollTop);
-      expect(landscapeLayout.play.bottom).toBeLessThanOrEqual(viewport.height);
-    }
     const playerMenuButton = player.getByRole("button", { name: "More options for responsive-player" });
     await playerMenuButton.click();
     const playerMenu = page.getByRole("menu", { name: "Options for responsive-player" });
@@ -874,14 +851,6 @@ test("library loading skeleton matches the desktop and mobile layouts", async ({
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 
-  await expect(page.getByRole("status")).toHaveText("Loading library");
-  await expect(
-    page.getByRole("heading", {
-      name: "Your personal music library, accessible from anywhere.",
-    }),
-  ).toHaveCount(0);
-  releaseLibraryRequests();
-
   const loadingSkeleton = page.locator(".app-loading-skeleton");
   await expect(loadingSkeleton).toBeVisible();
   await expect(loadingSkeleton).toHaveAttribute("aria-busy", "true");
@@ -895,6 +864,7 @@ test("library loading skeleton matches the desktop and mobile layouts", async ({
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
+  releaseLibraryRequests();
 });
 
 test("disabled LRCLIB lookup makes no external lyrics request", async ({ page }) => {
@@ -1933,76 +1903,6 @@ test("hidden-document track completion advances exactly once", async ({ page }) 
     element.dispatchEvent(new Event("ended"));
   });
   await expect(page.locator(".now-title")).toHaveText("background-second");
-});
-
-test("background autoplay rejection resumes the next track when visible", async ({
-  page,
-}) => {
-  test.skip(
-    externalApp || externalBackend,
-    "This deterministic playback test uses the local mock backend.",
-  );
-  await logInToMockLibrary(page);
-  const [firstTrack] = await loadMockPlaybackQueue(
-    page,
-    ["background-autoplay-first", "background-autoplay-second"],
-    70,
-  );
-  await firstTrack.click();
-  await expect(page.locator("#nowbar")).toHaveAttribute(
-    "data-playback-status",
-    "playing",
-  );
-
-  await page.evaluate(() => {
-    const audio = document.querySelector("audio");
-    if (!audio) throw new Error("The shared audio element is missing.");
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "hidden",
-    });
-    const play = audio.play.bind(audio);
-    let rejectedBackgroundStart = false;
-    audio.play = () => {
-      if (!rejectedBackgroundStart) {
-        rejectedBackgroundStart = true;
-        (window as Window & { __backgroundStartRejected?: boolean })
-          .__backgroundStartRejected = true;
-        return Promise.reject(new DOMException("Background playback paused", "NotAllowedError"));
-      }
-      return play();
-    };
-    audio.dispatchEvent(new Event("ended"));
-  });
-  await page.waitForFunction(
-    () =>
-      (window as Window & { __backgroundStartRejected?: boolean })
-        .__backgroundStartRejected === true,
-  );
-  await expect(page.locator(".now-title")).toHaveText("background-autoplay-second");
-  await expect(page.locator("#nowbar")).toHaveAttribute(
-    "data-playback-status",
-    "buffering",
-  );
-
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "visible",
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await expect(page.locator("#nowbar")).toHaveAttribute(
-    "data-playback-status",
-    "playing",
-  );
-  await expect
-    .poll(() =>
-      page.locator("audio").evaluate(
-        (element) => !(element as HTMLAudioElement).paused,
-      ),
-    )
-    .toBe(true);
 });
 
 test("queue skips an automatically selected track after bounded load failures", async ({

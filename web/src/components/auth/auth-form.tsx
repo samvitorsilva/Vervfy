@@ -8,13 +8,7 @@ import SiteFooter from "@/components/site-footer";
 
 type AuthMode = "login" | "register";
 
-export default function AuthForm({
-  mode,
-  googleEnabled,
-}: {
-  mode: AuthMode;
-  googleEnabled: boolean;
-}) {
+export default function AuthForm({ mode }: { mode: AuthMode }) {
   const { t, translateError } = useLanguage();
   const isLogin = mode === "login";
   const endpoint = `/backend-auth/${mode}`;
@@ -26,6 +20,7 @@ export default function AuthForm({
   const [password, setPassword] = useState("");
   const [passwordIncorrect, setPasswordIncorrect] = useState(false);
   const [pending, setPending] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
   const [googleOnboarding, setGoogleOnboarding] = useState(false);
   const isGoogleOnboarding = googleOnboarding && googleEnabled;
   const passwordInputRef = useRef<HTMLInputElement>(null);
@@ -69,6 +64,22 @@ export default function AuthForm({
   useEffect(() => {
     let active = true;
     let statusFrame: number | undefined;
+    void fetch("/api/config", { credentials: "same-origin", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const config: unknown = await response.json();
+        if (
+          active &&
+          typeof config === "object" &&
+          config !== null &&
+          "google_oauth_enabled" in config &&
+          config.google_oauth_enabled === true
+        ) {
+          setGoogleEnabled(true);
+        }
+      })
+      .catch(() => undefined);
+
     const url = new URL(window.location.href);
     const googleStatus = url.searchParams.get("google");
     if (googleStatus) {
@@ -182,7 +193,7 @@ export default function AuthForm({
 
   return (
     <main className="auth-page">
-      <section className={`auth-card${isLogin ? "" : " auth-card-register"}`}>
+      <section className="auth-card">
         <div className="auth-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/gemini-svg.svg" alt="" width={28} height={28} />

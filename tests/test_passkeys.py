@@ -487,19 +487,11 @@ def test_migration_graph_is_additive():
     from alembic.script import ScriptDirectory
 
     graph = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert graph.get_heads() == ["0033_cleanup_activation_gate"]
+    assert graph.get_heads() == ["0028_webauthn_enrollment"]
     assert (
         graph.get_revision("0027_webauthn_foundation").down_revision
         == "0026_application_runtime_grants"
     )
-    assert (
-        graph.get_revision("0027_storage_lifecycle").down_revision
-        == "0026_application_runtime_grants"
-    )
-    assert set(graph.get_revision("0032_merge_storage_webauthn").down_revision) == {
-        "0028_webauthn_enrollment",
-        "0031_operator_revocation",
-    }
     migrated = migration()
     for current, frozen in zip(s.TABLES, migrated.TABLES, strict=True):
         assert current.name == frozen.name

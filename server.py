@@ -52,7 +52,6 @@ import email_smtp
 import google_oauth
 import password_reset
 import staging_guard
-import storage_lifecycle
 import upload_queue
 
 # Password/Google authentication must not require the optional WebAuthn stack.
@@ -1359,9 +1358,6 @@ def _save_artist_photo(
     resized_for_display: bool = False,
 ) -> None:
     with tenant_session(user_id) as session:
-        storage_lifecycle.bound_transaction(session)
-        if session.get(User, user_id, with_for_update=True) is None:
-            raise RuntimeError("Account no longer exists")
         row = session.get(
             ArtistPhoto,
             {
@@ -1369,8 +1365,6 @@ def _save_artist_photo(
                 "normalized_artist_name": normalized_name,
             },
         )
-        if row is not None and row.source == "user" and source != "user":
-            return
         if row is None:
             row = ArtistPhoto(
                 user_id=user_id,
@@ -1380,7 +1374,6 @@ def _save_artist_photo(
                 source=source,
             )
             session.add(row)
-        row.media_version = uuid.uuid4()
         row.jpeg_data = jpeg_data
         row.storage_path = storage_path
         row.source = source
@@ -1389,8 +1382,8 @@ def _save_artist_photo(
 
 
 def _delete_artist_photo(user_id: str, normalized_name: str) -> str | None:
+    storage_path = None
     with tenant_session(user_id) as session:
-        storage_lifecycle.bound_transaction(session)
         row = session.get(
             ArtistPhoto,
             {
@@ -1399,9 +1392,10 @@ def _delete_artist_photo(user_id: str, normalized_name: str) -> str | None:
             },
         )
         if row is not None:
+            storage_path = row.storage_path
             session.delete(row)
             session.commit()
-    return None
+    return storage_path
 
 
 def _has_executable_upload_suffix(filename: str) -> bool:
@@ -1558,9 +1552,8 @@ def _require_migrated_schema() -> None:
     missing_schema = {}
     required_columns = {
         "users": set(),
-        "tracks": {"cover_url", "media_version"},
-        "artist_photos": {"media_version"},
-        "upload_jobs": {"cover_data", "processing_token"},
+        "tracks": {"cover_url"},
+        "upload_jobs": {"cover_data"},
     }
     for table, expected_columns in required_columns.items():
         if not inspector.has_table(table):
@@ -1579,32 +1572,6 @@ def _require_migrated_schema() -> None:
             "it to the explicitly reviewed migration revision using the authorized migration "
             "connection before starting Vervfy."
         )
-    if engine.dialect.name == "postgresql":
-        from sqlalchemy import text
-
-        with engine.connect() as connection:
-            guarded = connection.execute(
-                text("""
-                SELECT count(*) FROM pg_catalog.pg_trigger
-                WHERE tgrelid IN (
-                    'public.tracks'::regclass,
-                    'public.artist_photos'::regclass,
-                    'public.upload_jobs'::regclass
-                )
-                  AND tgname='storage_reference_guard'
-                  AND tgenabled='O'
-                  AND tgtype=31
-                  AND tgfoid=to_regprocedure('vervfy_storage.guard_references()')
-                """)
-            ).scalar_one()
-            replication_role = connection.execute(
-                text("SELECT current_setting('session_replication_role')")
-            ).scalar_one()
-        if guarded != 3 or replication_role != "origin":
-            raise RuntimeError(
-                "Storage lifecycle reference guards are missing or disabled; "
-                "apply the reviewed storage lifecycle migrations before startup"
-            )
 
 
 def _require_private_upload_storage() -> None:
@@ -1615,7 +1582,6 @@ def _require_private_upload_storage() -> None:
 
 
 def startup() -> None:
-    _require_migrated_schema()
     if is_production:
         if not audio_store.enabled():
             raise RuntimeError(
@@ -1628,6 +1594,7 @@ def startup() -> None:
             )
         app.state.is_first_account = user_store.count() == 0
         return
+    _require_migrated_schema()
     _require_private_upload_storage()
     app.state.is_first_account = user_store.count() == 0
 
@@ -3193,16 +3160,13 @@ def _queue_staged_upload(
     filename: str,
     audio_path: str,
 ) -> None:
+    suffix = os.path.splitext(os.path.basename(filename))[1].lower()
+    staging_path = f"{user_id}/.staging/{job_id}{suffix}"
     try:
-        staging_path = storage_lifecycle.upload_file(
-            user_id,
-            "staged-audio",
-            audio_path,
-            audio_store.guess_content_type(filename),
-            os.path.splitext(filename)[1].lower().lstrip("."),
+        audio_store.upload_file(
+            staging_path, audio_path, audio_store.guess_content_type(filename)
         )
         with tenant_session(user_id) as session:
-            storage_lifecycle.bound_transaction(session)
             owner_id = session.scalar(
                 select(User.id).where(User.id == user_id).with_for_update()
             )
@@ -3220,15 +3184,14 @@ def _queue_staged_upload(
     except Exception as exc:
         try:
             with tenant_session(user_id) as session:
-                storage_lifecycle.bound_transaction(session)
                 job = session.get(UploadJob, job_id)
                 if job:
                     job.status = "failed"
                     job.error = "Upload could not be added to the processing queue."
-                    job.storage_path = None
                     session.commit()
         except Exception:
             log.exception("could not mark staged upload as failed")
+        audio_store.delete_quietly(staging_path)
         log.exception("could not queue upload")
         raise HTTPException(status_code=503, detail="Upload queue is unavailable") from exc
 
@@ -3736,12 +3699,45 @@ def delete_account(
         ) from exc
     try:
         with tenant_session(user["id"]) as session:
-            storage_lifecycle.bound_transaction(session)
             owner_id = session.scalar(
                 select(User.id).where(User.id == user["id"]).with_for_update()
             )
             if owner_id is None:
                 raise HTTPException(status_code=404, detail="Account not found")
+            storage_paths = list(session.scalars(
+                select(TrackRecord.storage_path).where(
+                    TrackRecord.user_id == user["id"],
+                    TrackRecord.storage_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(TrackRecord.cover_path).where(
+                    TrackRecord.user_id == user["id"],
+                    TrackRecord.cover_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(ArtistPhoto.storage_path).where(
+                    ArtistPhoto.user_id == user["id"],
+                    ArtistPhoto.storage_path.is_not(None),
+                )
+            ).all())
+            storage_paths.extend(session.scalars(
+                select(UploadJob.storage_path).where(UploadJob.user_id == user["id"])
+            ).all())
+            storage_paths = list(dict.fromkeys(path for path in storage_paths if path))
+            try:
+                audio_store.delete_many(storage_paths)
+            except audio_store.StorageError as exc:
+                log.exception("could not delete account Storage objects")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Account files could not be fully deleted; sign in again "
+                        "and retry deletion"
+                    ),
+                ) from exc
+
             playlist_ids = select(Playlist.id).where(Playlist.user_id == user["id"])
             session.query(PlaylistTrack).filter(
                 PlaylistTrack.playlist_id.in_(playlist_ids)
@@ -3787,7 +3783,7 @@ def delete_account(
     except SQLAlchemyError:
         request.app.state.is_first_account = False
         log.exception("could not refresh first-account state after account deletion")
-    return {"ok": True, "storage_cleanup": "pending"}
+    return {"ok": True}
 
 
 @app.get("/api/health")
@@ -4114,16 +4110,24 @@ async def upload_artist_photo(
         )
     finally:
         await file.close()
+    existing_photo = await run_in_threadpool(
+        _artist_photo_record,
+        user["id"],
+        normalized_name,
+    )
     storage_path = None
     if audio_store.enabled():
+        storage_path = (
+            f"artist-photos/{user['id']}/{normalized_name}/{uuid.uuid4().hex}.jpg"
+        )
         try:
-            storage_path = await run_in_threadpool(
-                storage_lifecycle.upload_bytes,
-                user["id"],
-                "artist-photo",
+            await run_in_threadpool(
+                audio_store.upload,
+                storage_path,
                 jpeg_data,
+                "image/jpeg",
             )
-        except (audio_store.StorageError, SQLAlchemyError) as exc:
+        except audio_store.StorageError as exc:
             log.error("Could not store artist image: %s", exc)
             raise HTTPException(
                 status_code=503,
@@ -4139,10 +4143,17 @@ async def upload_artist_photo(
             storage_path=storage_path,
             resized_for_display=resized,
         )
-    except SQLAlchemyError as exc:
-        raise HTTPException(
-            status_code=503, detail="Artist image storage is temporarily unavailable"
-        ) from exc
+    except Exception:
+        if storage_path:
+            audio_store.delete_quietly(storage_path)
+        raise
+    old_storage_path = existing_photo.get("storage_path") if existing_photo else None
+    if (
+        storage_path
+        and isinstance(old_storage_path, str)
+        and old_storage_path != storage_path
+    ):
+        audio_store.delete_quietly(old_storage_path)
     return {"photo_url": "/api/artists/photo?name=" + quote(name.strip(), safe="")}
 
 
@@ -4155,6 +4166,16 @@ def remove_artist_photo(
     normalized_name = _artist_search_key(name.strip())
     if not normalized_name:
         raise HTTPException(status_code=400, detail="Invalid artist name")
+    photo = _artist_photo_record(user["id"], normalized_name)
+    if photo and isinstance(photo.get("storage_path"), str):
+        try:
+            audio_store.delete(str(photo["storage_path"]))
+        except audio_store.StorageError as exc:
+            log.error("Could not remove artist image from Storage: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail="Artist image storage is temporarily unavailable",
+            ) from exc
     _delete_artist_photo(user["id"], normalized_name)
     return {"photo_url": None}
 

@@ -47,10 +47,6 @@ def _embedded_cover(filename: str, audio: bytes) -> Image.Image | None:
 
 
 def main() -> None:
-    raise SystemExit(
-        "Retired: this maintenance job is not approved for the lifecycle-managed release."
-    )
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--apply",

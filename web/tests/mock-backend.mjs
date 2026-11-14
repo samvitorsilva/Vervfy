@@ -28,7 +28,6 @@ for (let index = 0; index < sampleCount; index += 1) {
 let playlists = [];
 let tracks = [];
 let listens = [];
-let googleOAuthEnabled = false;
 let rateLimitedUploads = 1;
 let artistPhotoSource = "none";
 let signedAudioUrlVersion = 0;
@@ -104,15 +103,6 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (url.pathname === "/__health") {
     send(response, 200, "ok");
-    return;
-  }
-
-  if (url.pathname === "/__test/google-oauth-enabled" && request.method === "POST") {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const payload = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-    googleOAuthEnabled = payload.enabled === true;
-    send(response, 204, "");
     return;
   }
 
@@ -285,10 +275,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (url.pathname === "/api/config" && request.method === "GET") {
-    json(response, 200, {
-      lyrics_provider_lrclib: true,
-      google_oauth_enabled: googleOAuthEnabled,
-    });
+    json(response, 200, { lyrics_provider_lrclib: true });
     return;
   }
 

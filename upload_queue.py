@@ -10,8 +10,6 @@ from contextlib import contextmanager
 from threading import Event, Thread
 
 import redis
-from redis.backoff import NoBackoff
-from redis.retry import Retry
 
 QUEUE_KEY = "vervfy:upload-jobs"
 LEASE_KEY = "vervfy:upload-jobs:leases"
@@ -42,25 +40,7 @@ def client() -> redis.Redis:
     url = os.environ.get("REDIS_URL")
     if not url:
         raise RuntimeError("REDIS_URL is required for asynchronous uploads")
-    try:
-        connection = redis.Redis.from_url(
-            url,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-            retry=Retry(NoBackoff(), 0),
-        )
-        options = connection.connection_pool.connection_kwargs
-        if any(
-            not isinstance(options.get(name), (int, float))
-            or not 0 < options[name] <= 5
-            for name in ("socket_connect_timeout", "socket_timeout")
-        ) or not isinstance(options.get("retry"), Retry):
-            connection.close()
-            raise RuntimeError("Upload queue URL overrides bounded timeouts")
-        return connection
-    except (ValueError, TypeError):
-        raise RuntimeError("Upload queue configuration is invalid") from None
+    return redis.Redis.from_url(url, decode_responses=True)
 
 
 def enqueue(job_id: str, user_id: str) -> None:

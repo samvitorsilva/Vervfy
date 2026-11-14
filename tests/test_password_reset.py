@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import HTTPException
 import redis
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -509,13 +509,15 @@ class PasswordResetRouteTests(unittest.TestCase):
     def test_password_policy_error_does_not_claim_reset_token(self):
         store = password_reset.PasswordResetStore()
         token = store.issue("account-1")
-        with patch.object(server, "password_reset_store", store):
-            with self.assertRaises(HTTPException) as raised:
-                server.reset_password(
-                    server.ResetPasswordRequest(token=token, password="short"),
-                    self.request("/api/auth/reset-password"),
-                    _csrf=None,
-                )
+        with (
+            patch.object(server, "password_reset_store", store),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.reset_password(
+                server.ResetPasswordRequest(token=token, password="short"),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
         self.assertEqual(raised.exception.status_code, 400)
         self.assertEqual(store.peek_user_id(token), "account-1")
 
@@ -527,13 +529,13 @@ class PasswordResetRouteTests(unittest.TestCase):
                 side_effect=[True, False],
             ) as allow,
             patch.object(server.user_store, "get_password_reset_account") as lookup,
+            self.assertRaises(HTTPException) as raised,
         ):
-            with self.assertRaises(HTTPException) as raised:
-                server.forgot_password(
-                    server.ForgotPasswordRequest(email="user@example.com"),
-                    self.request("/api/auth/forgot-password"),
-                    _csrf=None,
-                )
+            server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
 
         self.assertEqual(raised.exception.status_code, 429)
         self.assertEqual(allow.call_count, 2)
@@ -549,17 +551,16 @@ class PasswordResetRouteTests(unittest.TestCase):
                 server.user_store,
                 "reset_password_and_invalidate_sessions",
                 side_effect=SQLAlchemyError("synthetic database outage"),
-            ),
+            ),self.assertRaises(HTTPException) as raised
         ):
-            with self.assertRaises(HTTPException) as raised:
-                server.reset_password(
-                    server.ResetPasswordRequest(
-                        token=token,
-                        password="new-password-123",
-                    ),
-                    self.request("/api/auth/reset-password"),
-                    _csrf=None,
-                )
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="new-password-123",
+                ),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
 
         self.assertEqual(raised.exception.status_code, 503)
         retry_claim = store.claim(token)
@@ -576,17 +577,16 @@ class PasswordResetRouteTests(unittest.TestCase):
                 server.user_store,
                 "reset_password_and_invalidate_sessions",
                 side_effect=auth.PasswordResetCommitUncertain("unknown commit result"),
-            ),
+            ),self.assertRaises(HTTPException) as raised
         ):
-            with self.assertRaises(HTTPException) as raised:
-                server.reset_password(
-                    server.ResetPasswordRequest(
-                        token=token,
-                        password="new-password-123",
-                    ),
-                    self.request("/api/auth/reset-password"),
-                    _csrf=None,
-                )
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="new-password-123",
+                ),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
 
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIsNone(store.claim(token))
@@ -658,9 +658,8 @@ class EmailSenderTests(unittest.TestCase):
                 "FRONTEND_URL": "http://vervfy-one.vercel.app",
             },
             clear=True,
-        ):
-            with self.assertRaises(email_smtp.SmtpConfigError):
-                email_smtp.public_app_origin()
+        ), self.assertRaises(email_smtp.SmtpConfigError):
+            email_smtp.public_app_origin()
 
         with patch.dict(
             "os.environ",
@@ -711,20 +710,22 @@ class EmailSenderTests(unittest.TestCase):
         transport = email_smtp.MemoryTransport()
         transport.fail_with = email_smtp.SmtpSendError("synthetic SMTP failure")
         sender = email_smtp.EmailSender(transport)
-        with patch.dict(
-            "os.environ",
-            {
-                "VERVFY_EMAIL_FROM": "vervfy.dev@proton.me",
-                "FRONTEND_URL": "https://vervfy-one.vercel.app",
-                "VERVFY_ENVIRONMENT": "test",
-            },
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERVFY_EMAIL_FROM": "vervfy.dev@proton.me",
+                    "FRONTEND_URL": "https://vervfy-one.vercel.app",
+                    "VERVFY_ENVIRONMENT": "test",
+                },
+            ),
+            self.assertLogs("vervfy.email", level="WARNING") as captured,
+            self.assertRaises(email_smtp.SmtpSendError),
         ):
-            with self.assertLogs("vervfy.email", level="WARNING") as captured:
-                with self.assertRaises(email_smtp.SmtpSendError):
-                    sender.send_password_reset(
-                        to_email="user@example.test",
-                        token=token,
-                    )
+            sender.send_password_reset(
+                to_email="user@example.test",
+                token=token,
+            )
 
         self.assertNotIn(token, "\n".join(captured.output))
 
@@ -736,9 +737,8 @@ class EmailSenderTests(unittest.TestCase):
         for environment in ("", "production", "unknown"):
             with self.subTest(environment=environment), patch.dict(
                 "os.environ", {"VERVFY_ENVIRONMENT": environment}, clear=True
-            ):
-                with self.assertRaises(email_smtp.SmtpConfigError):
-                    settings.require_ready()
+            ), self.assertRaises(email_smtp.SmtpConfigError):
+                settings.require_ready()
 
         for environment in ("development", "local", "local-test", "staging", "test"):
             with self.subTest(environment=environment), patch.dict(

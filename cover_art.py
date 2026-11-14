@@ -274,18 +274,14 @@ async def resolve_cover(
     lookup_musicbrainz: Callable[[str, str], Awaitable[str | None] | str | None] | None = None,
     lookup_audiodb: Callable[[str, str, str], str | None] | None = None,
     prefer_audiodb: bool = False,
-    expected_version=None,
 ) -> None:
     """Run the ordered lookup; each failed provider logs and falls through."""
     from library import Library
 
     library = Library(user_id)
     track = library.get(track_id)
-    if track is None or (
-        expected_version is not None and track.media_version != expected_version
-    ):
+    if track is None:
         return
-    snapshot_version = track.media_version
 
     owned = {"upload", "user"}
     if not force and track.cover_source in owned and not uploaded_data:
@@ -293,14 +289,7 @@ async def resolve_cover(
         return
 
     async def persist(source: str, image: bytes | None = None, url: str | None = None) -> None:
-        await asyncio.to_thread(
-            library.set_resolved_cover,
-            track_id,
-            source,
-            image,
-            url,
-            expected_version=snapshot_version,
-        )
+        await asyncio.to_thread(library.set_resolved_cover, track_id, source, image, url)
 
     try:
         image = uploaded_cover(uploaded_data)
@@ -313,8 +302,6 @@ async def resolve_cover(
         log.exception("cover lookup track_id=%s step=upload result=error", track_id)
 
     track = library.get(track_id) or track
-    if track.media_version != snapshot_version:
-        return
     if track.cover_source in owned:
         return
 

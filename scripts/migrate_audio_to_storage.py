@@ -74,10 +74,6 @@ def _upload_with_retries(path: str, data: bytes, content_type: str) -> None:
 
 
 def main() -> int:
-    raise SystemExit(
-        "Retired: unmanaged object keys require a separately reviewed lifecycle migration."
-    )
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dry-run",
@@ -85,6 +81,7 @@ def main() -> int:
         help="list eligible tracks without reading, uploading, or changing audio",
     )
     args = parser.parse_args()
+
     if not args.dry_run:
         if not audio_store.enabled():
             parser.error("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")

@@ -7,92 +7,6 @@ using production credentials or user data. Follow
 contract; record actual hostnames, test evidence, operator, and date in the
 staging change ticket (never record secret values).
 
-## Current deployment status — 2026-11-12
-
-The read-only Supabase staging preflight failed at
-`application_permissions`. This is an **unresolved blocker**. Do not retry the
-preflight or attempt a permission correction in this phase. No hosted database
-was modified, no migration was run, and production was not accessed.
-
-Work that can proceed without database changes: local OAuth and password-flow
-regressions; review of Render configuration; staging-only service/variable
-preparation using placeholders; and preparation of a distinct Google OAuth
-client once the exact staging HTTPS frontend origin is known. Keep
-`GOOGLE_OAUTH_ENABLED=0`.
-
-Database-dependent work remains blocked: resolve the permission finding through
-the database owner in a separately authorized step, then obtain approval for
-any new read-only verification. Do not migrate or configure the restricted
-Google identity-lookup connection until the role/schema permissions are
-verified. The isolated Upstash instance is designated for staging Redis, with
-its TLS URL kept only as an API secret. The review-only two-service Blueprint
-at [`../render.staging.proposal.yaml`](../render.staging.proposal.yaml) no
-longer provisions Render Valkey or embeds a Redis URL. It points the API and
-frontend at the same new source snapshot in
-`release-artifacts/vervfy-staging-upstash-rediss-rc/source`, creates no
-database or Redis resource, and keeps OAuth disabled. The candidate startup
-guard accepts only an authenticated, host-allowlisted `rediss://` URL with
-verified TLS defaults. The earlier frozen candidate remains untouched. This
-new candidate is not committed or deployed, and no hosted service was contacted.
-The archive is
-`release-artifacts/vervfy-staging-upstash-rediss-rc/vervfy-staging-upstash-rediss-rc.tar.gz`
-(SHA-256 `cb57317fb2b17b93626888963560356185fe7ecfde145e5011f9c16be1e512f5`),
-based on source commit `44f45a6882c20a37db71cc0ab276e79e68492f90` plus patch
-SHA-256 `c5eebc3674c0a0d84daf11c211df718110307ea40c036e7086234953b8eb06a0`.
-
-The repository-root `render.yaml` is not a staging Blueprint: it sets
-`VERVFY_ENVIRONMENT=production` and provisions the production-named API,
-frontend, and Redis service. Do not deploy or edit it for staging. The new
-staging Blueprint defines only the API and frontend, has no database or Redis
-resource, and keeps OAuth disabled. `REDIS_URL` is an API-only secret prompt
-for the isolated Upstash Redis-protocol TLS URL.
-
-### Secrets-free staging variable checklist
-
-Prepare these names and scopes only; fill values in the approved service
-configuration/secret store, never in this document, source control, or logs:
-
-| Scope | Variable | Preparation |
-|---|---|---|
-| API | `VERVFY_ENVIRONMENT` | `staging` |
-| API | `VERVFY_HTTPS_ONLY` | `1` |
-| API | `VERVFY_COOKIE_SAME_SITE` | `lax` |
-| API | `VERVFY_TRUSTED_PROXY_HOPS` | Set only after confirming Render's proxy topology |
-| API secret | `VERVFY_SECRET_KEY` | Generate a unique staging-only value |
-| API secret | `DATABASE_URL` | Staging `app_runtime` URL with verified TLS; deployment remains blocked by the unresolved database permission finding |
-| API secret file | `PGSSLROOTCERT` | Mount the approved CA file at `/etc/secrets/prod-ca-2021.crt`, the exact path pinned by the candidate's staging database guard |
-| API config | `VERVFY_STAGING_REDIS_HOST` | Exact hostname of the isolated staging Upstash instance; must match `REDIS_URL` |
-| API secret | `REDIS_URL` | Existing isolated Upstash Redis-protocol URL using `rediss://`; keep it in the staging API secret store, never YAML |
-| API | `GOOGLE_OAUTH_ENABLED` | `0`; do not change in this preparation phase |
-| API secret, later gate | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Distinct staging Web client; API service only |
-| API | `GOOGLE_REDIRECT_URI` | Exact `https://<STAGING_FRONTEND_HOST>/api/auth/google/callback` registered with Google |
-| API | `GOOGLE_FRONTEND_ORIGIN` | Exact staging frontend HTTPS origin, without a path |
-| API secret, later gate | `GOOGLE_IDENTITY_LOOKUP_DATABASE_URL` | Separate staging `google_auth_lookup` login with verified TLS; do not configure until database permissions are verified |
-| Web build | `BACKEND_URL` | Staging API HTTPS origin only |
-| Web build | `SITE_URL` | Exact staging frontend HTTPS origin |
-
-Never set Google credentials as `NEXT_PUBLIC_*` or on the frontend service.
-Keep OAuth credentials absent until the database role/permissions and isolated
-Redis prerequisites are met. This checklist prepares configuration only; it
-does not authorize service creation, secret delivery, database access, or
-deployment.
-
-### Minimum remaining steps to staging OAuth
-
-1. Keep the Supabase permission finding open. A database owner must decide the
-   next authorized action; only after that decision may a new read-only check
-   be considered. Any migration requires its own separate approval.
-2. Review the updated two-service Blueprint and exact API/frontend hosts.
-   Confirm the existing Upstash endpoint is staging-only and supports the
-   required Redis protocol/Lua commands; then enter its hostname allowlist and
-   `rediss://` URL only in the staging API settings.
-3. After database roles and schema are verified, configure the dedicated
-   lookup URL and a distinct Google Web client with the exact HTTPS frontend
-   callback. Store credentials only in the staging API secret store.
-4. Deploy with OAuth disabled, verify the hosted callback/session/proxy and
-   password regressions using synthetic accounts, then make a separate
-   staging-only enablement decision. Production remains disabled.
-
 > **Staging database update — 2026-11-07:** The owner adopted the
 > solo-maintainer policy. The earlier 26-revision/0026 instructions and
 > internal DBA/security approver-count requirements below are superseded for
@@ -103,15 +17,20 @@ deployment.
 
 ## Current configuration and unknowns
 
-`render.yaml` remains production configuration and must not be used for
-staging. The isolated Supabase staging database is blocked by the unresolved
-`application_permissions` preflight finding; the existing isolated Upstash
-instance is designated for staging Redis, but neither service was contacted.
-No Render API/frontend deployment or staging OAuth client is confirmed. The
-review-only proposal names the staging services, but confirm their assigned
-public URLs before registering OAuth callbacks. `.env.example` leaves OAuth
-credentials and the restricted lookup database URL unset. **Do not copy
-production resources or guess hostnames.**
+`render.yaml` currently describes one API (`vervfy-api`), one frontend
+(`vervfy-next`), and one Redis service (`vervfy-redis`); the API is configured
+as `VERVFY_ENVIRONMENT=production`. The Redis declaration uses
+`maxmemoryPolicy: allkeys-lru`. An isolated staging PostgreSQL resource is now
+reported as available in the Render dashboard; its external hostname is
+reported as independently matched by the operator, with no live TLS/database
+check yet. Identity evidence is recorded in
+[`staging-endpoint-approval.md`](staging-endpoint-approval.md). No staging
+frontend/API/Redis deployment or staging OAuth client is confirmed. The
+frontend service declares `BACKEND_URL`; its actual
+value and public origin are deployment settings. `.env.example` documents
+OAuth settings but leaves client credentials, callback, frontend origin, and
+restricted lookup database URL unset. **Do not copy production resources or
+guess hostnames.**
 
 Fill these placeholders from the approved staging deployment before proceeding:
 
@@ -136,12 +55,9 @@ production. Use synthetic test accounts and no production data.
 The current `render.yaml` is **not a staging blueprint**: it names the current
 services `vervfy-api` and `vervfy-next`, sets the API environment to
 `production`, and connects it to the declared `vervfy-redis`. Do not create a
-second environment by deploying this file unchanged. A separate review-only
-Blueprint at [`../render.staging.proposal.yaml`](../render.staging.proposal.yaml)
-defines only the API and frontend. It references the existing isolated
-Supabase and Upstash services through staging-only API settings; it creates no
-database or Redis resource. Review the Blueprint, service URLs, costs, and
-workspace capacity before applying it or adding credentials.
+second environment by deploying this file unchanged. Create separately named
+staging resources manually (or use a reviewed staging-specific blueprint in a
+later change) and verify every service URL before adding credentials.
 
 For one short verification window, Render Hobby/free resources may be adequate
 if the workspace has capacity:
@@ -149,12 +65,16 @@ if the workspace has capacity:
 | Resource | Free option and constraints |
 |---|---|
 | FastAPI and Next.js | Separate Free web services. They spin down after 15 minutes idle; first request can take about a minute. Their aggregate free runtime uses the workspace's 750 free instance hours/month. |
+| PostgreSQL | One Free database per workspace; 1 GB; expires after 30 days, then has a 14-day upgrade grace period before deletion; no backups or managed pooling. |
+| Key Value | One Free instance per workspace; 25 MB; no durable persistence and service restarts lose all keys. |
 | Hostnames/TLS | Render service subdomains and managed TLS; verify Google accepts the actual chosen public hostname. Hobby includes two custom domains if using a domain already owned. Domain registration/DNS may have a separate charge. |
 
-Use only synthetic, disposable tests. The external staging database remains
-blocked; do not connect to it or run migrations during this preparation. Check
-workspace usage, service-count limits, build minutes, bandwidth, and current
-plan terms before creating anything.
+These are suitable only for synthetic, disposable tests. A free Valkey restart
+also clears Vervfy sessions and OAuth transactions, which should fail closed
+but can interrupt the test. Do not rely on free Postgres for retained staging
+data. Check workspace usage, service-count limits, free database/Key Value
+slots, build minutes, bandwidth, and current plan terms before creating
+anything.
 
 Render Support confirmed external PostgreSQL URLs support `sslmode=verify-full`
 with the standard system CA store and Let's Encrypt endpoint certificates; no
@@ -163,11 +83,12 @@ Render web services use outbound IP addresses and may incur outbound bandwidth
 costs. This does not confirm a staging resource, role configuration, or
 endpoint-specific TLS handshake.
 
-If predictable uptime is required, Render's published starting compute price
-at review time was **$7/month per 0.5 CPU/512 MB web service**. Two always-on
-web services are approximately **$14/month**, before usage/overages, taxes,
-external database/Redis costs, optional domain registration, or plan changes.
-This is a cost illustration, not a quote.
+If predictable uptime is required, Render's published starting compute prices
+at review time were **$7/month per 0.5 CPU/512 MB web service**, **$6/month for
+the smallest Postgres plan (256 MB RAM)**, and **$10/month for 256 MB Key
+Value**. Two always-on web services plus those smallest data plans are
+approximately **$30/month**, before usage/overages, taxes, optional domain
+registration, or plan changes. This is a cost illustration, not a quote.
 Render Hobby includes 5 GB monthly bandwidth and 500 build minutes; its
 published overage rates are $0.15/GB and $5/1,000 build minutes. Set billing
 alerts/spend controls before provisioning and remove staging resources after
@@ -194,8 +115,8 @@ Pricing/limit references (checked 2026-11-03): [Render pricing](https://render.c
 | Option | Google callback and browser boundary | PostgreSQL 0022 | Redis/Valkey and live OIDC | Isolation, limits, and cost |
 |---|---|---|---|---|
 | **1. Local PostgreSQL + Valkey + HTTPS tunnel** | Can exercise a real HTTPS browser callback, Secure/Lax cookies, CSRF, same-origin Next rewrite, and live Google redirects if the exact tunnel URI is accepted and registered. It exercises the tunnel and local Next/FastAPI path, not Render's proxy/TLS implementation or headers. | Strong low-cost verification against local PostgreSQL using disposable roles and the real migration SQL. Does not prove a managed DB provider's role, ownership, or grant restrictions. | Real local Valkey tests cover atomic consume/replay, TTL, and outage; live Google can exercise ID-token/JWKS/`auth_time`. No managed Valkey eviction policy or hosted failure mode is covered. | **$0** with locally installed software and Cloudflare Quick Tunnel. Quick Tunnel generates a changing public URL, has no uptime guarantee, and anyone with the URL can reach the app. Use only synthetic data, start it for the test window, and stop it immediately afterward. Google Console must accept the exact URL; re-register and reconfigure when it changes. |
-| **2. Temporary isolated Render API/frontend + existing Supabase/Upstash** | Best direct check of Render TLS, public hostname, hosted Next rewrite, FastAPI callback, cookies, and deployed proxy behavior. Register the exact public frontend HTTPS callback. Free web services cannot receive private-network traffic, so the Next service's `BACKEND_URL` must use the staging API's public HTTPS URL; keep browser traffic through the frontend rewrite. | Blocked by the unresolved `application_permissions` finding. Do not connect or migrate until separately authorized. | Uses the existing isolated Upstash Redis; validate with local tests first and do not connect during this preparation. | **$0 if workspace slots/quotas are available** for the two web services, with idle spin-down and shared monthly hours/build/bandwidth; external service charges may apply. Use no production data. |
-| **3. Minimal paid Render API/frontend + existing Supabase/Upstash** | Same hosted callback/proxy fidelity as option 2, with less sleep/restart uncertainty. Use the exact registered HTTPS frontend URI and same-origin rewrite. | Still blocked by the unresolved database permission finding; paid compute does not change database permissions. | Uses the existing isolated Upstash; no Render Redis resource is needed. | Two always-on web services were approximately **$14/month** at the reviewed starting price, plus external database/Redis costs, taxes, bandwidth/build overages, and optional domain. Confirm current dashboard prices and budget before provisioning. |
+| **2. Temporary isolated Render free-tier services** | Best direct check of Render TLS, public hostname, hosted Next rewrite, FastAPI callback, cookies, and deployed proxy behavior. Register the exact public frontend HTTPS callback. Free web services cannot receive private-network traffic, so the Next service's `BACKEND_URL` must use the staging API's public HTTPS URL (not an internal URL); keep all browser traffic through the frontend rewrite. | Tests real managed Postgres behavior only if migration preflight succeeds. Do not assume Render Postgres permits required role creation/ownership changes; prove this before applying migrations. | Tests managed Render Valkey service/restarts and live Google OIDC. Free Key Value has 25 MB and loses all keys on restart; free Postgres is 1 GB, expires after 30 days, and has no backups. | **$0 if workspace slots/quotas are available**, but one free Postgres and one free Key Value per workspace, idle web spin-down, shared monthly hours/build/bandwidth, and possible usage charges/suspension. Use no production data; resource loss is expected. |
+| **3. Minimal paid Render staging** | Same hosted callback/proxy fidelity as option 2, with less sleep/restart uncertainty. Use exact registered HTTPS frontend URI and same-origin rewrite. | Same managed-role compatibility uncertainty; paid compute does not guarantee a role capability. DBA must verify migration permissions before running 0021/0022. | Managed Valkey and live Google tests without free-tier size/expiry limits; still verify actual eviction/persistence and outage behavior. | Published smallest compute snapshot: two web services at $7 each, Postgres $6, Key Value $10—about **$30/month** plus taxes, bandwidth/build overages, storage, and optional domain. Confirm current dashboard prices and budget before provisioning. |
 
 **Recommendation: start with option 1, then use option 2 only for hosted parity.**
 It is the cheapest way to verify the most independently testable gates: real
@@ -235,11 +156,10 @@ gate in front of the OAuth callback, and stop the tunnel and local services
 immediately after the test. This validates browser behavior through that
 tunnel, not Render.
 
-For free Render, confirm the workspace has free web-service slots available
-for the API and frontend. The staging
-Blueprint defines no Render database or Key Value resource; use only the
-existing isolated Supabase and Upstash endpoints after the database blocker
-is resolved and access is separately authorized.
+For free Render, confirm the workspace's free database and Key Value slots are
+actually available. `render.yaml` already declares `vervfy-redis`; whether
+that resource currently exists and consumes the workspace slot is unknown.
+Never reuse it unless its ownership and isolation are positively established.
 Render documents that Free web services cannot receive private-network
 traffic: for this option set frontend `BACKEND_URL` to the staging API's
 public HTTPS service URL, not an internal service address. Keep the frontend
@@ -253,24 +173,23 @@ and [Render Postgres connectivity](https://render.com/docs/postgresql-creating-c
 
 ### Staging environment variable map
 
-Obtain each URI from the staging provider dashboard. `REDIS_URL` must be the
-Redis protocol `rediss://` URL, not a REST endpoint. Store credentials as
-service-level secret variables; never commit them, put them in a frontend
-build variable, paste them in logs, or copy a production value.
+Obtain each URI from the staging provider dashboard's **internal** connection
+details where possible. Store credentials as service-level secret variables;
+never commit them, put them in a frontend build variable, paste them in logs,
+or copy a production value.
 
 | Service | Variable | Required staging value |
 |---|---|---|
 | API | `PYTHON_VERSION` | `3.12.7` |
-| API | `VERVFY_ENVIRONMENT` | `staging` (never use the production `render.yaml`) |
+| API | `VERVFY_ENVIRONMENT` | `staging` (not the current blueprint's `production`) |
 | API | `VERVFY_HTTPS_ONLY` | `1` |
 | API | `VERVFY_TRUSTED_PROXY_HOPS` | Actual verified Render proxy topology; current example is `1`, verify before using |
 | API | `VERVFY_SECRET_KEY` | Independently generated staging-only random secret |
 | API | `VERVFY_COOKIE_SAME_SITE` | `lax` when OAuth is enabled; fail closed otherwise |
 | API | `DATABASE_URL` | Staging app-role PostgreSQL URL only |
-| API | `VERVFY_STAGING_REDIS_HOST` | Exact hostname of the isolated staging Upstash instance; not a credential |
-| API | `REDIS_URL` | Isolated staging Upstash `rediss://` URL; shared by sessions, rate limits, and OAuth transactions. The new candidate requires an exact hostname allowlist and verified TLS defaults. |
+| API | `REDIS_URL` | Staging Key Value internal URL only; it is shared by session/rate-limit/OAuth transaction features, so restart/eviction affects all of them |
 | API | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_BUCKET` | Staging-only storage project/key/bucket if needed by the running app; do not reuse production storage credentials |
-| API | `GOOGLE_OAUTH_ENABLED` | `0` in this candidate; any later staging enablement requires a separate decision |
+| API | `GOOGLE_OAUTH_ENABLED` | `0` until all staging pre-enable checks pass; then `1` only for the isolated staging API |
 | API secret | `GOOGLE_CLIENT_ID` | Staging Web application client ID |
 | API secret | `GOOGLE_CLIENT_SECRET` | Staging client secret |
 | API | `GOOGLE_REDIRECT_URI` | Exact public frontend URI below; identical to Google Console registration |
@@ -282,9 +201,8 @@ build variable, paste them in logs, or copy a production value.
 Do not set provider credentials as `NEXT_PUBLIC_*`. `FRONTEND_URL` is only
 needed if direct cross-origin browser-to-API requests are deliberately used;
 the normal `/api/:path*` same-origin rewrite does not require it. Keep
-`GOOGLE_OAUTH_ENABLED=0` while preparing this candidate and staging settings;
-do not run migrations as part of this preparation. The only approved callback
-template is:
+`GOOGLE_OAUTH_ENABLED=0` while creating services, setting secrets, and running
+migrations. The only approved callback template is:
 
 ```text
 https://<STAGING_FRONTEND_HOST>/api/auth/google/callback
@@ -308,10 +226,9 @@ issue.
 
 ### 1. Provision and isolate staging
 
-- [ ] Use only the existing isolated staging Supabase database and Upstash
-  Redis instance; do not provision Render database/Redis resources. Create the
-  separate API/frontend services and OAuth client only after the remaining
-  deployment blockers are resolved. Restrict access to staging and test users.
+- [ ] Create separate staging frontend/API services, a staging-only PostgreSQL
+  project/database, a staging-only Redis instance, and a distinct Google OAuth
+  client. Restrict access to the staging environment and test users.
 - [ ] Verify network and credential isolation: staging API cannot connect to
   production DB/Redis/storage; staging credentials cannot authenticate to
   production; staging logs and backups are access-controlled.
@@ -324,11 +241,10 @@ issue.
   `VERVFY_TRUSTED_PROXY_HOPS=<verified proxy hop count>`,
   `VERVFY_COOKIE_SAME_SITE=lax`, and a unique staging
   `VERVFY_SECRET_KEY`. Keep `GOOGLE_OAUTH_ENABLED=0` throughout provisioning.
-- [ ] Configure `DATABASE_URL` for the staging application role and, only
-  after a source revision passes its staging guard, `REDIS_URL` as a staging
-  API secret containing the isolated Upstash `rediss://` URI. Do not reuse any
-  production database, storage, or Redis credentials. Only configure OAuth
-  credentials after the database and pre-enable checks pass.
+- [ ] Configure `DATABASE_URL` for the staging application role and
+  `REDIS_URL` for staging Redis. Do not reuse the production `SUPABASE_URL`,
+  `SUPABASE_SERVICE_KEY`, storage bucket, DB, or Redis. Only configure OAuth
+  credentials after migrations and the pre-enable checks below pass.
 - [ ] Confirm backup/snapshot and restore procedures for the staging DB.
   Confirm staging Redis can be isolated, paused, and tested without affecting
   any other service. Do not use `FLUSHALL` or induce memory pressure on shared
