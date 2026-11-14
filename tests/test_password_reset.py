@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import shutil
 import subprocess
@@ -335,6 +336,31 @@ class PasswordResetRouteTests(unittest.TestCase):
         }
         return Request(scope)
 
+    def assert_diagnostics(
+        self,
+        records,
+        expected: tuple[tuple[str, str], ...],
+        sensitive_values: tuple[str, ...] = (),
+    ) -> None:
+        diagnostic_records = [
+            record
+            for record in records
+            if getattr(record, "event", None) == "password_recovery_diagnostic"
+        ]
+        actual = [
+            (record.recovery_stage, record.recovery_reason)
+            for record in diagnostic_records
+        ]
+        self.assertEqual(actual, list(expected))
+        self.assertEqual(len(records), len(diagnostic_records))
+        for record, (stage, reason) in zip(diagnostic_records, expected):
+            self.assertEqual(record.getMessage(), f"password_recovery_diagnostic stage={stage} reason={reason}")
+            self.assertEqual(record.recovery_stage, stage)
+            self.assertEqual(record.recovery_reason, reason)
+            serialized = f"{record.getMessage()} {record.__dict__!r}"
+            for value in sensitive_values:
+                self.assertNotIn(value, serialized)
+
     def test_forgot_response_is_generic_for_missing_unverified_and_verified(self):
         results = []
         mailer = _FakeMailer()
@@ -397,6 +423,7 @@ class PasswordResetRouteTests(unittest.TestCase):
         request = self.request("/api/auth/forgot-password")
         request.session.update({"user_id": "account-1", "sid": "existing-session"})
         with (
+            self.assertLogs("vervfy.password_reset", level="INFO") as diagnostics,
             patch.dict("os.environ", {"VERVFY_PASSWORD_RECOVERY_ENABLED": "0"}),
             patch.object(server.user_store, "get_password_reset_account") as lookup,
             patch.object(server, "email_sender") as mailer,
@@ -410,6 +437,10 @@ class PasswordResetRouteTests(unittest.TestCase):
                     _csrf=None,
                 )
             self.assertEqual(raised.exception.status_code, 503)
+            self.assertEqual(
+                raised.exception.detail,
+                "Service temporarily unavailable, try again shortly",
+            )
             lookup.assert_not_called()
             mailer.send_password_reset.assert_not_called()
 
@@ -432,9 +463,406 @@ class PasswordResetRouteTests(unittest.TestCase):
                     operation()
                 self.assertEqual(raised.exception.status_code, 503)
 
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("feature_flag", "disabled"),) * 3,
+            ("user@example.com", "synthetic-token"),
+        )
         self.assertEqual(request.session, {"user_id": "account-1", "sid": "existing-session"})
         update_password.assert_not_called()
         revoke_user.assert_not_called()
+
+    def test_middleware_rate_limiter_failure_is_diagnosed(self):
+        for path in (
+            "/api/auth/forgot-password",
+            "/api/auth/reset-password",
+            "/api/auth/verify-reset-email",
+        ):
+            with self.subTest(path=path):
+                async def call_next(_request):
+                    self.fail("middleware should return on rate-limiter failure")
+
+                with (
+                    patch.object(
+                        server,
+                        "run_in_threadpool",
+                        side_effect=RuntimeError("secret redis connection detail"),
+                    ),
+                    self.assertLogs(
+                        "vervfy.password_reset",
+                        level="WARNING",
+                    ) as diagnostics,
+                ):
+                    response = asyncio.run(
+                        server.add_security_headers(
+                            self.request(path),
+                            call_next,
+                        )
+                    )
+
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(
+                    response.body,
+                    b'{"detail":"Rate-limit service unavailable"}',
+                )
+                self.assert_diagnostics(
+                    diagnostics.records,
+                    (("rate_limiter", "middleware_backend_unavailable"),),
+                    ("secret redis connection detail",),
+                )
+
+    def test_forgot_password_rate_limiter_failure_is_diagnosed(self):
+        with (
+            patch.object(
+                server.request_throttle,
+                "allow",
+                side_effect=RuntimeError("secret redis connection detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("rate_limiter", "backend_unavailable"),),
+            ("user@example.com", "secret redis connection detail"),
+        )
+
+    def test_reset_and_verification_rate_limiter_failures_are_diagnosed(self):
+        operations = (
+            (
+                server.reset_password,
+                server.ResetPasswordRequest(
+                    token="sensitive-reset-token",
+                    password="sensitive-password-123",
+                ),
+                "/api/auth/reset-password",
+            ),
+            (
+                server.verify_reset_email,
+                server.VerifyResetEmailRequest(token="sensitive-verification-token"),
+                "/api/auth/verify-reset-email",
+            ),
+        )
+        for handler, payload, path in operations:
+            with self.subTest(path=path):
+                with (
+                    patch.object(
+                        server.request_throttle,
+                        "allow",
+                        side_effect=RuntimeError("sensitive Redis connection detail"),
+                    ),
+                    self.assertLogs(
+                        "vervfy.password_reset",
+                        level="WARNING",
+                    ) as diagnostics,
+                    self.assertRaises(HTTPException) as raised,
+                ):
+                    handler(payload, self.request(path), _csrf=None)
+
+                self.assertEqual(raised.exception.status_code, 503)
+                self.assertEqual(
+                    raised.exception.detail,
+                    "Service temporarily unavailable, try again shortly",
+                )
+                self.assert_diagnostics(
+                    diagnostics.records,
+                    (("rate_limiter", "backend_unavailable"),),
+                    (
+                        "sensitive-reset-token",
+                        "sensitive-verification-token",
+                        "sensitive-password-123",
+                        "sensitive Redis connection detail",
+                    ),
+                )
+
+    def test_forgot_password_database_lookup_failure_is_diagnosed(self):
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(
+                server.user_store,
+                "get_password_reset_account",
+                side_effect=SQLAlchemyError("secret user@example.com query detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_lookup", "account_lookup_failed"),),
+            ("user@example.com", "secret user@example.com query detail"),
+        )
+
+    def test_forgot_password_token_storage_failure_is_diagnosed(self):
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(
+                server.user_store,
+                "get_password_reset_account",
+                return_value=("account-1", True),
+            ),
+            patch.object(
+                server.password_reset_store,
+                "issue",
+                side_effect=RuntimeError("secret reset-token storage detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "token_issue_failed"),),
+            ("user@example.com", "secret reset-token storage detail"),
+        )
+
+    def test_forgot_verification_token_storage_failure_is_diagnosed(self):
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(
+                server.user_store,
+                "get_password_reset_account",
+                return_value=("account-1", False),
+            ),
+            patch.object(
+                server.email_verification_store,
+                "issue",
+                side_effect=RuntimeError("sensitive verification-token issue detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "token_issue_failed"),),
+            ("user@example.com", "sensitive verification-token issue detail"),
+        )
+
+    def test_unsent_token_cleanup_failure_is_diagnosed(self):
+        store = password_reset.PasswordResetStore()
+        token = store.issue("account-1")
+        mailer = _FakeMailer(
+            error=email_smtp.SmtpSendError("sensitive SMTP exception detail")
+        )
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "password_reset_store", store),
+            patch.object(store, "issue", return_value=token),
+            patch.object(
+                store,
+                "discard",
+                side_effect=RuntimeError("sensitive cleanup exception detail"),
+            ) as discard,
+            patch.object(server, "email_sender", mailer),
+            patch.object(
+                server.user_store,
+                "get_password_reset_account",
+                return_value=("account-1", True),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+        ):
+            result = server.forgot_password(
+                server.ForgotPasswordRequest(email="user@example.com"),
+                self.request("/api/auth/forgot-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(result, server._password_reset_generic_response())
+        discard.assert_called_once_with(token)
+        self.assertEqual(store.peek_user_id(token), "account-1")
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "unsent_token_cleanup_failed"),),
+            (
+                "user@example.com",
+                token,
+                "sensitive SMTP exception detail",
+                "sensitive cleanup exception detail",
+            ),
+        )
+
+    def test_reset_token_claim_failure_is_diagnosed(self):
+        token = "sensitive-reset-token"
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "password_reset_store", password_reset.PasswordResetStore()),
+            patch.object(
+                server.password_reset_store,
+                "claim",
+                side_effect=RuntimeError("sensitive claim exception detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="sensitive-password-123",
+                ),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "token_claim_failed"),),
+            (token, "sensitive-password-123", "sensitive claim exception detail"),
+        )
+
+    def test_reset_token_commit_failure_is_diagnosed(self):
+        store = password_reset.PasswordResetStore()
+        token = store.issue("account-1")
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "password_reset_store", store),
+            patch.object(
+                store,
+                "commit",
+                side_effect=RuntimeError("sensitive commit exception detail"),
+            ),
+            patch.object(
+                server.user_store,
+                "reset_password_and_invalidate_sessions",
+                return_value=5,
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="sensitive-password-123",
+                ),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable; the reset may have completed",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "token_commit_failed"),),
+            (token, "sensitive-password-123", "sensitive commit exception detail"),
+        )
+
+    def test_verification_token_claim_failure_is_diagnosed(self):
+        token = "sensitive-verification-token"
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(
+                server,
+                "email_verification_store",
+                password_reset.EmailVerificationStore(),
+            ),
+            patch.object(
+                server.email_verification_store,
+                "claim",
+                side_effect=RuntimeError("sensitive claim exception detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "verification_token_claim_failed"),),
+            (token, "sensitive claim exception detail"),
+        )
+
+    def test_verification_token_commit_failure_is_diagnosed(self):
+        store = password_reset.EmailVerificationStore()
+        token = store.issue(
+            "account-1",
+            binding=hashlib.sha256(b"user@example.com").hexdigest(),
+        )
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", store),
+            patch.object(
+                store,
+                "commit",
+                side_effect=RuntimeError("sensitive commit exception detail"),
+            ),
+            patch.object(server.user_store, "verify_password_reset_email"),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable; verification may have completed",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "verification_token_commit_failed"),),
+            (token, "user@example.com", "sensitive commit exception detail"),
+        )
 
     def test_unverified_email_confirmation_sends_a_separate_reset_link(self):
         verification_store = password_reset.EmailVerificationStore()
@@ -551,7 +979,9 @@ class PasswordResetRouteTests(unittest.TestCase):
                 server.user_store,
                 "reset_password_and_invalidate_sessions",
                 side_effect=SQLAlchemyError("synthetic database outage"),
-            ),self.assertRaises(HTTPException) as raised
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
         ):
             server.reset_password(
                 server.ResetPasswordRequest(
@@ -563,9 +993,166 @@ class PasswordResetRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_update", "password_update_failed"),),
+            (token, "new-password-123", "synthetic database outage"),
+        )
         retry_claim = store.claim(token)
         self.assertIsNotNone(retry_claim)
         self.assertTrue(store.release(token, retry_claim))
+
+    def test_reset_database_failure_and_claim_release_failure_are_diagnosed(self):
+        store = password_reset.PasswordResetStore()
+        token = store.issue("account-1")
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "password_reset_store", store),
+            patch.object(
+                server.user_store,
+                "reset_password_and_invalidate_sessions",
+                side_effect=SQLAlchemyError("sensitive database exception detail"),
+            ),
+            patch.object(
+                store,
+                "release",
+                side_effect=RuntimeError("sensitive token-store exception detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="sensitive-password-123",
+                ),
+                self.request("/api/auth/reset-password"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, request a new reset link if needed",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (
+                ("database_update", "password_update_failed"),
+                ("token_storage", "claim_release_failed"),
+            ),
+            (
+                token,
+                "sensitive-password-123",
+                "sensitive database exception detail",
+                "sensitive token-store exception detail",
+            ),
+        )
+
+    def test_verification_claim_release_returning_false_is_diagnosed(self):
+        store = password_reset.EmailVerificationStore()
+        token = store.issue("account-1", binding="invalid-binding")
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", store),
+            patch.object(store, "release", return_value=False),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "claim_release_failed"),),
+            (token, "account-1", "invalid-binding"),
+        )
+
+    def test_verification_database_failure_releases_claim_and_is_diagnosed(self):
+        store = password_reset.EmailVerificationStore()
+        token = store.issue(
+            "account-1",
+            binding=hashlib.sha256(b"user@example.com").hexdigest(),
+        )
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", store),
+            patch.object(
+                server.user_store,
+                "verify_password_reset_email",
+                side_effect=SQLAlchemyError("sensitive verification database detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_update", "email_verification_update_failed"),),
+            (token, "user@example.com", "sensitive verification database detail"),
+        )
+        claim = store.claim(token)
+        self.assertIsNotNone(claim)
+        self.assertTrue(store.release(token, claim))
+
+    def test_verification_uncertain_database_commit_is_diagnosed(self):
+        store = password_reset.EmailVerificationStore()
+        token = store.issue(
+            "account-1",
+            binding=hashlib.sha256(b"user@example.com").hexdigest(),
+        )
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", store),
+            patch.object(
+                server.user_store,
+                "verify_password_reset_email",
+                side_effect=auth.PasswordResetCommitUncertain(
+                    "sensitive uncertain-commit detail"
+                ),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable; verification may have completed",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_update", "email_verification_commit_uncertain"),),
+            (token, "user@example.com", "sensitive uncertain-commit detail"),
+        )
+        self.assertIsNone(store.claim(token))
 
     def test_ambiguous_database_commit_keeps_token_unreplayable(self):
         store = password_reset.PasswordResetStore()
@@ -577,7 +1164,9 @@ class PasswordResetRouteTests(unittest.TestCase):
                 server.user_store,
                 "reset_password_and_invalidate_sessions",
                 side_effect=auth.PasswordResetCommitUncertain("unknown commit result"),
-            ),self.assertRaises(HTTPException) as raised
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
         ):
             server.reset_password(
                 server.ResetPasswordRequest(
@@ -589,6 +1178,15 @@ class PasswordResetRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, request a new reset link if needed",
+        )
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_update", "password_commit_uncertain"),),
+            (token, "new-password-123", "unknown commit result"),
+        )
         self.assertIsNone(store.claim(token))
 
     def test_success_commits_token_and_revokes_sessions_without_logging_in(self):
@@ -620,6 +1218,147 @@ class PasswordResetRouteTests(unittest.TestCase):
         revoke_user.assert_called_once_with("account-1")
         self.assertNotIn("user_id", request.session)
         self.assertIsNone(store.claim(token))
+
+    def test_session_revocation_failure_is_diagnosed(self):
+        store = password_reset.PasswordResetStore()
+        token = store.issue("account-1")
+        request = self.request("/api/auth/reset-password")
+        request.session.update({"user_id": "account-1", "sid": "existing-session"})
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "password_reset_store", store),
+            patch.object(
+                server.user_store,
+                "reset_password_and_invalidate_sessions",
+                return_value=5,
+            ),
+            patch.object(
+                server.session_store,
+                "revoke_user",
+                side_effect=RuntimeError("sensitive session-store exception detail"),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.reset_password(
+                server.ResetPasswordRequest(
+                    token=token,
+                    password="sensitive-password-123",
+                ),
+                request,
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assertEqual(request.session, {"user_id": "account-1", "sid": "existing-session"})
+        self.assertIsNone(store.claim(token))
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("session_revocation", "user_session_revoke_failed"),),
+            (
+                token,
+                "sensitive-password-123",
+                "account-1",
+                "sensitive session-store exception detail",
+            ),
+        )
+
+    def test_post_verification_reset_token_issue_failure_is_diagnosed(self):
+        verification_store = password_reset.EmailVerificationStore()
+        token = verification_store.issue(
+            "account-1",
+            binding=hashlib.sha256(b"user@example.com").hexdigest(),
+        )
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", verification_store),
+            patch.object(
+                server,
+                "password_reset_store",
+                password_reset.PasswordResetStore(),
+            ),
+            patch.object(
+                server.password_reset_store,
+                "issue",
+                side_effect=RuntimeError("sensitive reset-token issue detail"),
+            ),
+            patch.object(server.user_store, "verify_password_reset_email"),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assertIsNone(verification_store.claim(token))
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("token_storage", "reset_token_issue_failed"),),
+            (token, "user@example.com", "sensitive reset-token issue detail"),
+        )
+
+    def test_post_verification_account_lookup_failure_and_token_cleanup_are_diagnosed(self):
+        verification_store = password_reset.EmailVerificationStore()
+        reset_store = password_reset.PasswordResetStore()
+        verification_token = verification_store.issue(
+            "account-1",
+            binding=hashlib.sha256(b"user@example.com").hexdigest(),
+        )
+        reset_token = reset_store.issue("account-1")
+        with (
+            patch.object(server.request_throttle, "allow", return_value=True),
+            patch.object(server, "email_verification_store", verification_store),
+            patch.object(server, "password_reset_store", reset_store),
+            patch.object(reset_store, "issue", return_value=reset_token),
+            patch.object(
+                server.user_store,
+                "verify_password_reset_email",
+            ),
+            patch.object(
+                server.user_store,
+                "get_by_id",
+                side_effect=SQLAlchemyError(
+                    "sensitive database lookup for user@example.com"
+                ),
+            ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+            self.assertRaises(HTTPException) as raised,
+        ):
+            server.verify_reset_email(
+                server.VerifyResetEmailRequest(token=verification_token),
+                self.request("/api/auth/verify-reset-email"),
+                _csrf=None,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Service temporarily unavailable, try again shortly",
+        )
+        self.assertIsNone(verification_store.claim(verification_token))
+        self.assertIsNone(reset_store.peek_user_id(reset_token))
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("database_lookup", "verified_account_lookup_failed"),),
+            (
+                verification_token,
+                reset_token,
+                "user@example.com",
+                "account-1",
+                "sensitive database lookup for user@example.com",
+            ),
+        )
 
 
 class EmailSenderTests(unittest.TestCase):

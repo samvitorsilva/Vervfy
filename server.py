@@ -249,6 +249,14 @@ async def add_security_headers(request: Request, call_next):
                 15 * 60,
             )
         except RuntimeError:
+            if path in {
+                "/api/auth/forgot-password",
+                "/api/auth/reset-password",
+                "/api/auth/verify-reset-email",
+            }:
+                _log_password_recovery_diagnostic(
+                    "rate_limiter", "middleware_backend_unavailable"
+                )
             return JSONResponse(
                 {"detail": "Rate-limit service unavailable"},
                 status_code=503,
@@ -372,12 +380,36 @@ PASSWORD_RESET_EMAIL_LIMIT = 3
 PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
 
 
+def _log_password_recovery_diagnostic(
+    stage: str,
+    reason: str,
+    *,
+    level: int = logging.WARNING,
+) -> None:
+    password_reset_logger.log(
+        level,
+        "password_recovery_diagnostic stage=%s reason=%s",
+        stage,
+        reason,
+        extra={
+            "event": "password_recovery_diagnostic",
+            "recovery_stage": stage,
+            "recovery_reason": reason,
+        },
+    )
+
+
 def _password_recovery_enabled() -> bool:
     return os.environ.get("VERVFY_PASSWORD_RECOVERY_ENABLED", "").strip() == "1"
 
 
 def _require_password_recovery_enabled() -> None:
     if not _password_recovery_enabled():
+        _log_password_recovery_diagnostic(
+            "feature_flag",
+            "disabled",
+            level=logging.INFO,
+        )
         raise HTTPException(
             status_code=503,
             detail="Service temporarily unavailable, try again shortly",
@@ -2304,6 +2336,10 @@ def _check_password_reset_rate_limits(request: Request, email: str) -> None:
             PASSWORD_RESET_WINDOW_SECONDS,
         )
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "rate_limiter",
+            "backend_unavailable",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2323,10 +2359,16 @@ def _release_token_claim(
     try:
         released = store.release(token, claim)
     except RuntimeError:
-        password_reset_logger.warning("password-reset token claim release failed")
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "claim_release_failed",
+        )
         return False
     if not released:
-        password_reset_logger.warning("password-reset token claim could not be released")
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "claim_release_failed",
+        )
     return released
 
 
@@ -2337,7 +2379,10 @@ def _discard_unsent_token(
     try:
         store.discard(token)
     except RuntimeError:
-        password_reset_logger.warning("unsent password-reset token cleanup failed")
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "unsent_token_cleanup_failed",
+        )
 
 
 @app.post("/api/auth/forgot-password")
@@ -2357,6 +2402,10 @@ def forgot_password(
     try:
         account = user_store.get_password_reset_account(email)
     except SQLAlchemyError as exc:
+        _log_password_recovery_diagnostic(
+            "database_lookup",
+            "account_lookup_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2375,6 +2424,10 @@ def forgot_password(
                 binding=email_digest,
             )
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "token_issue_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2415,6 +2468,10 @@ def reset_password(
                 headers={"Retry-After": str(PASSWORD_RESET_WINDOW_SECONDS)},
             )
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "rate_limiter",
+            "backend_unavailable",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2426,6 +2483,10 @@ def reset_password(
     try:
         claim = password_reset_store.claim(payload.token)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "token_claim_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2447,11 +2508,19 @@ def reset_password(
             ) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except auth.PasswordResetCommitUncertain as exc:
+        _log_password_recovery_diagnostic(
+            "database_update",
+            "password_commit_uncertain",
+        )
         raise HTTPException(
             status_code=503,
             detail="Service temporarily unavailable, request a new reset link if needed",
         ) from exc
     except SQLAlchemyError as exc:
+        _log_password_recovery_diagnostic(
+            "database_update",
+            "password_update_failed",
+        )
         if not _release_token_claim(password_reset_store, payload.token, claim):
             raise HTTPException(
                 status_code=503,
@@ -2464,6 +2533,10 @@ def reset_password(
     try:
         password_reset_store.commit(payload.token, claim)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "token_commit_failed",
+        )
         raise HTTPException(
             status_code=503,
             detail="Service temporarily unavailable; the reset may have completed",
@@ -2472,6 +2545,10 @@ def reset_password(
     try:
         session_store.revoke_user(claim.user_id)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "session_revocation",
+            "user_session_revoke_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2508,6 +2585,10 @@ def verify_reset_email(
                 headers={"Retry-After": str(PASSWORD_RESET_WINDOW_SECONDS)},
             )
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "rate_limiter",
+            "backend_unavailable",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2515,6 +2596,10 @@ def verify_reset_email(
     try:
         claim = email_verification_store.claim(payload.token)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "verification_token_claim_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2547,11 +2632,19 @@ def verify_reset_email(
             status_code=400, detail="This verification link is invalid or has expired"
         ) from exc
     except auth.PasswordResetCommitUncertain as exc:
+        _log_password_recovery_diagnostic(
+            "database_update",
+            "email_verification_commit_uncertain",
+        )
         raise HTTPException(
             status_code=503,
             detail="Service temporarily unavailable; verification may have completed",
         ) from exc
     except SQLAlchemyError as exc:
+        _log_password_recovery_diagnostic(
+            "database_update",
+            "email_verification_update_failed",
+        )
         if not _release_token_claim(email_verification_store, payload.token, claim):
             raise HTTPException(
                 status_code=503, detail="Service temporarily unavailable, try again shortly"
@@ -2563,6 +2656,10 @@ def verify_reset_email(
     try:
         email_verification_store.commit(payload.token, claim)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "verification_token_commit_failed",
+        )
         raise HTTPException(
             status_code=503,
             detail="Service temporarily unavailable; verification may have completed",
@@ -2571,6 +2668,10 @@ def verify_reset_email(
     try:
         token = password_reset_store.issue(claim.user_id)
     except RuntimeError as exc:
+        _log_password_recovery_diagnostic(
+            "token_storage",
+            "reset_token_issue_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
@@ -2587,6 +2688,10 @@ def verify_reset_email(
         _discard_unsent_token(password_reset_store, token)
     except SQLAlchemyError as exc:
         _discard_unsent_token(password_reset_store, token)
+        _log_password_recovery_diagnostic(
+            "database_lookup",
+            "verified_account_lookup_failed",
+        )
         raise HTTPException(
             status_code=503, detail="Service temporarily unavailable, try again shortly"
         ) from exc
