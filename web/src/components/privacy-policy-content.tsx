@@ -25,7 +25,7 @@ export default function PrivacyPolicyContent() {
           {t("Vervfy supports username/password accounts and Google sign-in. Google sign-in requests OpenID Connect identity, email, and basic profile scopes. Google processes the sign-in request; Vervfy receives the stable Google account identifier and may store an email when Google marks it verified. Vervfy does not receive your Google password, request Gmail or Drive access, or store your Google profile name or photo.")}
         </p>
         <p>
-          {t("For username/password accounts, email is optional and is not used to sign in; email verification and email-based password recovery are not implemented. You can link or unlink Google in account settings. Google-only accounts must add a password before unlinking Google. Sensitive actions may require your current password or a fresh Google sign-in.")}
+          {t("For username/password accounts, email is optional and is not used to sign in. Password recovery sends a one-time email-verification link to unverified addresses, then a separate reset link. Google-only accounts cannot use password recovery. You can link or unlink Google in account settings. Sensitive actions may require your current password or a fresh Google sign-in.")}
         </p>
         <p>
           {t("The app and its hosting infrastructure also process technical request information, including IP address and browser or network details, to deliver the service, manage sessions, prevent abuse, and apply rate limits. Hosting and service-provider log retention has not been independently verified.")}
@@ -35,7 +35,7 @@ export default function PrivacyPolicyContent() {
       <section className="credits-source">
         <h2>{t("How information is used and shared")}</h2>
         <p>
-          {t("We use account and library information to create and maintain accounts, store and play your library, sync it across devices, and provide requested features. Technical and security information helps keep accounts signed in, protect the service, and limit abusive requests. The operator should confirm the applicable legal bases under the LGPD and other relevant law.")}
+          {t("We use account and library information to create and maintain accounts, store and play your library, sync it across devices, and provide requested features. Technical and security information helps keep accounts signed in, protect the service, and limit abusive requests. For password recovery, Vervfy uses the configured SMTP relay to send one-time verification and reset links to the account email. The operator should confirm the applicable legal bases under the LGPD and other relevant law.")}
         </p>
         <p>
           {t("The public website is served from Vercel. The checked project deployment configuration also defines Render application and Redis-compatible key-value services; the app is configured to use Supabase PostgreSQL and private object storage. Those providers process requests, account and library records, session or security data, and uploaded files as needed to provide the service. The live configuration, data regions, and provider log, backup, and retention periods have not been independently verified.")}
@@ -51,7 +51,7 @@ export default function PrivacyPolicyContent() {
       <section className="credits-source">
         <h2>{t("Cookies and browser storage")}</h2>
         <p>
-          {t("Vervfy uses an HttpOnly session cookie for up to 30 days; the Secure attribute is enabled when the deployment is HTTPS-only. Google sign-in also uses a temporary security cookie. CSRF tokens protect account actions. When configured, Redis-compatible storage holds session records and temporary rate-limit or security data. Choosing a language stores a vervfy-language cookie for one year and saves language and list-view preferences in local storage. LRCLIB lyrics results are cached in local storage; expired entries are removed when accessed, so an unused entry may remain until browser storage is cleared. The service worker caches app shell and static assets, not account API responses.")}
+          {t("Vervfy uses an HttpOnly session cookie for up to 30 days; the Secure attribute is enabled when the deployment is HTTPS-only. Google sign-in also uses a temporary security cookie. CSRF tokens protect account actions. When configured, Redis-compatible storage holds session records, temporary rate-limit data, and expiring password-recovery token digests. Choosing a language stores a vervfy-language cookie for one year and saves language and list-view preferences in local storage. LRCLIB lyrics results are cached in local storage; expired entries are removed when accessed, so an unused entry may remain until browser storage is cleared. The service worker caches app shell and static assets, not account API responses.")}
         </p>
         <p>
           {t("Tracks downloaded for offline listening, with optional covers and saved lyrics, are stored in this browser's IndexedDB without automatic expiry. They remain until removed or browser data is cleared. Account deletion attempts to remove this account's offline copies from the browser where deletion was requested; offline copies on other devices are not reachable through that request.")}

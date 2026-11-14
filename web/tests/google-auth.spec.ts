@@ -1,28 +1,35 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("Google sign-in and sign-up appear only when the server enables OAuth", async ({
+const backendURL = process.env.PLAYWRIGHT_BACKEND_URL ?? "http://127.0.0.1:8100";
+
+async function setGoogleOAuthEnabled(
+  page: Page,
+  enabled: boolean,
+) {
+  const response = await page.request.post(
+    `${backendURL}/__test/google-oauth-enabled`,
+    { data: { enabled } },
+  );
+  expect(response.status()).toBe(204);
+}
+
+test("Google sign-in and sign-up render initially when OAuth is enabled", async ({
   page,
 }) => {
-  let googleOAuthEnabled = false;
-  await page.route("**/api/config", async (route) => {
-    await route.fulfill({
-      json: {
-        lyrics_provider_lrclib: true,
-        google_oauth_enabled: googleOAuthEnabled,
-      },
-    });
-  });
+  await setGoogleOAuthEnabled(page, false);
   await page.goto("/login");
   await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveCount(0);
 
-  googleOAuthEnabled = true;
-  await page.reload();
+  await setGoogleOAuthEnabled(page, true);
+  const loginResponse = await page.goto("/login");
+  expect(await loginResponse?.text()).toContain("Continue with Google");
   await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveAttribute(
     "href",
     "/api/auth/google/start?purpose=login",
   );
 
-  await page.goto("/register");
+  const registerResponse = await page.goto("/register");
+  expect(await registerResponse?.text()).toContain("Continue with Google");
   await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveAttribute(
     "href",
     "/api/auth/google/start?purpose=signup",
@@ -31,11 +38,7 @@ test("Google sign-in and sign-up appear only when the server enables OAuth", asy
 });
 
 test("Google onboarding asks only for a unique username", async ({ page }) => {
-  await page.route("**/api/config", async (route) => {
-    await route.fulfill({
-      json: { lyrics_provider_lrclib: true, google_oauth_enabled: true },
-    });
-  });
+  await setGoogleOAuthEnabled(page, true);
   await page.goto("/register?google=complete");
 
   await expect(

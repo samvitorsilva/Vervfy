@@ -1,13 +1,14 @@
 \set ON_ERROR_STOP on
 BEGIN READ ONLY;
 DO $$ BEGIN
- IF current_database()<>'vervfy_oauth_staging'
+ IF current_database()<>'postgres'
  OR session_user<>'vervfy_oauth_staging_user'
  OR current_user<>'vervfy_oauth_staging_user'
+ OR current_setting('server_version_num')::integer / 10000 <> 17
  OR (SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()) IS DISTINCT FROM true
  THEN RAISE EXCEPTION 'Wrong staging identity/TLS'; END IF;
  IF (SELECT version_num FROM public.alembic_version)
- IS DISTINCT FROM '0026_application_runtime_grants'
+ IS DISTINCT FROM '0028_webauthn_enrollment'
  THEN RAISE EXCEPTION 'Unexpected Alembic revision'; END IF;
 END $$;
 SELECT version_num FROM public.alembic_version;

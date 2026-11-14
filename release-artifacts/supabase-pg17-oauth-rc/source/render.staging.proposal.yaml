@@ -1,0 +1,62 @@
+# Review-only. Do not select "Deploy Blueprint" without separate approval.
+# Only Staging services are defined; Production is intentionally omitted.
+# No PostgreSQL resource is defined. The Oregon Render PostgreSQL 18 instance
+# remains unused; the API DATABASE_URL must be separately set to approved
+# Supabase PostgreSQL 17 project xgqvwqogdtktgfuubzwk.
+projects:
+  - name: Vervfy OAuth Staging
+    environments:
+      - name: Staging
+        services:
+          - type: web
+            name: vervfy-staging-api
+            region: virginia
+            runtime: python
+            plan: free
+            rootDir: release-artifacts/supabase-pg17-oauth-rc/source
+            buildCommand: pip install --require-hashes -r requirements.lock
+            startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log --lifespan on --workers 1
+            healthCheckPath: /healthz
+            autoDeploy: false
+            envVars:
+              # REDIS_URL is intentionally unset for single-process, OAuth-off staging.
+              - key: PYTHON_VERSION
+                value: 3.12.7
+              - key: VERVFY_ENVIRONMENT
+                value: staging
+              - key: VERVFY_HTTPS_ONLY
+                value: "1"
+              - key: VERVFY_COOKIE_SAME_SITE
+                value: lax
+              - key: VERVFY_TRUSTED_PROXY_HOPS
+                value: "1"
+              - key: VERVFY_SECRET_KEY
+                generateValue: true
+              - key: VERVFY_ASYNC_UPLOADS
+                value: "0"
+              - key: PGSSLROOTCERT
+                value: /etc/secrets/prod-ca-2021.crt
+              - key: DATABASE_URL
+                sync: false
+              - key: GOOGLE_OAUTH_ENABLED
+                value: "0"
+
+          - type: web
+            name: vervfy-staging-web
+            region: virginia
+            runtime: node
+            plan: free
+            rootDir: release-artifacts/supabase-pg17-oauth-rc/source/web
+            buildCommand: npm ci && npm run build
+            startCommand: npm run start
+            healthCheckPath: /manifest.webmanifest
+            autoDeploy: false
+            envVars:
+              - key: NODE_VERSION
+                value: "22"
+              - key: VERVFY_ENVIRONMENT
+                value: staging
+              - key: BACKEND_URL
+                sync: false
+              - key: SITE_URL
+                sync: false

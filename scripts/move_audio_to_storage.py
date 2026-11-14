@@ -54,12 +54,15 @@ def verify(path: str, data: bytes) -> bool:
 
 
 def main() -> int:
+    raise SystemExit(
+        "Retired: this tool writes unmanaged object keys and mutates schema outside Alembic."
+    )
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--free-db", action="store_true", help="empty audio_data for rows verified in Storage")
     parser.add_argument("--vacuum", action="store_true", help="run VACUUM FULL tracks afterwards (Postgres)")
     parser.add_argument("--limit", type=int, default=0, help="process at most N tracks (0 = all)")
     args = parser.parse_args()
-
     if not audio_store.enabled():
         print("Set SUPABASE_URL and SUPABASE_SERVICE_KEY first.", file=sys.stderr)
         return 2

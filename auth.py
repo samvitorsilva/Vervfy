@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import secrets
@@ -13,7 +14,7 @@ from hmac import compare_digest
 import bcrypt
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from db import (
     ArtistPhoto,
@@ -143,6 +144,10 @@ class RequestThrottle:
 
 # ---------------------------------------------------------------- user store
 
+class PasswordResetCommitUncertain(RuntimeError):
+    """The database may have committed; never release the reset-token claim."""
+
+
 class UserStore:
     """Small SQLAlchemy store.  Rows remain mapping-compatible with routes."""
 
@@ -170,6 +175,79 @@ class UserStore:
     def get_by_id(self, user_id: str):
         with SessionLocal() as session:
             return session.get(User, user_id)
+
+    def get_password_reset_account(self, email: str) -> tuple[str, bool] | None:
+        """Find a password account by its stored email, without OAuth linking."""
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        with SessionLocal() as session:
+            row = session.scalar(
+                select(User).where(func.lower(User.email) == normalized)
+            )
+            if row is None or row.password_hash is None or not row.email:
+                return None
+            return row.id, bool(row.email_verified)
+
+    def get_password_reset_target(self, email: str) -> str | None:
+        """Return only password accounts whose email has already been verified."""
+        target = self.get_password_reset_account(email)
+        if target is None or not target[1]:
+            return None
+        return target[0]
+
+    def verify_password_reset_email(self, user_id: str, email_digest: str) -> None:
+        """Verify the same email address that received the reset-verification link."""
+        with SessionLocal() as session:
+            row = session.scalar(
+                select(User).where(User.id == user_id).with_for_update()
+            )
+            if (
+                row is None
+                or row.password_hash is None
+                or not row.email
+                or row.email_verified
+                or not compare_digest(
+                    hashlib.sha256(
+                        row.email.strip().lower().encode("utf-8")
+                    ).hexdigest(),
+                    email_digest,
+                )
+            ):
+                raise ValueError("This verification link is invalid or has expired")
+            row.email_verified = True
+            try:
+                session.commit()
+            except SQLAlchemyError as exc:
+                raise PasswordResetCommitUncertain(
+                    "Email verification may have committed"
+                ) from exc
+
+    def reset_password_and_invalidate_sessions(
+        self, user_id: str, new_password: str
+    ) -> int:
+        """Set a new password hash and bump session_version (caller revokes Redis)."""
+        error = validate_password(new_password)
+        if error:
+            raise ValueError(error)
+        new_password_hash = hash_password(new_password)
+        with SessionLocal() as session:
+            row = session.scalar(
+                select(User).where(User.id == user_id).with_for_update()
+            )
+            if row is None:
+                raise ValueError("Account not found")
+            if row.password_hash is None or not row.email or not row.email_verified:
+                raise ValueError("Password reset is not available for this account")
+            row.password_hash = new_password_hash
+            row.session_version += 1
+            try:
+                session.commit()
+            except SQLAlchemyError as exc:
+                raise PasswordResetCommitUncertain(
+                    "Password reset may have committed"
+                ) from exc
+            return row.session_version
 
     def update_password(self, user_id: str, new_password_hash: str) -> None:
         with SessionLocal() as session:

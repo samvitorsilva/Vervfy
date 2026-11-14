@@ -1,3 +1,8 @@
+raise SystemExit(
+    "Retired: direct Supabase uploads bypass storage lifecycle reservations and "
+    "reference guards."
+)
+
 import mimetypes
 import os
 from urllib.parse import quote

@@ -1,0 +1,9 @@
+{
+  "validation": "static-only",
+  "sql_executed": false,
+  "postgres_parser_validation": false,
+  "transaction_bounds": "PASS",
+  "forbidden_statement_prefix_check": "PASS",
+  "catalog_only_relation_review": "PASS",
+  "sha256": "c4852fd5eb8c405860f2c97273ab675d05223cf58eacb61ebd623a0be819229a"
+}

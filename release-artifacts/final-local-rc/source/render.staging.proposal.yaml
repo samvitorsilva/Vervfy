@@ -1,0 +1,59 @@
+# Review-only Render Blueprint proposal. Do not select "Deploy Blueprint"
+# without approving the exact diff, region, environment, and secret inventory.
+# This deliberately does not define or manage the existing staging Postgres DB.
+services:
+  - type: keyvalue
+    name: vervfy-staging-valkey
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: vervfy-staging-api
+    runtime: python
+    plan: free
+    buildCommand: pip install --require-hashes -r requirements.lock
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log --lifespan on
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: VERVFY_ENVIRONMENT
+        value: staging
+      - key: VERVFY_HTTPS_ONLY
+        value: "1"
+      - key: VERVFY_COOKIE_SAME_SITE
+        value: lax
+      - key: VERVFY_TRUSTED_PROXY_HOPS
+        value: "1"
+      - key: VERVFY_SECRET_KEY
+        generateValue: true
+      - key: VERVFY_ASYNC_UPLOADS
+        value: "0"
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: vervfy-staging-valkey
+          property: connectionString
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_OAUTH_ENABLED
+        value: "0"
+
+  - type: web
+    name: vervfy-staging-web
+    runtime: node
+    plan: free
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /manifest.webmanifest
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: BACKEND_URL
+        sync: false
+      - key: SITE_URL
+        sync: false

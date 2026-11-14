@@ -1,0 +1,270 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					A00000000000000000000002 = { CreatedOnToolsVersion = 26.0; };
+				};
+			};
+			buildConfigurationList = A0000000000000000000001B;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = A00000000000000000000004;
+			productRefGroup = A0000000000000000000000C;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (A00000000000000000000002);
+		};
+		A00000000000000000000002 /* Vervfy */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A0000000000000000000001C;
+			buildPhases = (
+				A00000000000000000000007,
+				A00000000000000000000008,
+				A00000000000000000000009,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = Vervfy;
+			productName = Vervfy;
+			productReference = A0000000000000000000000A;
+			productType = "com.apple.product-type.application";
+		};
+		A00000000000000000000004 /* Main Group */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000000B /* Vervfy */,
+				A0000000000000000000000C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000B /* Vervfy */ = {
+			isa = PBXGroup;
+			path = Vervfy;
+			sourceTree = "<group>";
+			children = (
+				A0000000000000000000000D /* ContentView.swift */,
+				A0000000000000000000000E /* GlassNavigationBar.swift */,
+				A0000000000000000000000F /* ServerSetupView.swift */,
+				A00000000000000000000010 /* ShellDestination.swift */,
+				A00000000000000000000011 /* VervfyWebView.swift */,
+				A0000000000000000000001E /* VervfyApp.swift */,
+				A0000000000000000000001D /* Info.plist */,
+				A00000000000000000000020 /* Info-macOS.plist */,
+			);
+		};
+		A0000000000000000000000C /* Products */ = {
+			isa = PBXGroup;
+			children = (A0000000000000000000000A /* Vervfy.app */);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000A /* Vervfy.app */ = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			includeInIndex = 0;
+			path = Vervfy.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		A0000000000000000000000D /* ContentView.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ContentView.swift;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000E /* GlassNavigationBar.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = GlassNavigationBar.swift;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000F /* ServerSetupView.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ServerSetupView.swift;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000010 /* ShellDestination.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ShellDestination.swift;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000011 /* VervfyWebView.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = VervfyWebView.swift;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000001E /* VervfyApp.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = VervfyApp.swift;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000001D /* Info.plist */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000020 /* Info-macOS.plist */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info-macOS.plist;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000012 /* ContentView.swift in Sources */,
+				A00000000000000000000013 /* GlassNavigationBar.swift in Sources */,
+				A00000000000000000000014 /* ServerSetupView.swift in Sources */,
+				A00000000000000000000015 /* ShellDestination.swift in Sources */,
+				A00000000000000000000016 /* VervfyWebView.swift in Sources */,
+				A0000000000000000000001F /* VervfyApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000012 /* ContentView.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A0000000000000000000000D;
+		};
+		A00000000000000000000013 /* GlassNavigationBar.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A0000000000000000000000E;
+		};
+		A00000000000000000000014 /* ServerSetupView.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A0000000000000000000000F;
+		};
+		A00000000000000000000015 /* ShellDestination.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A00000000000000000000010;
+		};
+		A00000000000000000000016 /* VervfyWebView.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A00000000000000000000011;
+		};
+		A0000000000000000000001F /* VervfyApp.swift in Sources */ = {
+			isa = PBXBuildFile;
+			fileRef = A0000000000000000000001E;
+		};
+		A00000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A00000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = auto;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A00000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				SDKROOT = auto;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A00000000000000000000019 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vervfy/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = "Vervfy/Info-macOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vervfy.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A0000000000000000000001A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Vervfy/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = "Vervfy/Info-macOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vervfy.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A0000000000000000000001B /* Project Configuration List */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000017 /* Debug */,
+				A00000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A0000000000000000000001C /* Target Configuration List */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000019 /* Debug */,
+				A0000000000000000000001A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}

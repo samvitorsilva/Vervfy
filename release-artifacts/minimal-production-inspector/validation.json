@@ -1,0 +1,17 @@
+{
+  "hosted_access": false,
+  "local_postgresql": "18.6",
+  "production_postgresql_reported": "17.11",
+  "exact_17_11_runtime_tested": false,
+  "tests": 11,
+  "result": "PASS",
+  "positive_fixture": "Disposable local DB with PUBLIC privileges deliberately hardened; not production instructions",
+  "supabase_default_conflict_path": "Atomic refusal verified; production viability NOT asserted",
+  "readonly_files": "Static keyword review + disposable execution PASS",
+  "test_harness_lint": "PASS",
+  "sql_files_tested": [
+    "00-confirm-absence.sql",
+    "10-create-inspector.sql",
+    "20-inspector-readonly.sql"
+  ]
+}

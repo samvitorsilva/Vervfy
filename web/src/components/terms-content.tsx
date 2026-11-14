@@ -23,7 +23,7 @@ export default function TermsContent() {
       <section className="credits-source">
         <h2>{t("Your account")}</h2>
         <p>
-          {t("You may register only if you are legally permitted to accept these Terms and use the service; Vervfy does not currently perform age verification. Provide accurate account information and protect your sign-in details. The service supports username/password accounts and Google sign-in. Email is optional for password accounts and is not used to sign in; email verification and email-based recovery are not implemented.")}
+          {t("You may register only if you are legally permitted to accept these Terms and use the service; Vervfy does not currently perform age verification. Provide accurate account information and protect your sign-in details. The service supports username/password accounts and Google sign-in. Email is optional for password accounts and is not used to sign in. Password recovery verifies an unverified email before sending a separate one-time reset link; Google-only accounts cannot use password recovery.")}
         </p>
         <p>
           {t("Google-only accounts must add a password before unlinking Google. You are responsible for activity carried out through your account. Sensitive actions may require your current password or a fresh Google sign-in. You may delete your account in account settings. The deletion flow attempts to invalidate sessions, delete account-referenced stored files, and remove primary account records; errors may require a retry. It does not guarantee immediate physical erasure from provider backups or logs or remove offline copies from every device. See the Privacy Policy.")}

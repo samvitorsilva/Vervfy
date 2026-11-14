@@ -32,6 +32,10 @@ log = logging.getLogger("vervfy.backfill_covers")
 
 
 def main() -> int:
+    raise SystemExit(
+        "Retired: this maintenance job is not approved for the lifecycle-managed release."
+    )
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--user-id", default=os.environ.get("BACKFILL_USER_ID"))
     parser.add_argument(

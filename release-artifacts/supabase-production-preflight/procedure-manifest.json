@@ -1,0 +1,17 @@
+{
+  "purpose": "REVIEW_ONLY_NOT_AUTHORIZED_TO_CONNECT",
+  "baseline": "dd22f18b92e26a59d342a98e06dfc2888c58905b",
+  "release_target": "0027_storage_lifecycle",
+  "unapplied_revision": "0028_storage_cleanup_leases",
+  "release_manifest_sha256": "4674a05d4816aa62735cd82e11073627b0916b1dd09c4813b445d3f326981131",
+  "candidate_archive_sha256": "58da2d95be04aa7077c8c5b0b76965fcbb7f99f86b210b5565d5e94285e1108d",
+  "files": {
+    "README.md": "879369ac2af0cde4b74e99d2d817415b83c0e5ba1947e627d15d202247917d26",
+    "01-catalogs.sql": "c3d4b2e38d7f84582db026d3ae500ab89d5c99febb5f087d2a01a680b4fa9911",
+    "02-storage-metadata.sql": "56955ad7f9170c14196116400a28f23ab22862f3b6e96de37fc46acec4216f4a",
+    "approved-resource.template.json": "dcc8023e469b2c24818959fa1b96d380b615e1d95ce8a16f5b59206b68c734ee",
+    "preflight.py": "23751d6eec0347f58579b8ba9133c6a9bbb17ae827b4b328ffdd7ea9a14fd442",
+    "verify-preparation.py": "e7989e855692b6e4143707f9a1b5a500ad1532984d2d9088c175571e2b0a4c24",
+    "static-review.json": "6edfa7bdfdb319a083ba689cc3427560a2f28f7b8fa75f6d77b3bbe7ed89d4a1"
+  }
+}

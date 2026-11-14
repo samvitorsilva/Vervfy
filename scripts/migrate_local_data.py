@@ -25,6 +25,10 @@ def cover_bytes(path: Path, title: str) -> bytes:
     image = Image.new("RGB", (1, 1), (20, 24, 34)); out = io.BytesIO(); image.save(out, "JPEG"); return out.getvalue()
 
 def main() -> None:
+    raise SystemExit(
+        "Retired: legacy data import requires a separately reviewed lifecycle migration."
+    )
+
     parser = argparse.ArgumentParser()
     parser.add_argument("legacy_data_dir", type=Path, help="old data/ directory")
     args = parser.parse_args(); root = args.legacy_data_dir

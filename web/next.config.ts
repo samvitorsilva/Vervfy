@@ -13,6 +13,10 @@ validateStagingSiteUrl(process.env.SITE_URL, environment);
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  allowedDevOrigins: [
+	"specify-message-arabia-casa.trycloudflare.com",
+    "vervfy.test",
+  ],
   async headers() {
     return [
       {
@@ -23,6 +27,20 @@ const nextConfig: NextConfig = {
           { key: "Strict-Transport-Security", value: "max-age=31536000" },
           { key: "Referrer-Policy", value: "same-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+        ],
+      },
+      {
+        source: "/forgot-password",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+        ],
+      },
+      {
+        source: "/reset-password",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store" },
+          { key: "Referrer-Policy", value: "no-referrer" },
         ],
       },
       {

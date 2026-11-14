@@ -55,14 +55,13 @@ class AudioStoreStreamingTests(unittest.TestCase):
         ), self.assertRaises(audio_store.StorageError):
             audio_store.bucket_is_private()
 
-    def test_upload_sets_long_cache_control(self) -> None:
+    def test_unmanaged_upload_is_retired_without_storage_request(self) -> None:
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             return httpx.Response(200)
 
-        audio_store.close_client()
         with (
             patch.object(audio_store, "_transport", httpx.MockTransport(handler)),
             patch.dict(
@@ -73,13 +72,10 @@ class AudioStoreStreamingTests(unittest.TestCase):
                 },
             ),
         ):
-            try:
+            with self.assertRaises(audio_store.StorageError):
                 audio_store.upload("user/track.mp3", b"audio", "audio/mpeg")
-            finally:
-                audio_store.close_client()
 
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0].headers["cache-control"], "max-age=31536000")
+        self.assertEqual(requests, [])
 
     def test_signed_url_cache_reuses_until_one_minute_before_expiry(self) -> None:
         requests = 0
@@ -127,7 +123,7 @@ class AudioStoreStreamingTests(unittest.TestCase):
         self.assertNotEqual(first, expired)
         self.assertEqual(requests, 2)
 
-    def test_upload_file_streams_chunks_with_content_length(self) -> None:
+    def test_unmanaged_upload_file_is_retired_without_storage_request(self) -> None:
         payload = b"a" * (150 * 1024)
         requests: list[httpx.Request] = []
 
@@ -138,7 +134,6 @@ class AudioStoreStreamingTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile() as source:
             source.write(payload)
             source.flush()
-            audio_store.close_client()
             with (
                 patch.object(audio_store, "_transport", httpx.MockTransport(handler)),
                 patch.dict(
@@ -149,21 +144,12 @@ class AudioStoreStreamingTests(unittest.TestCase):
                     },
                 ),
             ):
-                try:
+                with self.assertRaises(audio_store.StorageError):
                     audio_store.upload_file(
                         "user/track.mp3", source.name, "audio/mpeg"
                     )
-                finally:
-                    audio_store.close_client()
 
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0].content, payload)
-        self.assertEqual(
-            requests[0].headers["content-length"],
-            str(len(payload)),
-        )
-        self.assertEqual(requests[0].headers["cache-control"], "max-age=31536000")
-        self.assertNotIn("transfer-encoding", requests[0].headers)
+        self.assertEqual(requests, [])
 
 
 if __name__ == "__main__":

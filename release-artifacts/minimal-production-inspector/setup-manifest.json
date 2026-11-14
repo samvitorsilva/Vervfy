@@ -1,0 +1,42 @@
+{
+  "status": "REVIEW_ONLY_NOT_AUTHORIZED",
+  "project_ref": "llxmskxxchpmeavorusj",
+  "database_name": "postgres",
+  "role": "vervfy_prod_inspector",
+  "release_manifest_sha256": "4674a05d4816aa62735cd82e11073627b0916b1dd09c4813b445d3f326981131",
+  "existing_preflight_manifest_sha256": "b26f7c6571dcae38eda11efaec9acfa332ddbe5dcd8507071328a3be9a5694da",
+  "files": {
+    "README.md": {
+      "sha256": "44342b4d075ab8112e54f0bce3d7503c75e3dc7a6f6e1b02e1f83014b22d98cc",
+      "bytes": 11682
+    },
+    "00-confirm-absence.sql": {
+      "sha256": "029043eaf35241926f0e8e03ae8d0fda4c9bffd72ec762cc4e665402b8643961",
+      "bytes": 1842
+    },
+    "10-create-inspector.sql": {
+      "sha256": "6d6a67e6778c8578eac2cc8de5d70d3681f125fad0571d071de247b5d8ac955c",
+      "bytes": 5971
+    },
+    "20-inspector-readonly.sql": {
+      "sha256": "52d92f9a2fb97327c2167e2128b768883bd22711a2cd3c61c950aa3d2f52c46a",
+      "bytes": 5539
+    },
+    "approvals.template.json": {
+      "sha256": "6077bfae6a09295d62975af9ee957b267355e26ef5c638aeb0288c7d55199cd9",
+      "bytes": 695
+    },
+    "test_local_setup.py": {
+      "sha256": "35b2b79f25cc052ca9701ea613aed47d4a3da339557fb921d43dd8ec8cd5b0fb",
+      "bytes": 10493
+    },
+    "local-validation.log": {
+      "sha256": "2959985cc67bf73cacf2f24e6a55b91d8885f4383a73bf023dc65c27a0706ac9",
+      "bytes": 1669
+    },
+    "validation.json": {
+      "sha256": "c460842563503251f35407f3682b66d1cb1bea89df996ea4bbea7a8c5bab323c",
+      "bytes": 621
+    }
+  }
+}

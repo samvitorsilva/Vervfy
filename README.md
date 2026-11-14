@@ -1,14 +1,14 @@
 # Vervfy
 
-A self-hosted music player for the web, built with a modern design that feels unique and user-friendly.
+A personal music library for the web, built with a modern design that feels unique and user-friendly.
 
-Upload your own files, organize them into playlists, look up lyrics and artist bio, and listen through a player that doesn't feel like an afterthought.
+Upload your music, organize playlists and favorites, and find lyrics and artist details alongside your collection.
 
 ---
 
 ## What it does
 
-Vervfy is a self-hosted music player with a Next.js App Router frontend in
+Vervfy is a personal music library with a Next.js App Router frontend in
 `web/` and a FastAPI backend for authentication, library data, uploads, and
 audio streaming. Next.js is the only user-facing frontend.
 
@@ -19,7 +19,7 @@ Drag-and-drop uploads (whole folders, where the browser allows it), metadata and
 
 The interface supports English, Brazilian Portuguese, Spanish and French. It follows the browser language by default, and users can choose a language on the sign-in screen or in account settings.
 
-**Player**
+**Playback**
 The basics you'd expect — play/pause, next/previous, seeking, volume, mute — plus a queue system with an "up next" view, shuffle and repeat, a mini player for when you want it out of the way, system media controls where supported, and keyboard shortcuts for everything (see below). Playback supports authenticated byte-range seeking.
 
 **Organization**
@@ -32,7 +32,9 @@ Vervfy checks embedded ID3 lyrics first (plain and synced), then can look up lyr
 A Web Audio API–based visualizer that reacts to whatever's currently playing.
 
 **Accounts**
-Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is optional account information; it is not used for sign-in, and email verification and email-based password recovery are not implemented. Every user gets their own isolated library.
+Its own auth system — registration, username-and-password login, logout, optional account email, account password changes, secure email-based password recovery, bcrypt-hashed passwords, session-based auth, CSRF protection, and rate limiting. Email is optional and is not used for sign-in. Recovery verifies an unverified password-account email before sending a separate one-time reset link; Google-only accounts cannot use password recovery. A reset updates the password and invalidates existing sessions without automatically signing in. Every user gets their own isolated library.
+
+Password recovery uses Redis for expiring single-use tokens and the existing SMTP environment settings for email. SMTP and a public `FRONTEND_URL` are required to send recovery messages in production; without SMTP, the endpoint still returns a generic response but sends no email. See [docs/password-reset.md](docs/password-reset.md) for configuration and a staging checklist.
 
 **Artist info**
 Artist profiles use manually maintained entries or a matching Wikipedia summary. Wikipedia-derived text links to its article and the CC BY-SA 4.0 license, with shortened or adapted text identified. Artist cards and profiles prefer a photo you upload, then an eligible Wikimedia Commons image with on-screen attribution, then a locally generated avatar. Commons images are copied to Vervfy storage only after license and metadata checks; Vervfy does not hotlink them. 

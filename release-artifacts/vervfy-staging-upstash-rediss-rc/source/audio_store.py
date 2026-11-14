@@ -1,0 +1,415 @@
+"""Audio file storage in a private Supabase Storage bucket (plain REST via httpx).
+
+Audio used to live in Postgres (``tracks.audio_data``).  Every stream request
+pulled the whole blob out of the database, which is what burned through the
+free plan's egress allowance.  Audio now lives in Storage and Postgres only
+keeps the object path (``tracks.storage_path``).
+
+Environment variables (set them on Render, never ship them to the browser):
+
+    SUPABASE_URL           https://<project-ref>.supabase.co
+    SUPABASE_SERVICE_KEY   the ``service_role`` key
+    SUPABASE_BUCKET        bucket name, default ``songs`` (keep it private)
+"""
+from __future__ import annotations
+
+import functools
+import logging
+import mimetypes
+import os
+import re
+import threading
+import time
+from collections import OrderedDict
+from urllib.parse import quote, urlsplit
+
+import httpx
+from storage_adapters import (
+    FilesystemStorageAdapter,
+    LocalStorageConfigurationError,
+    LocalStorageError,
+    LocalObjectNotFound,
+    local_storage_selected,
+)
+
+log = logging.getLogger("vervfy.audio_store")
+
+# Tests can inject an ``httpx.MockTransport`` here.
+_transport: httpx.BaseTransport | None = None
+_shared_client: httpx.Client | None = None
+_shared_client_key: tuple[str, str, str, int] | None = None
+_signed_url_cache: OrderedDict[tuple[str, int], tuple[str, float]] = OrderedDict()
+_signed_url_cache_lock = threading.Lock()
+_SIGNED_URL_CACHE_MAX_SIZE = 512
+_SIGNED_URL_EXPIRY_MARGIN_SECONDS = 60
+_STORAGE_CACHE_CONTROL = "max-age=31536000"
+
+
+class StorageError(RuntimeError):
+    """Storage is misconfigured or Supabase refused / failed a request."""
+
+
+def _scrub(text: str) -> str:
+    """Never let the key (or a mis-pasted one) leak into an error message."""
+    url, key, _ = _settings()
+    for secret in (key, url):
+        if secret:
+            text = text.replace(secret, "***")
+    return text
+
+
+def _wrap_errors(fn):
+    """Network problems (bad URL, DNS, timeout...) surface as StorageError, not a bare 500."""
+
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except StorageError as exc:
+            raise StorageError(_scrub(str(exc))[:300]) from None
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, OSError) as exc:  # ValueError covers UnicodeError
+            # Exception chains are logged by callers: never retain raw network
+            # errors, which can include credentials, signed URLs or response data.
+            raise StorageError(f"Storage request failed ({type(exc).__name__})") from None
+
+    return inner
+
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)([A-Za-z0-9-]{1,63}\.)*[A-Za-z0-9-]{1,63}$")
+
+
+def _validate_url(url: str) -> None:
+    """Fail with a clear message if SUPABASE_URL is not a plain https://<ref>.supabase.co address."""
+    parts = urlsplit(url)
+    try:
+        host = parts.hostname or ""
+    except ValueError:
+        host = ""
+    if (
+        parts.scheme != "https"
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or not _HOST_RE.match(host)
+        or parts.path.strip("/")
+    ):
+        raise StorageError(
+            "SUPABASE_URL is not a valid project URL - it must look like https://<project-ref>.supabase.co "
+            "(no path, and the secret key belongs in SUPABASE_SERVICE_KEY, not here)"
+        )
+
+
+def _settings() -> tuple[str, str, str]:
+    url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+    bucket = os.environ.get("SUPABASE_BUCKET", "songs").strip() or "songs"
+    return url, key, bucket
+
+
+def _local_adapter() -> FilesystemStorageAdapter | None:
+    try:
+        if not local_storage_selected():
+            return None
+        return FilesystemStorageAdapter.from_environment()
+    except LocalStorageConfigurationError as exc:
+        raise StorageError(str(exc)) from None
+    except LocalStorageError as exc:
+        raise StorageError(str(exc)) from None
+
+
+def enabled() -> bool:
+    """True when Storage is configured; otherwise the app keeps the legacy DB path."""
+    try:
+        if local_storage_selected():
+            return True
+    except LocalStorageConfigurationError as exc:
+        raise StorageError(str(exc)) from None
+    url, key, _ = _settings()
+    return bool(url and key)
+
+
+def _new_client() -> httpx.Client:
+    if _local_adapter() is not None:
+        raise StorageError("Local filesystem storage does not use a Supabase client")
+    url, key, _ = _settings()
+    if not (url and key):
+        raise StorageError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+    _validate_url(url)
+    client = httpx.Client(
+        base_url=f"{url}/storage/v1",
+        headers={"Authorization": f"Bearer {key}", "apikey": key},
+        timeout=httpx.Timeout(60.0, connect=10.0),
+        transport=_transport,
+    )
+    client.headers["Authorization"] = "Bearer " + key
+    return client
+
+
+def _client() -> httpx.Client:
+    global _shared_client, _shared_client_key
+    if _local_adapter() is not None:
+        raise StorageError("Local filesystem storage does not use a Supabase client")
+    url, key, bucket = _settings()
+    client_key = (url, key, bucket, id(_transport))
+    if _shared_client is None or _shared_client_key != client_key:
+        close_client()
+        _shared_client = _new_client()
+        _shared_client_key = client_key
+    return _shared_client
+
+
+def close_client() -> None:
+    """Close pooled Storage connections when the application shuts down."""
+    global _shared_client, _shared_client_key
+    if _shared_client is not None:
+        _shared_client.close()
+        _shared_client = None
+        _shared_client_key = None
+
+
+def _object_url(path: str, *, authenticated: bool = False) -> str:
+    _, _, bucket = _settings()
+    prefix = "/object/authenticated" if authenticated else "/object"
+    return f"{prefix}/{quote(bucket, safe='')}/{quote(path, safe='/')}"
+
+
+def _guard_managed_read(path: str) -> None:
+    if path.startswith("v2/"):
+        from db import tenant_session
+        from storage_lifecycle import _validate
+        parts=path.split('/')
+        if len(parts)!=5:
+            raise StorageError("Invalid managed object identity")
+        with tenant_session(parts[2]) as session:
+            _validate(session,path)
+
+
+def object_path(user_id: str, track_id: str, filename: str) -> str:
+    """Stable, ASCII-only object key: ``<user_id>/<track_id><.ext>``."""
+    ext = os.path.splitext(filename)[1].lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,5}", ext):
+        ext = ""
+    return f"{user_id}/{track_id}{ext}"
+
+
+def cover_object_path(user_id: str, track_id: str) -> str:
+    """Stable user-scoped object key for a normalized JPEG track cover."""
+    return f"covers/{user_id}/{track_id}.jpg"
+
+
+def guess_content_type(filename: str) -> str:
+    return mimetypes.guess_type(filename)[0] or "audio/mpeg"
+
+
+def upload(*args, **kwargs) -> None:
+    raise StorageError("Unmanaged storage writes are retired; use lifecycle reservations")
+
+
+def upload_file(*args, **kwargs) -> None:
+    raise StorageError("Unmanaged storage writes are retired; use lifecycle reservations")
+
+
+@_wrap_errors
+def create_signed_url(path: str, expires_in: int = 3600) -> str:
+    """Create a direct-to-Storage URL for one object in the private bucket."""
+    _guard_managed_read(path)
+    if _local_adapter() is not None:
+        raise StorageError("Local filesystem objects do not have signed URLs")
+    key = (path, expires_in)
+    with _signed_url_cache_lock:
+        now = time.monotonic()
+        cached = _signed_url_cache.get(key)
+        if cached is not None:
+            if cached[1] > now:
+                _signed_url_cache.move_to_end(key)
+                return cached[0]
+            del _signed_url_cache[key]
+
+        started_at = now
+        _, _, bucket = _settings()
+        client = _client()
+        response = client.post(
+            f"/object/sign/{quote(bucket, safe='')}/{quote(path, safe='/')}",
+            json={"expiresIn": expires_in},
+        )
+        if response.status_code >= 300:
+            raise StorageError(
+                f"signed URL creation failed ({response.status_code})"
+            )
+        payload = response.json()
+        signed_path = payload.get("signedURL") if isinstance(payload, dict) else None
+        if not isinstance(signed_path, str) or not signed_path:
+            raise StorageError("signed URL creation returned no URL")
+        if signed_path.startswith("https://"):
+            if not signed_path.startswith(_settings()[0] + "/"):
+                raise StorageError("signed URL points outside the configured Supabase project")
+            signed_url = signed_path
+        else:
+            if not signed_path.startswith("/"):
+                signed_path = "/" + signed_path
+            signed_url = f"{_settings()[0]}/storage/v1{signed_path}"
+
+        cache_for = expires_in - _SIGNED_URL_EXPIRY_MARGIN_SECONDS
+        if cache_for > 0:
+            _signed_url_cache[key] = (signed_url, started_at + cache_for)
+            _signed_url_cache.move_to_end(key)
+            while len(_signed_url_cache) > _SIGNED_URL_CACHE_MAX_SIZE:
+                _signed_url_cache.popitem(last=False)
+        return signed_url
+
+
+@_wrap_errors
+def delete(*args, **kwargs) -> None:
+    raise StorageError("Physical cleanup is hard-disabled pending Phase 4 review")
+
+
+def delete_quietly(*args, **kwargs) -> None:
+    raise StorageError("Physical cleanup is hard-disabled pending Phase 4 review")
+
+
+def delete_many(*args, **kwargs) -> None:
+    raise StorageError("Physical cleanup is hard-disabled pending Phase 4 review")
+
+
+@_wrap_errors
+def read_range(path: str, start: int, end: int) -> bytes:
+    """Return bytes ``start..end`` (inclusive) of an object."""
+    if start < 0 or end < start:
+        raise StorageError("invalid byte range")
+    adapter = _local_adapter()
+    if adapter is not None:
+        _guard_managed_read(path)
+        try:
+            return adapter.read_range(path, start, end)
+        except LocalStorageError as exc:
+            raise StorageError(str(exc)) from None
+    _, resp = open_range(path, start, end)
+    try:
+        remaining = end - start + 1
+        skip = start if resp.status_code == 200 else 0
+        result = bytearray()
+        for chunk in resp.iter_bytes(64 * 1024):
+            if skip:
+                skipped = min(skip, len(chunk))
+                chunk = chunk[skipped:]
+                skip -= skipped
+            if not chunk:
+                continue
+            result.extend(chunk[:remaining])
+            remaining -= min(remaining, len(chunk))
+            if remaining == 0:
+                break
+        return bytes(result)
+    finally:
+        resp.close()
+
+
+def read_all(path: str, size: int) -> bytes:
+    """Read a staged object for worker processing, bounded by its known size."""
+    if size < 0:
+        raise StorageError("invalid staged object size")
+    return read_range(path, 0, max(size - 1, 0)) if size else b""
+
+
+@_wrap_errors
+def download_to_file(path: str, destination: str, size: int) -> None:
+    """Stream a staged object to disk in bounded chunks."""
+    if size < 0:
+        raise StorageError("invalid staged object size")
+    adapter = _local_adapter()
+    if adapter is not None:
+        _guard_managed_read(path)
+        try:
+            written = adapter.download_to_file(path, destination, size)
+        except LocalStorageError as exc:
+            raise StorageError(str(exc)) from None
+        if written != size:
+            raise StorageError(f"read returned {written} bytes; expected {size}")
+        return
+    if size == 0:
+        open(destination, "wb").close()
+        return
+    _, response = open_range(path, 0, size - 1)
+    try:
+        written = 0
+        with open(destination, "wb") as target:
+            for chunk in response.iter_bytes(64 * 1024):
+                if not chunk:
+                    continue
+                target.write(chunk[: size - written])
+                written += min(len(chunk), size - written)
+                if written >= size:
+                    break
+        if written != size:
+            raise StorageError(
+                f"read returned {written} bytes; expected {size}"
+            )
+    finally:
+        response.close()
+
+
+@_wrap_errors
+def open_range(path: str, start: int, end: int) -> tuple[httpx.Client, httpx.Response]:
+    """Open a streaming ranged GET.  The caller must close both objects."""
+    if _local_adapter() is not None:
+        raise StorageError("Local filesystem range streams are not supported")
+    _guard_managed_read(path)
+    client = _client()
+    request = client.build_request(
+        "GET", _object_url(path, authenticated=True), headers={"Range": f"bytes={start}-{end}"}
+    )
+    resp = client.send(request, stream=True)
+    if resp.status_code not in (200, 206):
+        resp.close()
+        raise StorageError(f"read failed ({resp.status_code})")
+    return client, resp
+
+
+@_wrap_errors
+def object_size(path: str) -> int | None:
+    """Size in bytes of a stored object, or None if it does not exist."""
+    adapter = _local_adapter()
+    if adapter is not None:
+        _guard_managed_read(path)
+        try:
+            return adapter.object_size(path)
+        except LocalObjectNotFound:
+            return None
+    _guard_managed_read(path)
+    client = _client()
+    resp = client.get(_object_url(path, authenticated=True), headers={"Range": "bytes=0-0"})
+    if resp.status_code == 404 or resp.status_code == 400:
+        return None
+    if resp.status_code == 206:
+        match = re.search(r"/(\d+)\s*$", resp.headers.get("content-range", ""))
+        return int(match.group(1)) if match else None
+    if resp.status_code == 200:
+        return len(resp.content)
+    raise StorageError(f"stat failed ({resp.status_code})")
+
+
+@_wrap_errors
+def bucket_exists() -> bool:
+    if _local_adapter() is not None:
+        return True
+    _, _, bucket = _settings()
+    client = _client()
+    resp = client.get(f"/bucket/{quote(bucket, safe='')}")
+    return resp.status_code == 200
+
+
+@_wrap_errors
+def bucket_is_private() -> bool:
+    """Return whether the configured bucket is explicitly private."""
+    adapter = _local_adapter()
+    if adapter is not None:
+        return adapter.is_private()
+    _, _, bucket = _settings()
+    response = _client().get(f"/bucket/{quote(bucket, safe='')}")
+    if response.status_code != 200:
+        raise StorageError(f"bucket verification failed ({response.status_code})")
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("public"), bool):
+        raise StorageError("bucket privacy could not be verified")
+    return not payload["public"]
