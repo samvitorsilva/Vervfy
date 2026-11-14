@@ -351,6 +351,12 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           <Link href={isLogin ? "/register" : "/login"}>
             {t(isLogin ? "Create one" : "Log in")}
           </Link>
+          {isLogin ? (
+            <>
+              {" · "}
+              <Link href="/forgot-password">{t("Forgot password?")}</Link>
+            </>
+          ) : null}
         </div> : null}
         <SiteFooter showLanguage={false} />
       </section>

@@ -6,7 +6,15 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: ["/", "/privacy", "/terms", "/credits"],
-      disallow: ["/api/", "/backend-auth/", "/logout", "/login", "/register"],
+      disallow: [
+        "/api/",
+        "/backend-auth/",
+        "/logout",
+        "/login",
+        "/register",
+        "/forgot-password",
+        "/reset-password",
+      ],
     },
     sitemap: new URL("/sitemap.xml", siteUrl).href,
   };

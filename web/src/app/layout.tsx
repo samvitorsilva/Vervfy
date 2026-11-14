@@ -39,13 +39,31 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const cookieStore = await cookies();
+  const requestHeaders = await headers();
   const language =
     languageFromLocale(cookieStore.get("vervfy-language")?.value) ??
-    languageFromAcceptLanguage((await headers()).get("accept-language"));
+    languageFromAcceptLanguage(requestHeaders.get("accept-language"));
+  const nonce = requestHeaders.get("x-nonce") ?? undefined;
 
   return (
     <html lang={language}>
       <head>
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{
+            __html: `if (/(?:^|\\/)reset-password\\/?$/.test(window.location.pathname)) {
+  var recoveryValues = new URLSearchParams(window.location.hash.slice(1));
+  var recoveryToken = recoveryValues.get("verify") || recoveryValues.get("token");
+  if (recoveryToken) {
+    window.__vervfyRecoveryLink = {
+      token: recoveryToken,
+      mode: recoveryValues.has("verify") ? "verify" : "reset"
+    };
+  }
+  window.history.replaceState(null, "", window.location.pathname);
+}`,
+          }}
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

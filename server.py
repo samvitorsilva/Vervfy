@@ -48,7 +48,9 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import audio_store
 import auth
+import email_smtp
 import google_oauth
+import password_reset
 import staging_guard
 import upload_queue
 
@@ -235,6 +237,9 @@ async def add_security_headers(request: Request, call_next):
     if path in {
         "/api/auth/google/start",
         "/api/auth/google/callback",
+        "/api/auth/forgot-password",
+        "/api/auth/reset-password",
+        "/api/auth/verify-reset-email",
     }:
         try:
             allowed = await run_in_threadpool(
@@ -307,9 +312,18 @@ async def add_security_headers(request: Request, call_next):
         "/api/account/email",
         "/api/account/password",
         "/api/account/logout-all",
+        "/api/auth/forgot-password",
+        "/api/auth/reset-password",
+        "/api/auth/verify-reset-email",
     }:
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Pragma"] = "no-cache"
+    if path in {
+        "/api/auth/forgot-password",
+        "/api/auth/reset-password",
+        "/api/auth/verify-reset-email",
+    }:
+        response.headers["Referrer-Policy"] = "no-referrer"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -341,6 +355,35 @@ audiodb_queue = TheAudioDBQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
+password_reset_store = password_reset.PasswordResetStore(os.environ.get("REDIS_URL"))
+email_verification_store = password_reset.EmailVerificationStore(
+    os.environ.get("REDIS_URL")
+)
+email_sender = email_smtp.EmailSender()
+password_reset_logger = logging.getLogger("vervfy.password_reset")
+PASSWORD_RESET_GENERIC = (
+    "If an account exists for that email, we sent password reset instructions."
+)
+PASSWORD_RESET_EMAIL_VERIFICATION_GENERIC = (
+    "If you own this email address, reset instructions will arrive shortly."
+)
+PASSWORD_RESET_IP_LIMIT = 5
+PASSWORD_RESET_EMAIL_LIMIT = 3
+PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
+
+
+def _password_recovery_enabled() -> bool:
+    return os.environ.get("VERVFY_PASSWORD_RECOVERY_ENABLED", "").strip() == "1"
+
+
+def _require_password_recovery_enabled() -> None:
+    if not _password_recovery_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable, try again shortly",
+        )
+
+
 passkey_config = passkeys.Config.from_environment() if passkeys is not None else None
 passkey_redis = None
 passkey_assertions = None
@@ -2220,6 +2263,335 @@ def logout(request: Request, csrf_token: str | None = Form(None)) -> Response:
             ) from exc
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class VerifyResetEmailRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+def _password_reset_generic_response() -> dict:
+    return {"ok": True, "message": PASSWORD_RESET_GENERIC}
+
+
+def _email_verification_generic_response() -> dict:
+    return {
+        "ok": True,
+        "message": PASSWORD_RESET_EMAIL_VERIFICATION_GENERIC,
+    }
+
+
+def _check_password_reset_rate_limits(request: Request, email: str) -> None:
+    ip = auth.client_ip(request)
+    email_key = password_reset.email_rate_key(email)
+    try:
+        ip_allowed = request_throttle.allow(
+            f"password-reset:ip:{ip}",
+            PASSWORD_RESET_IP_LIMIT,
+            PASSWORD_RESET_WINDOW_SECONDS,
+        )
+        email_allowed = request_throttle.allow(
+            email_key,
+            PASSWORD_RESET_EMAIL_LIMIT,
+            PASSWORD_RESET_WINDOW_SECONDS,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if not ip_allowed or not email_allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests",
+            headers={"Retry-After": str(PASSWORD_RESET_WINDOW_SECONDS)},
+        )
+
+
+def _release_token_claim(
+    store: password_reset.PasswordResetStore,
+    token: str,
+    claim: password_reset.TokenClaim,
+) -> bool:
+    try:
+        released = store.release(token, claim)
+    except RuntimeError:
+        password_reset_logger.warning("password-reset token claim release failed")
+        return False
+    if not released:
+        password_reset_logger.warning("password-reset token claim could not be released")
+    return released
+
+
+def _discard_unsent_token(
+    store: password_reset.PasswordResetStore,
+    token: str,
+) -> None:
+    try:
+        store.discard(token)
+    except RuntimeError:
+        password_reset_logger.warning("unsent password-reset token cleanup failed")
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    _require_password_recovery_enabled()
+
+    email = (payload.email or "").strip().lower()
+    _check_password_reset_rate_limits(request, email)
+    validation_error = auth.validate_email(email) if email else "Enter a valid email address"
+    if validation_error:
+        raise HTTPException(status_code=400, detail=validation_error)
+
+    try:
+        account = user_store.get_password_reset_account(email)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if account is None:
+        auth.verify_password("password-reset-timing-pad", auth._DUMMY_HASH)
+        return _password_reset_generic_response()
+
+    user_id, email_verified = account
+    try:
+        if email_verified:
+            token = password_reset_store.issue(user_id)
+        else:
+            email_digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
+            token = email_verification_store.issue(
+                user_id,
+                binding=email_digest,
+            )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if token is None:
+        return _password_reset_generic_response()
+
+    try:
+        if email_verified:
+            email_sender.send_password_reset(to_email=email, token=token)
+        else:
+            email_sender.send_email_verification(to_email=email, token=token)
+    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError):
+        store = password_reset_store if email_verified else email_verification_store
+        _discard_unsent_token(store, token)
+        return _password_reset_generic_response()
+
+    return _password_reset_generic_response()
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    _require_password_recovery_enabled()
+
+    ip = auth.client_ip(request)
+    try:
+        if not request_throttle.allow(
+            f"password-reset:ip:{ip}",
+            PASSWORD_RESET_IP_LIMIT,
+            PASSWORD_RESET_WINDOW_SECONDS,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests",
+                headers={"Retry-After": str(PASSWORD_RESET_WINDOW_SECONDS)},
+            )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    password_error = auth.validate_password(payload.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    try:
+        claim = password_reset_store.claim(payload.token)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if claim is None:
+        raise HTTPException(
+            status_code=400, detail="This reset link is invalid or has expired"
+        )
+
+    try:
+        user_store.reset_password_and_invalidate_sessions(
+            claim.user_id,
+            payload.password,
+        )
+    except ValueError as exc:
+        if not _release_token_claim(password_reset_store, payload.token, claim):
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable, try again shortly",
+            ) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except auth.PasswordResetCommitUncertain as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable, request a new reset link if needed",
+        ) from exc
+    except SQLAlchemyError as exc:
+        if not _release_token_claim(password_reset_store, payload.token, claim):
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable, request a new reset link if needed",
+            ) from exc
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    try:
+        password_reset_store.commit(payload.token, claim)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable; the reset may have completed",
+        ) from exc
+
+    try:
+        session_store.revoke_user(claim.user_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    # Do not create a new session; user must sign in with the new password.
+    if request.session.get("user_id") == claim.user_id:
+        request.session.clear()
+        auth.get_or_create_csrf_token(request)
+
+    return {
+        "ok": True,
+        "message": "Your password has been updated. You can log in with your new password.",
+    }
+
+
+@app.post("/api/auth/verify-reset-email")
+def verify_reset_email(
+    payload: VerifyResetEmailRequest,
+    request: Request,
+    _csrf=Depends(auth.verify_api_csrf),
+) -> dict:
+    _require_password_recovery_enabled()
+
+    ip = auth.client_ip(request)
+    try:
+        if not request_throttle.allow(
+            f"password-reset:ip:{ip}",
+            PASSWORD_RESET_IP_LIMIT,
+            PASSWORD_RESET_WINDOW_SECONDS,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests",
+                headers={"Retry-After": str(PASSWORD_RESET_WINDOW_SECONDS)},
+            )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    try:
+        claim = email_verification_store.claim(payload.token)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if claim is None:
+        raise HTTPException(
+            status_code=400, detail="This verification link is invalid or has expired"
+        )
+    if (
+        claim.binding is None
+        or len(claim.binding) != 64
+        or any(character not in "0123456789abcdef" for character in claim.binding)
+    ):
+        if not _release_token_claim(email_verification_store, payload.token, claim):
+            raise HTTPException(
+                status_code=503, detail="Service temporarily unavailable, try again shortly"
+            )
+        raise HTTPException(
+            status_code=400, detail="This verification link is invalid or has expired"
+        )
+
+    try:
+        user_store.verify_password_reset_email(claim.user_id, claim.binding)
+    except ValueError as exc:
+        if not _release_token_claim(email_verification_store, payload.token, claim):
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable, try again shortly",
+            ) from exc
+        raise HTTPException(
+            status_code=400, detail="This verification link is invalid or has expired"
+        ) from exc
+    except auth.PasswordResetCommitUncertain as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable; verification may have completed",
+        ) from exc
+    except SQLAlchemyError as exc:
+        if not _release_token_claim(email_verification_store, payload.token, claim):
+            raise HTTPException(
+                status_code=503, detail="Service temporarily unavailable, try again shortly"
+            ) from exc
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    try:
+        email_verification_store.commit(payload.token, claim)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable; verification may have completed",
+        ) from exc
+
+    try:
+        token = password_reset_store.issue(claim.user_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+    if token is None:
+        return _email_verification_generic_response()
+    try:
+        user = user_store.get_by_id(claim.user_id)
+        email = user.email if user is not None else None
+        if email:
+            email_sender.send_password_reset(to_email=email, token=token)
+        else:
+            _discard_unsent_token(password_reset_store, token)
+    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError):
+        _discard_unsent_token(password_reset_store, token)
+    except SQLAlchemyError as exc:
+        _discard_unsent_token(password_reset_store, token)
+        raise HTTPException(
+            status_code=503, detail="Service temporarily unavailable, try again shortly"
+        ) from exc
+
+    return _email_verification_generic_response()
 
 
 @app.get("/api/me")

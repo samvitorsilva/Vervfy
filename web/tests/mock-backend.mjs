@@ -235,6 +235,45 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (
+    [
+      "/api/auth/forgot-password",
+      "/api/auth/reset-password",
+      "/api/auth/verify-reset-email",
+    ].includes(url.pathname) &&
+    request.method === "POST"
+  ) {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    if (request.headers["x-csrf-token"] !== csrfToken) {
+      json(response, 403, { detail: "Invalid CSRF token" });
+      return;
+    }
+    if (
+      url.pathname === "/api/auth/forgot-password" &&
+      typeof payload.email !== "string"
+    ) {
+      json(response, 400, { detail: "Enter a valid email address" });
+      return;
+    }
+    if (
+      url.pathname !== "/api/auth/forgot-password" &&
+      typeof payload.token !== "string"
+    ) {
+      json(response, 400, { detail: "This link is invalid or has expired" });
+      return;
+    }
+    json(response, 200, {
+      ok: true,
+      message:
+        url.pathname === "/api/auth/verify-reset-email"
+          ? "If you own this email address, reset instructions will arrive shortly."
+          : "If an account exists for that email, we sent password reset instructions.",
+    });
+    return;
+  }
+
   if (url.pathname === "/api/config" && request.method === "GET") {
     json(response, 200, { lyrics_provider_lrclib: true });
     return;
