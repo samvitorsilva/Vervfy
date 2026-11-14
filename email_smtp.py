@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import smtplib
+import socket
 import ssl
 from collections.abc import Callable
 from email.message import EmailMessage
@@ -15,6 +17,28 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger("vervfy.email")
 
+# Safe, fixed reason codes for SMTP diagnostics. Never derive these from
+# exception messages, credentials, addresses, or tokens.
+SMTP_REASON_CONNECTION_TIMEOUT = "connection_timeout"
+SMTP_REASON_DNS_FAILURE = "dns_failure"
+SMTP_REASON_AUTHENTICATION_FAILURE = "authentication_failure"
+SMTP_REASON_TLS_FAILURE = "tls_failure"
+SMTP_REASON_SMTP_RESPONSE_ERROR = "smtp_response_error"
+SMTP_REASON_PROVIDER_ERROR = "provider_error"
+SMTP_REASON_NOT_CONFIGURED = "not_configured"
+
+_SMTP_REASON_CODES = frozenset(
+    {
+        SMTP_REASON_CONNECTION_TIMEOUT,
+        SMTP_REASON_DNS_FAILURE,
+        SMTP_REASON_AUTHENTICATION_FAILURE,
+        SMTP_REASON_TLS_FAILURE,
+        SMTP_REASON_SMTP_RESPONSE_ERROR,
+        SMTP_REASON_PROVIDER_ERROR,
+        SMTP_REASON_NOT_CONFIGURED,
+    }
+)
+
 
 class EmailTransport(Protocol):
     def send(self, message: EmailMessage) -> None: ...
@@ -23,13 +47,77 @@ class EmailTransport(Protocol):
 class SmtpConfigError(RuntimeError):
     """SMTP is not configured for outbound mail."""
 
+    reason = SMTP_REASON_NOT_CONFIGURED
+
 
 class SmtpSendError(RuntimeError):
     """SMTP relay rejected or failed the message."""
 
+    def __init__(
+        self,
+        message: str = "Could not send email",
+        *,
+        reason: str = SMTP_REASON_PROVIDER_ERROR,
+    ):
+        super().__init__(message)
+        self.reason = reason if reason in _SMTP_REASON_CODES else SMTP_REASON_PROVIDER_ERROR
+
 
 def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
+
+
+def _classify_one_smtp_exception(exc: BaseException) -> str | None:
+    if isinstance(exc, SmtpSendError):
+        # Prefer an already-specific reason; keep walking when only generic.
+        if exc.reason != SMTP_REASON_PROVIDER_ERROR:
+            return exc.reason
+        return None
+    if isinstance(exc, SmtpConfigError):
+        return SMTP_REASON_NOT_CONFIGURED
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return SMTP_REASON_AUTHENTICATION_FAILURE
+    if isinstance(exc, ssl.SSLError):
+        return SMTP_REASON_TLS_FAILURE
+    if isinstance(exc, socket.gaierror):
+        return SMTP_REASON_DNS_FAILURE
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return SMTP_REASON_CONNECTION_TIMEOUT
+    if isinstance(exc, OSError) and exc.errno in {
+        errno.ETIMEDOUT,
+        getattr(errno, "ETIME", errno.ETIMEDOUT),
+    }:
+        return SMTP_REASON_CONNECTION_TIMEOUT
+    if isinstance(exc, smtplib.SMTPNotSupportedError):
+        # STARTTLS unavailable or refused by the relay.
+        return SMTP_REASON_TLS_FAILURE
+    if isinstance(exc, smtplib.SMTPResponseException):
+        return SMTP_REASON_SMTP_RESPONSE_ERROR
+    if isinstance(exc, smtplib.SMTPException):
+        return SMTP_REASON_SMTP_RESPONSE_ERROR
+    return None
+
+
+def classify_smtp_failure(exc: BaseException) -> str:
+    """Map a transport failure to a fixed reason code without reading messages."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        reason = _classify_one_smtp_exception(current)
+        if reason is not None:
+            return reason
+        current = current.__cause__ or current.__context__
+    return SMTP_REASON_PROVIDER_ERROR
+
+
+def smtp_failure_reason(exc: BaseException) -> str:
+    """Safe reason for logging; never returns exception text."""
+    if isinstance(exc, SmtpConfigError):
+        return SMTP_REASON_NOT_CONFIGURED
+    if isinstance(exc, SmtpSendError) and exc.reason != SMTP_REASON_PROVIDER_ERROR:
+        return exc.reason
+    return classify_smtp_failure(exc)
 
 
 class SmtpSettings:
@@ -108,8 +196,13 @@ class SmtpTransport:
                     client.send_message(message)
         except SmtpConfigError:
             raise
+        except SmtpSendError:
+            raise
         except Exception as exc:
-            raise SmtpSendError("Could not send email") from exc
+            raise SmtpSendError(
+                "Could not send email",
+                reason=classify_smtp_failure(exc),
+            ) from exc
 
 
 class MemoryTransport:
@@ -231,15 +324,22 @@ class EmailSender:
         )
         try:
             self.transport.send(message)
-        except SmtpConfigError:
-            logger.warning("password reset email skipped: SMTP is not configured")
+        except SmtpConfigError as exc:
+            _log_smtp_delivery_diagnostic(
+                "password reset email skipped",
+                smtp_failure_reason(exc),
+            )
             raise
-        except SmtpSendError:
-            logger.warning("password reset email failed: SMTP provider error")
+        except SmtpSendError as exc:
+            _log_smtp_delivery_diagnostic(
+                "password reset email failed",
+                smtp_failure_reason(exc),
+            )
             raise
-        except Exception:  # noqa: BLE001 - avoid logging provider or message details
-            logger.warning("password reset email failed: unexpected transport error")
-            raise SmtpSendError("Could not send email") from None
+        except Exception as exc:  # noqa: BLE001 - avoid logging provider or message details
+            reason = classify_smtp_failure(exc)
+            _log_smtp_delivery_diagnostic("password reset email failed", reason)
+            raise SmtpSendError("Could not send email", reason=reason) from None
 
     def send_email_verification(self, *, to_email: str, token: str) -> None:
         verification_url = f"{public_app_origin()}/reset-password#verify={token}"
@@ -252,16 +352,35 @@ class EmailSender:
         )
         try:
             self.transport.send(message)
-        except SmtpConfigError:
-            logger.warning("email verification message skipped: SMTP is not configured")
+        except SmtpConfigError as exc:
+            _log_smtp_delivery_diagnostic(
+                "email verification message skipped",
+                smtp_failure_reason(exc),
+            )
             raise
-        except SmtpSendError:
-            logger.warning("email verification message failed: SMTP provider error")
+        except SmtpSendError as exc:
+            _log_smtp_delivery_diagnostic(
+                "email verification message failed",
+                smtp_failure_reason(exc),
+            )
             raise
-        except Exception:  # noqa: BLE001 - avoid logging provider or message details
-            logger.warning("email verification message failed: unexpected transport error")
-            raise SmtpSendError("Could not send email") from None
+        except Exception as exc:  # noqa: BLE001 - avoid logging provider or message details
+            reason = classify_smtp_failure(exc)
+            _log_smtp_delivery_diagnostic("email verification message failed", reason)
+            raise SmtpSendError("Could not send email", reason=reason) from None
 
+
+def _log_smtp_delivery_diagnostic(prefix: str, reason: str) -> None:
+    safe_reason = reason if reason in _SMTP_REASON_CODES else SMTP_REASON_PROVIDER_ERROR
+    logger.warning(
+        "%s: smtp_reason=%s",
+        prefix,
+        safe_reason,
+        extra={
+            "event": "smtp_delivery_diagnostic",
+            "smtp_reason": safe_reason,
+        },
+    )
 
 def default_sender(
     transport_factory: Callable[[], EmailTransport] | None = None,

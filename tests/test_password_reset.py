@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import shutil
+import smtplib
+import socket
+import ssl
 import subprocess
 import tempfile
 import threading
@@ -10,7 +14,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import redis
 from fastapi import HTTPException
@@ -405,6 +409,7 @@ class PasswordResetRouteTests(unittest.TestCase):
                 "get_password_reset_account",
                 return_value=("account-1", True),
             ),
+            self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
         ):
             result = server.forgot_password(
                 server.ForgotPasswordRequest(email="user@example.com"),
@@ -418,6 +423,58 @@ class PasswordResetRouteTests(unittest.TestCase):
         self.assertEqual(request.session, {"user_id": "account-1", "sid": "existing-session"})
         update_password.assert_not_called()
         revoke_user.assert_not_called()
+        self.assert_diagnostics(
+            diagnostics.records,
+            (("smtp_delivery", "provider_error"),),
+            ("user@example.com", "synthetic SMTP failure"),
+        )
+
+    def test_smtp_failure_categories_are_diagnosed_without_sensitive_details(self):
+        cases = (
+            ("connection_timeout", email_smtp.SMTP_REASON_CONNECTION_TIMEOUT),
+            ("dns_failure", email_smtp.SMTP_REASON_DNS_FAILURE),
+            ("authentication_failure", email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE),
+            ("tls_failure", email_smtp.SMTP_REASON_TLS_FAILURE),
+            ("smtp_response_error", email_smtp.SMTP_REASON_SMTP_RESPONSE_ERROR),
+        )
+        for label, reason in cases:
+            with self.subTest(reason=reason):
+                store = password_reset.PasswordResetStore()
+                mailer = _FakeMailer(
+                    error=email_smtp.SmtpSendError(
+                        f"sensitive-{label}-detail",
+                        reason=reason,
+                    )
+                )
+                with (
+                    patch.object(server.request_throttle, "allow", return_value=True),
+                    patch.object(server, "password_reset_store", store),
+                    patch.object(server, "email_sender", mailer),
+                    patch.object(
+                        server.user_store,
+                        "get_password_reset_account",
+                        return_value=("account-1", True),
+                    ),
+                    self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
+                ):
+                    result = server.forgot_password(
+                        server.ForgotPasswordRequest(email="user@example.com"),
+                        self.request("/api/auth/forgot-password"),
+                        _csrf=None,
+                    )
+
+                self.assertEqual(result, server._password_reset_generic_response())
+                self.assertEqual(store._tokens, {})
+                self.assert_diagnostics(
+                    diagnostics.records,
+                    (("smtp_delivery", reason),),
+                    (
+                        "user@example.com",
+                        f"sensitive-{label}-detail",
+                        "smtp.mailjet.secret",
+                        "reset-token-value",
+                    ),
+                )
 
     def test_recovery_routes_remain_inert_until_explicitly_enabled(self):
         request = self.request("/api/auth/forgot-password")
@@ -714,7 +771,10 @@ class PasswordResetRouteTests(unittest.TestCase):
         self.assertEqual(store.peek_user_id(token), "account-1")
         self.assert_diagnostics(
             diagnostics.records,
-            (("token_storage", "unsent_token_cleanup_failed"),),
+            (
+                ("smtp_delivery", "provider_error"),
+                ("token_storage", "unsent_token_cleanup_failed"),
+            ),
             (
                 "user@example.com",
                 token,
@@ -1447,7 +1507,10 @@ class EmailSenderTests(unittest.TestCase):
     def test_smtp_failure_logs_never_include_reset_token(self):
         token = "synthetic-token-do-not-log"
         transport = email_smtp.MemoryTransport()
-        transport.fail_with = email_smtp.SmtpSendError("synthetic SMTP failure")
+        transport.fail_with = email_smtp.SmtpSendError(
+            "synthetic SMTP failure",
+            reason=email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE,
+        )
         sender = email_smtp.EmailSender(transport)
         with (
             patch.dict(
@@ -1466,7 +1529,148 @@ class EmailSenderTests(unittest.TestCase):
                 token=token,
             )
 
-        self.assertNotIn(token, "\n".join(captured.output))
+        joined = "\n".join(captured.output)
+        self.assertNotIn(token, joined)
+        self.assertNotIn("user@example.test", joined)
+        self.assertNotIn("synthetic SMTP failure", joined)
+        self.assertIn("smtp_reason=authentication_failure", joined)
+
+    def test_classify_smtp_failure_categories(self):
+        cases = (
+            (
+                TimeoutError("timed out contacting smtp.secret.example"),
+                email_smtp.SMTP_REASON_CONNECTION_TIMEOUT,
+            ),
+            (
+                TimeoutError("operation timed out for user@example.test"),
+                email_smtp.SMTP_REASON_CONNECTION_TIMEOUT,
+            ),
+            (
+                OSError(errno.ETIMEDOUT, "connection timed out to in-v3.mailjet.com"),
+                email_smtp.SMTP_REASON_CONNECTION_TIMEOUT,
+            ),
+            (
+                socket.gaierror(socket.EAI_NONAME, "Name or service not known"),
+                email_smtp.SMTP_REASON_DNS_FAILURE,
+            ),
+            (
+                smtplib.SMTPAuthenticationError(535, b"auth failed for apikey"),
+                email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE,
+            ),
+            (
+                ssl.SSLError("CERTIFICATE_VERIFY_FAILED for mailjet"),
+                email_smtp.SMTP_REASON_TLS_FAILURE,
+            ),
+            (
+                smtplib.SMTPNotSupportedError("STARTTLS extension not supported"),
+                email_smtp.SMTP_REASON_TLS_FAILURE,
+            ),
+            (
+                smtplib.SMTPSenderRefused(
+                    550,
+                    b"sender rejected",
+                    "vervfy.dev@proton.me",
+                ),
+                email_smtp.SMTP_REASON_SMTP_RESPONSE_ERROR,
+            ),
+            (
+                smtplib.SMTPDataError(554, b"message rejected"),
+                email_smtp.SMTP_REASON_SMTP_RESPONSE_ERROR,
+            ),
+            (
+                RuntimeError("unexpected relay detail"),
+                email_smtp.SMTP_REASON_PROVIDER_ERROR,
+            ),
+        )
+        for exc, expected in cases:
+            with self.subTest(expected=expected, exc_type=type(exc).__name__):
+                self.assertEqual(email_smtp.classify_smtp_failure(exc), expected)
+
+        wrapped = email_smtp.SmtpSendError("Could not send email")
+        wrapped.__cause__ = smtplib.SMTPAuthenticationError(535, b"bad credentials")
+        self.assertEqual(
+            email_smtp.classify_smtp_failure(wrapped),
+            email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE,
+        )
+
+    def test_smtp_transport_classifies_failures_without_logging_secrets(self):
+        settings = email_smtp.SmtpSettings(
+            host="in-v3.mailjet.com",
+            port=587,
+            username="smtp-username-secret",
+            password="smtp-password-secret",
+            mail_from="vervfy.dev@proton.me",
+            use_starttls=True,
+        )
+        transport = email_smtp.SmtpTransport(settings)
+        message = email_smtp.build_password_reset_message(
+            to_email="user@example.test",
+            reset_url="https://vervfy-one.vercel.app/reset-password#token=reset-token-secret",
+            mail_from="vervfy.dev@proton.me",
+        )
+        connect_cases = (
+            (TimeoutError("timed out"), email_smtp.SMTP_REASON_CONNECTION_TIMEOUT),
+            (
+                socket.gaierror(socket.EAI_NONAME, "Name or service not known"),
+                email_smtp.SMTP_REASON_DNS_FAILURE,
+            ),
+        )
+        session_cases = (
+            (
+                "starttls",
+                ssl.SSLError("TLS handshake failed"),
+                email_smtp.SMTP_REASON_TLS_FAILURE,
+            ),
+            (
+                "login",
+                smtplib.SMTPAuthenticationError(535, b"authentication failed"),
+                email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE,
+            ),
+            (
+                "send_message",
+                smtplib.SMTPDataError(554, b"transaction failed"),
+                email_smtp.SMTP_REASON_SMTP_RESPONSE_ERROR,
+            ),
+        )
+
+        def assert_safe_send_error(caught, expected: str) -> None:
+            self.assertEqual(caught.exception.reason, expected)
+            self.assertEqual(str(caught.exception), "Could not send email")
+            serialized = repr(caught.exception)
+            for secret in (
+                "smtp-username-secret",
+                "smtp-password-secret",
+                "user@example.test",
+                "reset-token-secret",
+                "authentication failed",
+                "TLS handshake failed",
+                "transaction failed",
+            ):
+                self.assertNotIn(secret, serialized)
+
+        for raised, expected in connect_cases:
+            with (
+                self.subTest(phase="connect", expected=expected),
+                patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+                patch("email_smtp.smtplib.SMTP", side_effect=raised),
+                self.assertRaises(email_smtp.SmtpSendError) as caught,
+            ):
+                transport.send(message)
+            assert_safe_send_error(caught, expected)
+
+        for method_name, raised, expected in session_cases:
+            client = MagicMock()
+            client.__enter__.return_value = client
+            client.__exit__.return_value = False
+            getattr(client, method_name).side_effect = raised
+            with (
+                self.subTest(phase=method_name, expected=expected),
+                patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+                patch("email_smtp.smtplib.SMTP", return_value=client),
+                self.assertRaises(email_smtp.SmtpSendError) as caught,
+            ):
+                transport.send(message)
+            assert_safe_send_error(caught, expected)
 
     def test_resend_test_sender_requires_explicit_nonproduction_environment(self):
         settings = email_smtp.SmtpSettings(

@@ -2439,7 +2439,11 @@ def forgot_password(
             email_sender.send_password_reset(to_email=email, token=token)
         else:
             email_sender.send_email_verification(to_email=email, token=token)
-    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError):
+    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError) as exc:
+        _log_password_recovery_diagnostic(
+            "smtp_delivery",
+            email_smtp.smtp_failure_reason(exc),
+        )
         store = password_reset_store if email_verified else email_verification_store
         _discard_unsent_token(store, token)
         return _password_reset_generic_response()
@@ -2684,7 +2688,11 @@ def verify_reset_email(
             email_sender.send_password_reset(to_email=email, token=token)
         else:
             _discard_unsent_token(password_reset_store, token)
-    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError):
+    except (email_smtp.SmtpConfigError, email_smtp.SmtpSendError) as exc:
+        _log_password_recovery_diagnostic(
+            "smtp_delivery",
+            email_smtp.smtp_failure_reason(exc),
+        )
         _discard_unsent_token(password_reset_store, token)
     except SQLAlchemyError as exc:
         _discard_unsent_token(password_reset_store, token)
