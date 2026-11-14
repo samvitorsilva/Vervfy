@@ -11,7 +11,6 @@ env/
 # Secrets
 .env
 .env.*
-!.env.example
 
 # Vervfy user/library data
 /app.js
@@ -37,7 +36,6 @@ Thumbs.db
 *.swo
 
 # Additional security exclusions
-!.env.*.example
 *.pem
 *.key
 data/.secret_key
@@ -47,3 +45,7 @@ web/blob-report/
 web/.playwright/
 gitleaks-report.json
 gitleaks-*.json
+
+# Never track environment example files
+.env.example
+web/.env.example
