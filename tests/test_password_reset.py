@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import errno
 import hashlib
+import json
 import shutil
 import smtplib
 import socket
@@ -13,9 +15,11 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import redis
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
@@ -1533,7 +1537,7 @@ class EmailSenderTests(unittest.TestCase):
         self.assertNotIn(token, joined)
         self.assertNotIn("user@example.test", joined)
         self.assertNotIn("synthetic SMTP failure", joined)
-        self.assertIn("smtp_reason=authentication_failure", joined)
+        self.assertIn("email_reason=authentication_failure", joined)
 
     def test_classify_smtp_failure_categories(self):
         cases = (
@@ -1688,6 +1692,262 @@ class EmailSenderTests(unittest.TestCase):
                 "os.environ", {"VERVFY_ENVIRONMENT": environment}, clear=True
             ):
                 settings.require_ready()
+
+    def test_email_transport_selection_defaults_to_smtp(self):
+        with patch.dict("os.environ", {}, clear=True):
+            transport = email_smtp.build_default_transport()
+        self.assertIsInstance(transport, email_smtp.SmtpTransport)
+
+        with patch.dict("os.environ", {"EMAIL_TRANSPORT": "mailjet_api"}, clear=True):
+            transport = email_smtp.build_default_transport()
+        self.assertIsInstance(transport, email_smtp.MailjetApiTransport)
+
+        with patch.dict("os.environ", {"EMAIL_TRANSPORT": "bogus"}, clear=True):
+            transport = email_smtp.build_default_transport()
+        with self.assertRaises(email_smtp.SmtpConfigError) as caught:
+            transport.send(EmailMessage())
+        self.assertEqual(caught.exception.reason, email_smtp.SMTP_REASON_NOT_CONFIGURED)
+
+
+class MailjetApiTransportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = email_smtp.MailjetSettings(
+            api_key="mailjet-api-key-secret",
+            secret_key="mailjet-secret-key-secret",
+            mail_from="Vervfy <vervfy.dev@proton.me>",
+        )
+        self.message = email_smtp.build_password_reset_message(
+            to_email="user@example.test",
+            reset_url="https://vervfy-one.vercel.app/reset-password#token=reset-token-secret",
+            mail_from="Vervfy <vervfy.dev@proton.me>",
+        )
+        self.sensitive = (
+            "mailjet-api-key-secret",
+            "mailjet-secret-key-secret",
+            "user@example.test",
+            "reset-token-secret",
+            "vervfy.dev@proton.me",
+            "https://vervfy-one.vercel.app/reset-password#token=reset-token-secret",
+        )
+
+    def _client(self, handler) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(handler), verify=True)
+
+    def _assert_safe_error(self, caught, expected: str) -> None:
+        self.assertEqual(caught.exception.reason, expected)
+        self.assertEqual(str(caught.exception), "Could not send email")
+        serialized = repr(caught.exception)
+        for secret in self.sensitive:
+            self.assertNotIn(secret, serialized)
+
+    def test_success_requires_http_acceptance_and_message_status(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                201,
+                json={
+                    "Messages": [
+                        {
+                            "Status": "success",
+                            "To": [{"Email": "user@example.test", "MessageID": 1}],
+                        }
+                    ]
+                },
+            )
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True):
+            transport.send(self.message)
+
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(str(request.url), email_smtp.MAILJET_SEND_URL)
+        auth = request.headers["Authorization"]
+        self.assertTrue(auth.startswith("Basic "))
+        decoded = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+        self.assertEqual(
+            decoded,
+            "mailjet-api-key-secret:mailjet-secret-key-secret",
+        )
+        payload = json.loads(request.content.decode("utf-8"))
+        self.assertEqual(payload["Messages"][0]["From"]["Email"], "vervfy.dev@proton.me")
+        self.assertEqual(payload["Messages"][0]["To"][0]["Email"], "user@example.test")
+        self.assertIn("TextPart", payload["Messages"][0])
+        self.assertIn("HTMLPart", payload["Messages"][0])
+        self.assertIn("reset-token-secret", payload["Messages"][0]["TextPart"])
+
+    def test_message_rejection_status_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"Messages": [{"Status": "error", "Errors": [{"ErrorCode": "mj-001"}]}]},
+            )
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+            self.assertRaises(email_smtp.SmtpSendError) as caught,
+        ):
+            transport.send(self.message)
+        self._assert_safe_error(caught, email_smtp.SMTP_REASON_MESSAGE_REJECTED)
+
+    def test_authentication_failure(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"ErrorMessage": "API key authentication failed"})
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+            self.assertRaises(email_smtp.SmtpSendError) as caught,
+        ):
+            transport.send(self.message)
+        self._assert_safe_error(caught, email_smtp.SMTP_REASON_AUTHENTICATION_FAILURE)
+
+    def test_rate_limited(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, text="rate limit exceeded for mailjet-api-key-secret")
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+            self.assertRaises(email_smtp.SmtpSendError) as caught,
+        ):
+            transport.send(self.message)
+        self._assert_safe_error(caught, email_smtp.SMTP_REASON_RATE_LIMITED)
+
+    def test_timeout_is_not_retried(self):
+        calls = {"count": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["count"] += 1
+            raise httpx.TimeoutException("timed out contacting api.mailjet.com")
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+            self.assertRaises(email_smtp.SmtpSendError) as caught,
+        ):
+            transport.send(self.message)
+        self.assertEqual(calls["count"], 1)
+        self._assert_safe_error(caught, email_smtp.SMTP_REASON_CONNECTION_TIMEOUT)
+
+    def test_malformed_response(self):
+        cases = (
+            httpx.Response(200, text="not-json"),
+            httpx.Response(200, json={"Messages": []}),
+            httpx.Response(200, json={"Messages": [{"Status": "weird"}]}),
+            httpx.Response(200, json={"ok": True}),
+        )
+        for response in cases:
+            with self.subTest(body=response.content):
+
+                def handler(
+                    request: httpx.Request, value: httpx.Response = response
+                ) -> httpx.Response:
+                    return value
+
+                transport = email_smtp.MailjetApiTransport(
+                    self.settings, client=self._client(handler)
+                )
+                with (
+                    patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+                    self.assertRaises(email_smtp.SmtpSendError) as caught,
+                ):
+                    transport.send(self.message)
+                self._assert_safe_error(caught, email_smtp.SMTP_REASON_MALFORMED_RESPONSE)
+
+    def test_privacy_logs_omit_secrets_addresses_tokens_and_provider_bodies(self):
+        token = "privacy-token-do-not-log"
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                401,
+                json={
+                    "ErrorMessage": (
+                        "auth failed for mailjet-api-key-secret sending to user@example.test"
+                    )
+                },
+            )
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        sender = email_smtp.EmailSender(transport)
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "VERVFY_EMAIL_FROM": "vervfy.dev@proton.me",
+                    "FRONTEND_URL": "https://vervfy-one.vercel.app",
+                    "VERVFY_ENVIRONMENT": "test",
+                    "EMAIL_TRANSPORT": "mailjet_api",
+                },
+                clear=True,
+            ),
+            self.assertLogs("vervfy.email", level="WARNING") as captured,
+            self.assertRaises(email_smtp.SmtpSendError),
+        ):
+            sender.send_password_reset(to_email="user@example.test", token=token)
+
+        joined = "\n".join(captured.output)
+        for secret in (
+            token,
+            "user@example.test",
+            "mailjet-api-key-secret",
+            "mailjet-secret-key-secret",
+            "auth failed",
+            "https://vervfy-one.vercel.app",
+        ):
+            self.assertNotIn(secret, joined)
+        self.assertIn("email_reason=authentication_failure", joined)
+
+    def test_mailjet_does_not_fall_back_to_smtp(self):
+        smtp_calls = {"count": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, json={"ErrorMessage": "upstream failure"})
+
+        transport = email_smtp.MailjetApiTransport(
+            self.settings, client=self._client(handler)
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "test"}, clear=True),
+            patch.object(
+                email_smtp.SmtpTransport,
+                "send",
+                side_effect=lambda message: smtp_calls.__setitem__(
+                    "count", smtp_calls["count"] + 1
+                ),
+            ),
+            self.assertRaises(email_smtp.SmtpSendError) as caught,
+        ):
+            transport.send(self.message)
+        self.assertEqual(smtp_calls["count"], 0)
+        self._assert_safe_error(caught, email_smtp.SMTP_REASON_PROVIDER_ERROR)
+
+    def test_production_mailjet_requires_credentials(self):
+        settings = email_smtp.MailjetSettings(
+            api_key="",
+            secret_key="",
+            mail_from="vervfy.dev@proton.me",
+        )
+        with (
+            patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "production"}, clear=True),
+            self.assertRaises(email_smtp.SmtpConfigError),
+        ):
+            settings.require_ready()
 
 
 class _FakeMailer:

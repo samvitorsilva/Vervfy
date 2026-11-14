@@ -54,6 +54,12 @@ services:
         sync: false
       - key: GOOGLE_IDENTITY_LOOKUP_DATABASE_URL
         sync: false
+      # Password recovery mail (set in the Render dashboard secret store; do not
+      # commit credentials). Render Free blocks outbound SMTP :587, so use:
+      # EMAIL_TRANSPORT=mailjet_api
+      # VERVFY_MAILJET_API_KEY / VERVFY_MAILJET_SECRET_KEY / VERVFY_EMAIL_FROM
+      # VERVFY_PASSWORD_RECOVERY_ENABLED=0 until live delivery is verified.
+      # FRONTEND_URL must be the public HTTPS frontend origin.
 
   - type: web
     name: vervfy-next
