@@ -438,7 +438,7 @@ class ProviderPostgresTests(unittest.TestCase):
         """)
         self.sql('SET LOCAL ROLE migration_owner')
         with self.assertRaisesRegex(
-            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+            RuntimeError, 'Unexpected Supabase-managed membership options for vervfy_identity_lookup'
         ), Operations.context(MigrationContext.configure(self.connection)):
             self.lookup_migration.upgrade()
         self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
@@ -453,7 +453,7 @@ class ProviderPostgresTests(unittest.TestCase):
         """)
         self.sql('SET LOCAL ROLE migration_owner')
         with self.assertRaisesRegex(
-            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+            RuntimeError, 'Unexpected Supabase-managed membership options for vervfy_identity_lookup'
         ), Operations.context(MigrationContext.configure(self.connection)):
             self.lookup_migration.upgrade()
         self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())
@@ -468,7 +468,7 @@ class ProviderPostgresTests(unittest.TestCase):
         """)
         self.sql('SET LOCAL ROLE migration_owner')
         with self.assertRaisesRegex(
-            RuntimeError, 'Unexpected membership graph for vervfy_identity_lookup'
+            RuntimeError, 'Unexpected Supabase-managed membership options for vervfy_identity_lookup'
         ), Operations.context(MigrationContext.configure(self.connection)):
             self.lookup_migration.upgrade()
         self.assertIsNone(self.sql("SELECT to_regnamespace('vervfy_auth')").scalar())

@@ -74,25 +74,25 @@ class ArtistPhotoApiTests(unittest.TestCase):
         )
 
     def test_upload_stores_user_photo_in_private_supabase_storage(self) -> None:
-        uploaded_objects = []
+        managed_path = "artist-photos/artist-user-a/vervfytestartist/unique.jpg"
         with (
             patch.object(server.audio_store, "enabled", return_value=True),
-            patch.object(server.audio_store, "upload", side_effect=lambda *args: uploaded_objects.append(args)),
+            patch.object(server.storage_lifecycle, "upload_bytes", return_value=managed_path) as upload,
+            patch.object(server.audio_store, "upload") as legacy_upload,
         ):
             response = self.upload(image_bytes())
 
         self.assertEqual(response.status_code, 200, response.text)
         stored = self.photos[("artist-user-a", "vervfytestartist")]
         self.assertEqual(stored["source"], "user")
-        self.assertEqual(stored["jpeg_data"], None)
-        self.assertTrue(
-            str(stored["storage_path"]).startswith(
-                "artist-photos/artist-user-a/vervfytestartist/"
-            )
-        )
-        self.assertTrue(str(stored["storage_path"]).endswith(".jpg"))
-        self.assertEqual(len(uploaded_objects), 1)
-        self.assertEqual(uploaded_objects[0][2], "image/jpeg")
+        self.assertIsNone(stored["jpeg_data"])
+        self.assertEqual(stored["storage_path"], managed_path)
+        upload.assert_called_once()
+        args = upload.call_args.args
+        self.assertEqual(args[:2], ("artist-user-a", "artist-photo"))
+        self.assertIsInstance(args[2], bytes)
+        self.assertTrue(args[2].startswith(b"\xff\xd8"))
+        legacy_upload.assert_not_called()
 
     def test_storage_photo_is_redirected_directly_to_supabase(self) -> None:
         self.photos[("artist-user-a", "vervfytestartist")] = {

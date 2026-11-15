@@ -17,6 +17,9 @@ EXCLUDED_PARTS = {
     "node_modules",
     "tests",
     "test-results",
+    "phase4-cleanup-remediation",
+    "phase4a-retry-limits",
+    "reports",
 }
 SOURCE_SUFFIXES = {
     ".css",
@@ -61,6 +64,8 @@ ALLOWED_EXTERNAL_HOSTS = {
     "tidelift.com",
     "theaudiodb.com",
     "vervfy.onrender.com",
+    "vervfy-staging-api.onrender.com",
+    "vervfy-staging-web.onrender.com",
     "www.josephobrienmusic.com",
     "www.mielsanmarcos.org",
     "www.stringsandheart.com",
@@ -77,6 +82,7 @@ ALLOWED_EXTERNAL_HOSTS = {
     "wikipedia.org",
     "vervfy.invalid",
     "127.0.0.1",
+    "api.mailjet.com",
 }
 URL_HOST = re.compile(r"https?://([A-Za-z0-9._-]+)", re.IGNORECASE)
 FORBIDDEN_CATALOG_HOSTS = (
