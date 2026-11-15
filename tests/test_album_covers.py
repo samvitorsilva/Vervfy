@@ -4,7 +4,7 @@ import os
 import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker, undefer
@@ -169,32 +169,27 @@ class AlbumCoverTests(unittest.TestCase):
         )
         self.assertIsNone(album_library.set_album_user_cover("missing", b"cover"))
 
-    def test_custom_track_cover_uses_user_scoped_storage_path(self) -> None:
+    def test_custom_track_cover_uses_managed_immutable_storage_path(self) -> None:
         album_library = library.Library("album-user-a")
+        managed_path = "covers/album-user-a/managed/unique-cover.jpg"
         with (
             patch.object(library.audio_store, "enabled", return_value=True),
-            patch.object(library.audio_store, "upload") as upload,
+            patch.object(library.storage_lifecycle, "upload_bytes", return_value=managed_path) as upload,
+            patch.object(library.storage_lifecycle, "bound_transaction"),
         ):
             track = album_library.set_user_cover("placeholder", b"normalized-jpeg")
 
         self.assertEqual(track.cover_source, "user")
-        self.assertEqual(track.cover_path, "covers/album-user-a/placeholder.jpg")
-        upload.assert_called_once_with(
-            "covers/album-user-a/placeholder.jpg",
-            b"normalized-jpeg",
-            "image/jpeg",
-        )
+        self.assertEqual(track.cover_path, managed_path)
+        upload.assert_called_once_with("album-user-a", "track-cover", b"normalized-jpeg")
         with self.sessions() as session:
             row = session.scalar(
                 select(TrackRecord)
                 .options(undefer(TrackRecord.cover_data))
-                .where(
-                    TrackRecord.id == "placeholder",
-                    TrackRecord.user_id == "album-user-a",
-                )
+                .where(TrackRecord.id == "placeholder", TrackRecord.user_id == "album-user-a")
             )
         self.assertIsNone(row.cover_data)
-        self.assertEqual(row.cover_path, "covers/album-user-a/placeholder.jpg")
+        self.assertEqual(row.cover_path, managed_path)
 
     def test_removing_track_preserves_a_cover_shared_with_other_tracks(self) -> None:
         with self.sessions() as session:
@@ -210,7 +205,7 @@ class AlbumCoverTests(unittest.TestCase):
         with patch.object(library.audio_store, "delete_quietly") as delete:
             self.assertTrue(album_library.remove("placeholder"))
 
-        self.assertEqual(delete.call_args_list, [call(None)])
+        delete.assert_not_called()
         with self.sessions() as session:
             remaining = session.get(
                 TrackRecord,

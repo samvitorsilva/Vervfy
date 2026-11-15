@@ -172,7 +172,7 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(request.session, {})
         is_valid.assert_not_called()
 
-    def test_account_deletion_removes_all_user_storage_objects(self) -> None:
+    def test_account_deletion_defers_physical_storage_cleanup(self) -> None:
         user_id = "storage-cleanup-user"
         session = MagicMock()
         session.scalar = lambda *_args, **_kwargs: user_id
@@ -186,12 +186,6 @@ class SessionStoreTests(unittest.TestCase):
             session={"sid": "active"},
             app=SimpleNamespace(state=SimpleNamespace(is_first_account=False)),
         )
-        storage_paths = [
-            f"{user_id}/track.mp3",
-            f"covers/{user_id}/track.jpg",
-            f"artist-photos/{user_id}/artist/photo.jpg",
-            f"{user_id}/.staging/upload.mp3",
-        ]
 
         with (
             patch.object(server, "tenant_session", return_value=nullcontext(session)),
@@ -210,8 +204,8 @@ class SessionStoreTests(unittest.TestCase):
                 {"id": user_id, "password_hash": "hash"},
             )
 
-        self.assertEqual(result, {"ok": True})
-        delete_many.assert_called_once_with(storage_paths)
+        self.assertEqual(result, {"ok": True, "storage_cleanup": "pending"})
+        delete_many.assert_not_called()
 
     def test_account_deletion_removes_account_rows_without_relying_on_cascades(self) -> None:
         user_id = "delete-integration-user"
@@ -314,12 +308,6 @@ class SessionStoreTests(unittest.TestCase):
                 session={"sid": "active"},
                 app=SimpleNamespace(state=SimpleNamespace(is_first_account=False)),
             )
-            expected_paths = [
-                f"{user_id}/track.mp3",
-                f"covers/{user_id}/track.jpg",
-                f"artist-photos/{user_id}/artist/photo.jpg",
-                f"{user_id}/.staging/upload.mp3",
-            ]
             with (
                 patch.object(server, "tenant_session", side_effect=lambda _user_id: sessions()),
                 patch.object(server, "verify_current_password"),
@@ -337,10 +325,10 @@ class SessionStoreTests(unittest.TestCase):
                     {"id": user_id, "password_hash": "hash"},
                 )
 
-            self.assertEqual(result, {"ok": True})
+            self.assertEqual(result, {"ok": True, "storage_cleanup": "pending"})
             revoke_user.assert_called_once_with(user_id)
             self.assertEqual(request.session, {})
-            delete_many.assert_called_once_with(expected_paths)
+            delete_many.assert_not_called()
             with sessions() as session:
                 expected_counts = {
                     User: 1,
@@ -395,7 +383,7 @@ class SessionStoreTests(unittest.TestCase):
         tenant_session.assert_not_called()
         delete_many.assert_not_called()
 
-    def test_account_deletion_reports_database_failure_after_storage_cleanup(self) -> None:
+    def test_account_deletion_database_failure_never_deletes_storage(self) -> None:
         user_id = "partial-delete-user"
         session = MagicMock()
         session.scalar.return_value = user_id
@@ -426,7 +414,7 @@ class SessionStoreTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIn("sign in again and retry deletion", raised.exception.detail)
-        delete_many.assert_called_once_with([])
+        delete_many.assert_not_called()
         session.commit.assert_called_once()
         self.assertEqual(request.session, {"sid": "active"})
 

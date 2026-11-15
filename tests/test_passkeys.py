@@ -487,7 +487,7 @@ def test_migration_graph_is_additive():
     from alembic.script import ScriptDirectory
 
     graph = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert graph.get_heads() == ["0028_webauthn_enrollment"]
+    assert graph.get_heads() == ["0031_cleanup_retry_limits"]
     assert (
         graph.get_revision("0027_webauthn_foundation").down_revision
         == "0026_application_runtime_grants"
