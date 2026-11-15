@@ -189,20 +189,179 @@ def validate_migration_chain() -> None:
         raise MigrationBlocked("Local Alembic history is not a single linear chain")
 
 
+# Safe preflight categories for storage role-graph gaps versus migration 0029.
+ROLE_GRAPH_CATEGORY_CAPABILITY_ATTRIBUTES = "capability_attributes"
+ROLE_GRAPH_CATEGORY_APP_RUNTIME_ATTRIBUTES = "app_runtime_attributes"
+ROLE_GRAPH_CATEGORY_CAPABILITY_MEMBERSHIPS = "capability_memberships"
+ROLE_GRAPH_CATEGORY_APP_RUNTIME_MEMBERSHIPS = "app_runtime_memberships"
+ROLE_GRAPH_CATEGORY_STORAGE_MEMBERSHIP_OPTIONS = "storage_membership_options"
+ROLE_GRAPH_CATEGORY_EFFECTIVE_PRIVILEGE_INHERITANCE = (
+    "effective_privilege_inheritance"
+)
+ROLE_GRAPH_CATEGORY_OWNER_SET_CAPABILITY = "owner_set_capability"
+ROLE_GRAPH_CATEGORY_PREEXISTING_PRIVILEGES = "preexisting_privileges"
+APP_RUNTIME = "app_runtime"
+
+
+def _load_storage_lifecycle_migration():
+    """Load migration 0029 helpers without importing Alembic side effects."""
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    path = ROOT / "alembic/versions/0029_storage_lifecycle.py"
+    spec = spec_from_file_location("storage_lifecycle_migration_preflight", path)
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _block_role_graph(category: str, detail: str) -> None:
+    """Fail closed with a categorized, credential-free role-graph diagnostic."""
+    raise MigrationBlocked(
+        f"storage_role_graph category={category}; {detail}"
+    )
+
+
+def _check_app_runtime_attributes(connection: Connection, migration) -> object:
+    """Require the reviewed Supabase app_runtime attributes before 0029."""
+    row = connection.execute(
+        text("""
+            SELECT oid, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb,
+                   rolcreaterole, rolreplication, rolinherit
+            FROM pg_catalog.pg_roles WHERE rolname = :name
+        """),
+        {"name": APP_RUNTIME},
+    ).first()
+    try:
+        migration._validate_role_attributes(APP_RUNTIME, row, True)
+    except RuntimeError:
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_APP_RUNTIME_ATTRIBUTES,
+            "app_runtime must be LOGIN INHERIT without elevated privileges",
+        )
+    return row
+
+
+def _check_storage_membership_options(
+    connection: Connection,
+    migration,
+    *,
+    owner_oid: int,
+    executor_oid: int,
+    worker_oid: int,
+) -> None:
+    """Match migration 0029 membership-option rules, including inert postgres ADMIN."""
+    migrator_oid = connection.execute(
+        text("SELECT current_user::regrole::oid")
+    ).scalar_one()
+    postgres_oid = connection.execute(
+        text("SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'postgres'")
+    ).scalar_one_or_none()
+    owner_members = connection.execute(
+        text("""
+            SELECT member, inherit_option, set_option, admin_option
+            FROM pg_catalog.pg_auth_members WHERE roleid = :owner
+        """),
+        {"owner": owner_oid},
+    ).all()
+    if not migration._valid_storage_memberships(
+        owner_members,
+        migrator_oid,
+        postgres_oid,
+        required_inherit=False,
+        required_set=True,
+    ):
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_STORAGE_MEMBERSHIP_OPTIONS,
+            "owner membership options must allow only migration SET; "
+            "postgres may hold ADMIN only",
+        )
+    executor_members = connection.execute(
+        text("""
+            SELECT member, inherit_option, set_option, admin_option
+            FROM pg_catalog.pg_auth_members WHERE roleid = :executor
+        """),
+        {"executor": executor_oid},
+    ).all()
+    if not migration._valid_storage_memberships(
+        executor_members,
+        worker_oid,
+        postgres_oid,
+        required_inherit=True,
+        required_set=False,
+    ):
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_STORAGE_MEMBERSHIP_OPTIONS,
+            "executor membership options must allow only worker INHERIT; "
+            "postgres may hold ADMIN only",
+        )
+
+
+def _check_effective_privilege_inheritance(
+    connection: Connection,
+    *,
+    owner_oid: int,
+    executor_oid: int,
+    worker_oid: int,
+    postgres_oid: int | None,
+) -> None:
+    """Reject unexpected effective USAGE/SET on storage capability roles."""
+    unsafe = connection.execute(
+        text("""
+            SELECT 1 FROM pg_catalog.pg_roles r
+            WHERE NOT r.rolsuper
+              AND r.oid NOT IN (:owner, current_user::regrole::oid)
+              AND (:postgres IS NULL OR r.oid <> :postgres)
+              AND (
+                  pg_catalog.pg_has_role(r.oid, :owner, 'USAGE')
+                  OR pg_catalog.pg_has_role(r.oid, :owner, 'SET')
+              )
+            UNION ALL
+            SELECT 1 FROM pg_catalog.pg_roles r
+            WHERE NOT r.rolsuper
+              AND r.oid NOT IN (:executor, :worker)
+              AND (:postgres IS NULL OR r.oid <> :postgres)
+              AND (
+                  pg_catalog.pg_has_role(r.oid, :executor, 'USAGE')
+                  OR pg_catalog.pg_has_role(r.oid, :executor, 'SET')
+              )
+            LIMIT 1
+        """),
+        {
+            "owner": owner_oid,
+            "executor": executor_oid,
+            "worker": worker_oid,
+            "postgres": postgres_oid,
+        },
+    ).first()
+    if unsafe:
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_EFFECTIVE_PRIVILEGE_INHERITANCE,
+            "unexpected effective USAGE or SET on storage capability roles",
+        )
+
+
 def _check_role_graph(connection: Connection, migration_user: str) -> None:
-    """Validate the restricted storage lifecycle role configuration."""
+    """Validate the restricted storage lifecycle role configuration.
+
+    Aligns read-only preflight with migration 0029 `_roles()` checks that were
+    previously absent: app_runtime attributes/memberships, migration membership
+    options, and effective privilege inheritance — while preserving the existing
+    TLS/project/authorization path and grantor-aware Supabase membership asserts.
+    """
     from supabase_role_memberships import (
         assert_member_memberships,
         assert_role_memberships,
     )
 
-    owner = "vervfy_storage_lifecycle_owner"
-    executor = "vervfy_storage_cleanup"
-    worker = "storage_cleanup_worker"
+    migration = _load_storage_lifecycle_migration()
+    owner = migration.OWNER
+    executor = migration.EXECUTOR
+    worker = migration.WORKER
 
     roles = connection.execute(
         text("""
-            SELECT rolname, rolcanlogin, rolsuper, rolbypassrls,
+            SELECT oid, rolname, rolcanlogin, rolsuper, rolbypassrls,
                    rolcreatedb, rolcreaterole, rolreplication, rolinherit
             FROM pg_catalog.pg_roles
             WHERE rolname IN (:owner, :executor, :worker)
@@ -214,37 +373,108 @@ def _check_role_graph(connection: Connection, migration_user: str) -> None:
 
     for role_name in (owner, executor):
         role = by_name.get(role_name)
-        if role is None or any(role[1:]):
-            raise MigrationBlocked(
-                f"Restricted storage role {role_name} is not ready"
+        if role is None or any(
+            (
+                role.rolcanlogin,
+                role.rolsuper,
+                role.rolbypassrls,
+                role.rolcreatedb,
+                role.rolcreaterole,
+                role.rolreplication,
+                role.rolinherit,
+            )
+        ):
+            _block_role_graph(
+                ROLE_GRAPH_CATEGORY_CAPABILITY_ATTRIBUTES,
+                f"Restricted storage role {role_name} is not ready",
             )
 
     login = by_name.get(worker)
     if (
         login is None
         or not login.rolcanlogin
-        or any(login[index] for index in range(2, 8))
+        or any(
+            (
+                login.rolsuper,
+                login.rolbypassrls,
+                login.rolcreatedb,
+                login.rolcreaterole,
+                login.rolreplication,
+                login.rolinherit,
+            )
+        )
     ):
-        raise MigrationBlocked("Restricted storage cleanup login is not ready")
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_CAPABILITY_ATTRIBUTES,
+            "Restricted storage cleanup login is not ready",
+        )
 
-    assert_role_memberships(
-        connection,
-        owner,
-        [(migration_user, "postgres", False, False, True)],
-    )
-    assert_member_memberships(connection, owner, [])
+    _check_app_runtime_attributes(connection, migration)
 
-    assert_role_memberships(
-        connection,
-        executor,
-        [(worker, "postgres", False, True, False)],
-    )
-    assert_role_memberships(connection, worker, [])
+    try:
+        assert_role_memberships(
+            connection,
+            owner,
+            [(migration_user, "postgres", False, False, True)],
+        )
+        assert_member_memberships(connection, owner, [])
 
-    assert_member_memberships(
+        assert_role_memberships(
+            connection,
+            executor,
+            [(worker, "postgres", False, True, False)],
+        )
+        # Migration 0029 rejects capability roles that themselves hold memberships.
+        assert_member_memberships(connection, executor, [])
+        # The only permitted member of the worker role is an inert
+        # postgres ADMIN grant (no INHERIT and no SET).
+        unexpected_worker_member = connection.execute(
+            text("""
+                SELECT 1
+                FROM pg_catalog.pg_auth_members AS m
+                JOIN pg_catalog.pg_roles AS granted
+                  ON granted.oid = m.roleid
+                JOIN pg_catalog.pg_roles AS member
+                  ON member.oid = m.member
+                WHERE granted.rolname = :worker
+                  AND NOT (
+                      member.rolname = 'postgres'
+                      AND m.admin_option
+                      AND NOT m.inherit_option
+                      AND NOT m.set_option
+                  )
+                LIMIT 1
+            """),
+            {"worker": worker},
+        ).first()
+        if unexpected_worker_member:
+            raise RuntimeError("Unexpected worker role membership")
+
+        assert_member_memberships(
+            connection,
+            worker,
+            [(executor, "postgres", False, True, False)],
+        )
+    except RuntimeError:
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_CAPABILITY_MEMBERSHIPS,
+            "reviewed capability membership graph is not satisfied",
+        )
+
+    try:
+        assert_member_memberships(connection, APP_RUNTIME, [])
+    except RuntimeError:
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_APP_RUNTIME_MEMBERSHIPS,
+            "app_runtime must not hold role memberships before 0029",
+        )
+
+    _check_storage_membership_options(
         connection,
-        worker,
-        [(executor, "postgres", False, True, False)],
+        migration,
+        owner_oid=by_name[owner].oid,
+        executor_oid=by_name[executor].oid,
+        worker_oid=by_name[worker].oid,
     )
 
     can_set_owner = connection.execute(
@@ -253,8 +483,33 @@ def _check_role_graph(connection: Connection, migration_user: str) -> None:
     ).scalar_one()
 
     if not can_set_owner:
-        raise MigrationBlocked(
-            "Migration login cannot SET ROLE to storage lifecycle owner"
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_OWNER_SET_CAPABILITY,
+            "Migration login cannot SET ROLE to storage lifecycle owner",
+        )
+
+    _check_effective_privilege_inheritance(
+        connection,
+        owner_oid=by_name[owner].oid,
+        executor_oid=by_name[executor].oid,
+        worker_oid=by_name[worker].oid,
+        postgres_oid=connection.execute(
+            text("SELECT oid FROM pg_catalog.pg_roles WHERE rolname='postgres'")
+        ).scalar_one_or_none(),
+    )
+
+    # Read-only privilege scan: accept only the reviewed Supabase extension ACL
+    # exception; reject unrelated grants and inherited dashboard_user access.
+    try:
+        migration._fresh_privileges(
+            connection,
+            (by_name[owner].oid, by_name[executor].oid, by_name[worker].oid),
+        )
+    except RuntimeError:
+        _block_role_graph(
+            ROLE_GRAPH_CATEGORY_PREEXISTING_PRIVILEGES,
+            "storage capability has preexisting object privileges, "
+            "ownership, routines or default ACLs",
         )
 
 
@@ -405,17 +660,22 @@ def run_check(target: ProductionTarget) -> None:
 
 def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
     engine = _engine(target)
+    stage = "connection"
     try:
         with engine.connect() as connection:
+            stage = "advisory_lock"
             connection.execute(
                 text("SELECT pg_catalog.pg_advisory_lock(:lock_id)"),
                 {"lock_id": MIGRATION_LOCK_ID},
             )
             connection.commit()
 
+            stage = "preflight"
             preflight(connection, target)
+            stage = "session_setup"
             connection.exec_driver_sql("SET search_path TO public")
             connection.commit()
+            stage = "authorization"
             validate_authorization(expires_at)
 
             from unittest.mock import patch
@@ -429,14 +689,17 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
             config.attributes["connection"] = connection
 
             validate_authorization(expires_at)
+            stage = "migration_chain"
             validate_migration_chain()
 
+            stage = "alembic_upgrade"
             with patch.dict(
                 os.environ,
                 {"DATABASE_URL": target.url.render_as_string(hide_password=False)},
             ):
                 command.upgrade(config, TARGET_REVISION)
 
+            stage = "final_revision"
             with connection.begin():
                 final_revision = connection.execute(
                     text("SELECT version_num FROM public.alembic_version")
@@ -445,6 +708,9 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
                     raise MigrationBlocked(
                         "Alembic completed without recording the exact target revision"
                     )
+    except Exception as exc:
+        exc.add_note(f"vervfy_migration_stage={stage}")
+        raise
     finally:
         engine.dispose()
 
@@ -490,9 +756,54 @@ def main(argv: list[str] | None = None) -> int:
     except MigrationBlocked as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - redact unexpected errors
+        sqlstate = None
+        current = exc
+        visited = set()
+
+        while current is not None and id(current) not in visited:
+            visited.add(id(current))
+            candidate = getattr(current, "sqlstate", None)
+            if not isinstance(candidate, str):
+                candidate = getattr(current, "pgcode", None)
+
+            if (
+                isinstance(candidate, str)
+                and len(candidate) == 5
+                and candidate.isascii()
+                and candidate.isalnum()
+            ):
+                sqlstate = candidate
+                break
+
+            current = (
+                getattr(current, "orig", None)
+                or getattr(current, "__cause__", None)
+                or getattr(current, "__context__", None)
+            )
+
+        allowed_stages = {
+            "connection",
+            "advisory_lock",
+            "preflight",
+            "session_setup",
+            "authorization",
+            "migration_chain",
+            "alembic_upgrade",
+            "final_revision",
+        }
+        stage = "unavailable"
+        for note in getattr(exc, "__notes__", ()):
+            if note.startswith("vervfy_migration_stage="):
+                candidate = note.removeprefix("vervfy_migration_stage=")
+                if candidate in allowed_stages:
+                    stage = candidate
+
         print(
             "FAILED: production migration stopped; "
-            f"{type(exc).__name__}; details omitted to protect connection data",
+            f"stage={stage}; "
+            f"error_type={type(exc).__name__}; "
+            f"sqlstate={sqlstate or 'unavailable'}; "
+            "details omitted to protect connection data",
             file=sys.stderr,
         )
     return 1

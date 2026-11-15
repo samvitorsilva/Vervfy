@@ -28,8 +28,60 @@ def _fresh_privileges(bind, role_ids):
               AND (c.relowner=:role OR
                 CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege(:role,c.oid,'USAGE,SELECT,UPDATE')
                      WHEN c.relkind IN ('r','p','v','m','f') THEN
-                       pg_catalog.has_table_privilege(:role,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-                       OR pg_catalog.has_any_column_privilege(:role,c.oid,'SELECT,INSERT,UPDATE,REFERENCES')
+                       (
+                         pg_catalog.has_table_privilege(:role,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                         OR pg_catalog.has_any_column_privilege(:role,c.oid,'SELECT,INSERT,UPDATE,REFERENCES')
+                       )
+                       AND NOT (
+                         n.nspname='extensions'
+                         AND c.relname IN ('pg_stat_statements','pg_stat_statements_info')
+                         AND c.relkind='v'
+                         AND c.relowner<>:role
+                         AND c.relacl IS NOT NULL
+                         AND EXISTS (
+                           SELECT 1 FROM pg_catalog.aclexplode(c.relacl) acl
+                           WHERE acl.grantee=0
+                             AND acl.privilege_type='SELECT'
+                             AND NOT acl.is_grantable
+                         )
+                         AND NOT EXISTS (
+                           SELECT 1 FROM pg_catalog.aclexplode(c.relacl) acl
+                           LEFT JOIN pg_catalog.pg_roles grantee
+                             ON grantee.oid=acl.grantee
+                           WHERE acl.grantee<>0
+                             AND acl.grantee<>c.relowner
+                             AND NOT (
+                               grantee.rolname='dashboard_user'
+                               AND acl.grantor=c.relowner
+                               AND NOT acl.is_grantable
+                               AND acl.privilege_type IN (
+                                 'SELECT','INSERT','UPDATE','DELETE',
+                                 'TRUNCATE','REFERENCES','TRIGGER','MAINTAIN'
+                               )
+                               AND NOT pg_catalog.pg_has_role(
+                                 :role,acl.grantee,'USAGE'
+                               )
+                               AND NOT pg_catalog.pg_has_role(
+                                 :role,acl.grantee,'SET'
+                               )
+                             )
+                         )
+                         AND NOT EXISTS (
+                           SELECT 1 FROM pg_catalog.aclexplode(c.relacl) acl
+                           WHERE acl.grantee=0
+                             AND acl.privilege_type<>'SELECT'
+                         )
+                         AND NOT EXISTS (
+                           SELECT 1 FROM pg_catalog.pg_attribute a
+                           WHERE a.attrelid=c.oid
+                             AND a.attnum>0
+                             AND NOT a.attisdropped
+                             AND a.attacl IS NOT NULL
+                         )
+                         AND NOT pg_catalog.has_table_privilege(
+                           :role,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+                         )
+                       )
                      ELSE false END)
             UNION ALL
             SELECT 1 FROM pg_catalog.pg_namespace n
@@ -135,7 +187,18 @@ def _roles(bind):
         sa.text("""
         SELECT 1 FROM pg_catalog.pg_auth_members
         WHERE member=:owner OR member=:executor
-           OR (roleid=:worker)
+           OR (
+               roleid=:worker
+               AND NOT (
+                   member = (
+                       SELECT oid FROM pg_catalog.pg_roles
+                       WHERE rolname='postgres'
+                   )
+                   AND admin_option
+                   AND NOT inherit_option
+                   AND NOT set_option
+               )
+           )
            OR (member=:worker AND roleid<>:executor)
            OR member=:runtime
         LIMIT 1
@@ -187,14 +250,16 @@ def _roles(bind):
         sa.text("""
         SELECT 1 FROM pg_catalog.pg_roles r
         WHERE NOT r.rolsuper AND r.oid NOT IN (:owner, current_user::regrole::oid)
+              AND (:postgres IS NULL OR r.oid <> :postgres)
           AND (pg_catalog.pg_has_role(r.oid,:owner,'USAGE') OR pg_catalog.pg_has_role(r.oid,:owner,'SET'))
         UNION ALL
         SELECT 1 FROM pg_catalog.pg_roles r
         WHERE NOT r.rolsuper AND r.oid NOT IN (:executor,:worker)
+          AND (:postgres IS NULL OR r.oid <> :postgres)
           AND (pg_catalog.pg_has_role(r.oid,:executor,'USAGE') OR pg_catalog.pg_has_role(r.oid,:executor,'SET'))
         LIMIT 1
     """),
-        {"owner": roles[OWNER], "executor": roles[EXECUTOR], "worker": roles[WORKER]},
+        {"owner": roles[OWNER], "executor": roles[EXECUTOR], "worker": roles[WORKER], "postgres": postgres_oid},
     ).first()
     if unsafe:
         raise RuntimeError("Unexpected effective storage capability membership")
