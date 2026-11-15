@@ -8,7 +8,7 @@ import shlex
 import stat
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -20,8 +20,8 @@ STAGING_PROJECT_REF = 'xgqvwqogdtktgfuubzwk'
 STAGING_HOST = 'aws-0-us-east-1.pooler.supabase.com'
 STAGING_DATABASE = 'postgres'
 STAGING_CA_SHA256 = '700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7'
-MIGRATION_HEAD = '0028_webauthn_enrollment'
-MIGRATION_COUNT = 28
+MIGRATION_HEAD = '0031_cleanup_retry_limits'
+MIGRATION_COUNT = 31
 AUTHORIZED_OPERATIONS = {'preflight', 'postflight', 'upgrade'}
 UTC_TIMESTAMP = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z')
 LOCAL_PROFILE = 'local-disposable'
@@ -487,13 +487,13 @@ def _validate_operation_approval(approval, operation, now=None):
         try:
             timestamps[key] = datetime.strptime(
                 value, '%Y-%m-%dT%H:%M:%SZ'
-            ).replace(tzinfo=timezone.utc)
+            ).replace(tzinfo=UTC)
         except ValueError:
             raise RuntimeError(f'Staging guard: invalid approval {key}') from None
 
     issued_at = timestamps['issued_at']
     expires_at = timestamps['expires_at']
-    now = datetime.now(timezone.utc) if now is None else now
+    now = datetime.now(UTC) if now is None else now
     require(now.tzinfo is not None and now.utcoffset() == timedelta(0),
             'approval validation clock must be UTC')
     require(issued_at <= now < expires_at,

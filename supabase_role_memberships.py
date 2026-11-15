@@ -73,7 +73,10 @@ def assert_role_memberships(bind, role_name, explicit_memberships):
         expected.update(managed_rows)
     # Existing production owner-only SET grant; accept exactly this optional edge.
     # Do not extend this exception to executor or login capability roles.
-    if role_name == "vervfy_identity_lookup_owner" and postgres_oid is not None:
+    if role_name in {
+        "vervfy_identity_lookup_owner",
+        "vervfy_storage_lifecycle_owner",
+    } and postgres_oid is not None:
         owner_admin_edge = (postgres_oid, postgres_oid, False, False, True)
         if owner_admin_edge in _membership_rows(bind, roleid=role_ids[role_name]):
             expected.add(owner_admin_edge)

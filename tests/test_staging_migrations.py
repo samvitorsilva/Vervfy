@@ -1,25 +1,27 @@
 """Full-chain regressions in a disposable Unix-socket-only PostgreSQL cluster."""
 import ast
 import importlib.util
+import itertools
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import sqlalchemy as sa
-from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy.exc import DBAPIError
-from unittest.mock import patch
+
+from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '0028_webauthn_enrollment'
+HEAD = '0031_cleanup_retry_limits'
 PRE_ACCOUNT_MIGRATION_HEAD = '0020_playlist_last_played'
 ACCOUNT_TABLES = {
     'users', 'tracks', 'favorites', 'playlists', 'playlist_tracks',
@@ -39,8 +41,8 @@ class MigrationChainTests(unittest.TestCase):
         script = ScriptDirectory.from_config(Config(str(ROOT / 'alembic.ini')))
         self.assertEqual(script.get_heads(), [HEAD])
         chain = list(script.walk_revisions())
-        self.assertEqual(len(chain), 28)
-        for newer, older in zip(chain, chain[1:]):
+        self.assertEqual(len(chain), 31)
+        for newer, older in itertools.pairwise(chain):
             self.assertEqual(newer.down_revision, older.revision)
         self.assertIsNone(chain[-1].down_revision)
         self.assertTrue({'0021_provider_identities', '0022_provider_identity_lookup',
@@ -97,8 +99,14 @@ class StagingPostgresTests(unittest.TestCase):
             c.exec_driver_sql('GRANT CREATE ON DATABASE postgres TO migration_owner')
             c.exec_driver_sql('ALTER SCHEMA public OWNER TO migration_owner')
             c.exec_driver_sql('REVOKE ALL ON SCHEMA public FROM PUBLIC')
-            for name in ('app_runtime', 'google_auth_lookup'):
-                c.exec_driver_sql(f'CREATE ROLE {name} LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
+            # Match production Supabase role attributes: app_runtime is
+            # LOGIN INHERIT; identity lookup is LOGIN NOINHERIT.
+            c.exec_driver_sql(
+                'CREATE ROLE app_runtime LOGIN INHERIT NOSUPERUSER NOBYPASSRLS'
+            )
+            c.exec_driver_sql(
+                'CREATE ROLE google_auth_lookup LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS'
+            )
             for name in ('vervfy_identity_lookup_owner', 'vervfy_identity_lookup'):
                 c.exec_driver_sql(f'CREATE ROLE {name} NOLOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS')
             for name in (
@@ -127,6 +135,28 @@ class StagingPostgresTests(unittest.TestCase):
                 'WITH ADMIN FALSE, INHERIT TRUE, SET FALSE'
             )
             c.exec_driver_sql('RESET ROLE')
+
+            # Storage capabilities for this disposable PostgreSQL cluster only.
+            for name, login in (
+                ('vervfy_storage_lifecycle_owner', 'NOLOGIN'),
+                ('vervfy_storage_cleanup', 'NOLOGIN'),
+                ('storage_cleanup_worker', 'LOGIN'),
+            ):
+                c.exec_driver_sql(
+                    f'CREATE ROLE {name} {login} NOINHERIT '
+                    'NOSUPERUSER NOBYPASSRLS NOCREATEDB '
+                    'NOCREATEROLE NOREPLICATION'
+                )
+
+            c.exec_driver_sql(
+                'GRANT vervfy_storage_lifecycle_owner TO migration_owner '
+                'WITH INHERIT FALSE, SET TRUE, ADMIN FALSE'
+            )
+            c.exec_driver_sql(
+                'GRANT vervfy_storage_cleanup TO storage_cleanup_worker '
+                'WITH INHERIT TRUE, SET FALSE, ADMIN FALSE'
+            )
+
         cls.migration_url = cls.url.set(username='migration_owner').render_as_string(hide_password=False)
         # Both URLs are explicit local sockets; never consult a hosted URL.
         with patch.dict(os.environ, {'DATABASE_URL': cls.migration_url, 'MIGRATION_DATABASE_URL': cls.migration_url}):

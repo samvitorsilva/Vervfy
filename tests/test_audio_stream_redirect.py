@@ -125,66 +125,59 @@ class TrackAudioRedirectTests(unittest.TestCase):
 
 
 class LazyAudioMigrationTests(unittest.TestCase):
-    def test_uploads_legacy_audio_then_saves_stable_path(self) -> None:
+    def test_uploads_legacy_audio_then_saves_managed_path(self) -> None:
         first_session = MagicMock()
         first_session.execute.return_value.one_or_none.return_value = (
-            "song.mp3",
-            None,
+            "song.mp3", None, 0,
         )
         first_session.scalar.return_value = b"audio bytes"
         second_session = MagicMock()
         second_session.execute.return_value.rowcount = 1
+        managed_path = "managed/user-a/audio/immutable-object"
 
         with (
-            patch.object(
-                library,
-                "tenant_session",
-                side_effect=[
-                    nullcontext(first_session),
-                    nullcontext(second_session),
-                ],
-            ),
-            patch.object(library.audio_store, "upload") as upload,
+            patch.object(library, "tenant_session", side_effect=[
+                nullcontext(first_session), nullcontext(second_session),
+            ]),
+            patch.object(library.storage_lifecycle, "bound_transaction"),
+            patch.object(library.storage_lifecycle, "upload_bytes", return_value=managed_path) as upload,
         ):
             path = library.Library("user-a").ensure_audio_storage("track-id")
 
-        self.assertEqual(path, "user-a/track-id.mp3")
-        upload.assert_called_once_with(
-            "user-a/track-id.mp3", b"audio bytes", "audio/mpeg"
-        )
+        self.assertEqual(path, managed_path)
+        upload.assert_called_once_with("user-a", "audio", b"audio bytes", "audio/mpeg", "mp3")
         second_session.commit.assert_called_once()
 
     def test_does_not_read_legacy_audio_when_storage_path_exists(self) -> None:
         session = MagicMock()
         session.execute.return_value.one_or_none.return_value = (
-            "song.mp3",
-            "user-a/track-id.mp3",
+            "song.mp3", "managed/user-a/audio/immutable-object", 0,
         )
-        with patch.object(
-            library, "tenant_session", return_value=nullcontext(session)
+        with (
+            patch.object(library, "tenant_session", return_value=nullcontext(session)),
+            patch.object(library.storage_lifecycle, "bound_transaction"),
+            patch.object(library.storage_lifecycle, "upload_bytes") as upload,
         ):
             path = library.Library("user-a").ensure_audio_storage("track-id")
 
-        self.assertEqual(path, "user-a/track-id.mp3")
+        self.assertEqual(path, "managed/user-a/audio/immutable-object")
         session.scalar.assert_not_called()
+        upload.assert_not_called()
 
     def test_does_not_save_path_when_upload_fails(self) -> None:
         session = MagicMock()
-        session.execute.return_value.one_or_none.return_value = ("song.mp3", None)
+        session.execute.return_value.one_or_none.return_value = ("song.mp3", None, 0)
         session.scalar.return_value = b"audio bytes"
         with (
-            patch.object(
-                library, "tenant_session", return_value=nullcontext(session)
-            ),
-            patch.object(
-                library.audio_store,
-                "upload",
-                side_effect=library.audio_store.StorageError("storage failed"),
-            ),self.assertRaises(library.audio_store.StorageError)
+            patch.object(library, "tenant_session", return_value=nullcontext(session)),
+            patch.object(library.storage_lifecycle, "bound_transaction"),
+            patch.object(library.storage_lifecycle, "upload_bytes", side_effect=library.audio_store.StorageError("storage failed")),
+            self.assertRaises(library.audio_store.StorageError),
         ):
             library.Library("user-a").ensure_audio_storage("track-id")
 
         self.assertEqual(session.execute.call_count, 1)
+        session.commit.assert_not_called()
 
 
 if __name__ == "__main__":
