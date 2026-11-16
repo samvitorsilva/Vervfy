@@ -157,6 +157,7 @@ class StorageAclInventoryTests(unittest.TestCase):
     def test_rejects_default_acl_for_capability_role(self):
         with self.assertRaisesRegex(RuntimeError, "default ACLs"):
             check(inventory_connection(defaults=(OWNER,)))
+
     def test_rejects_unexpected_effective_public_relation_privilege(self):
         extra = SimpleNamespace(
             role_name=EXECUTOR,
