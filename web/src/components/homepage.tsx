@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { lazy, Suspense, useEffect, useState } from "react";
 
-// Split the large player from the public landing page and load it alongside session verification.
+// Keep the large private player out of the public landing-page bundle.
 const LibraryApp = lazy(() => import("@/components/library-app"));
 import SiteFooter from "@/components/site-footer";
 import { useLanguage } from "@/lib/i18n";
@@ -19,9 +19,6 @@ export default function Homepage() {
   useEffect(() => {
     let active = true;
 
-    // Start downloading the player while /api/me validates the session.
-    // The player is not mounted until the server confirms authentication.
-    void import("@/components/library-app");
 
     void fetch("/api/me", { credentials: "same-origin", cache: "no-store" })
       .then((response) => {
