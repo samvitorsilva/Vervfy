@@ -6,7 +6,6 @@ Never use this to skip the storage-production migration runner.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from alembic import command
@@ -73,6 +72,18 @@ def check(connection, target) -> None:
             "SELECT to_regrole('app_runtime') IS NOT NULL"
         )).scalar_one() is not True:
             raise MigrationBlocked("Application runtime role is missing")
+        owners = connection.execute(text("""
+            SELECT c.relname, pg_catalog.pg_get_userbyid(c.relowner)
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname IN ('users', 'alembic_version')
+        """)).all()
+        if {name: owner for name, owner in owners} != {
+            "users": target.username,
+            "alembic_version": target.username,
+        }:
+            raise MigrationBlocked("Migration role must own users and alembic_version")
         permissions = connection.execute(text("""
             SELECT has_schema_privilege(current_user, 'public', 'CREATE'),
                    has_schema_privilege(current_user, 'public', 'USAGE'),
@@ -94,6 +105,16 @@ def verify_after(connection) -> None:
             "SELECT to_regclass('public.auth_sessions') IS NOT NULL"
         )).scalar_one():
             raise MigrationBlocked("Session table was not created")
+        columns = connection.execute(text("""
+            SELECT column_name, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'auth_sessions'
+        """)).all()
+        if dict(columns) != {
+            "id": "NO", "user_id": "NO",
+            "created_at": "NO", "expires_at": "NO",
+        }:
+            raise MigrationBlocked("Unexpected auth_sessions table structure")
         privileges = connection.execute(text("""
             SELECT has_table_privilege('app_runtime', 'public.auth_sessions', 'SELECT'),
                    has_table_privilege('app_runtime', 'public.auth_sessions', 'INSERT'),
