@@ -2709,7 +2709,7 @@ export default function LibraryApp() {
   function toggleRepeat() {
     const next = repeat === "off" ? "all" : repeat === "all" ? "one" : "off";
     setRepeat(next);
-    notify(t(`Repeat: ${next}`));
+    notify(t(next === "off" ? "Repeat: off" : next === "all" ? "Repeat: all" : "Repeat: one"));
   }
 
   function reorderQueue(fromIndex: number, targetIndex: number) {
