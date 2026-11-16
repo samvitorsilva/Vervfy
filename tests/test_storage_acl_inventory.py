@@ -22,26 +22,26 @@ WORKER = "storage_cleanup_worker"
 
 OWNER_FUNCTIONS = (
     "guard_namespace()",
-    "validate_namespace(uuid, text, text, text)",
-    "_has_references(text)",
-    "_queue(uuid, text)",
-    "reserve_object(text, text)",
-    "advance_upload(uuid, uuid, text)",
-    "request_cleanup(uuid)",
+    "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
+    "_has_references(p_path text)",
+    "_queue(p_object uuid, p_actor text)",
+    "reserve_object(p_kind text, p_extension text)",
+    "advance_upload(p_object uuid, p_token uuid, p_next text)",
+    "request_cleanup(p_object uuid)",
     "guard_references()",
-    "retire_candidate(uuid)",
-    "claim_cleanup(uuid)",
+    "retire_candidate(p_object uuid)",
+    "claim_cleanup(p_object uuid)",
     "claim_next_cleanup()",
-    "complete_cleanup(uuid, uuid)",
-    "retry_cleanup(uuid, uuid, text)",
+    "complete_cleanup(p_object uuid, p_token uuid)",
+    "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
 )
 EXECUTOR_FUNCTIONS = (
-    "claim_cleanup(uuid)",
+    "claim_cleanup(p_object uuid)",
     "claim_next_cleanup()",
-    "complete_cleanup(uuid, uuid)",
-    "retire_candidate(uuid)",
-    "retry_cleanup(uuid, uuid, text)",
-    "validate_namespace(uuid, text, text, text)",
+    "complete_cleanup(p_object uuid, p_token uuid)",
+    "retire_candidate(p_object uuid)",
+    "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
+    "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
 )
 
 
