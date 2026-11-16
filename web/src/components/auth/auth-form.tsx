@@ -118,6 +118,8 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
         body: JSON.stringify({ username: username.trim() }),
       });
       if (response.status === 303 || response.type === "opaqueredirect") {
+        // One-time navigation hint; /api/me still verifies the session on arrival.
+        window.sessionStorage.setItem("vervfy-just-authenticated", "1");
         window.location.assign("/");
         return;
       }
@@ -165,6 +167,8 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
       });
 
       if (response.status === 303 || response.type === "opaqueredirect") {
+        // One-time navigation hint; /api/me still verifies the session on arrival.
+        window.sessionStorage.setItem("vervfy-just-authenticated", "1");
         window.location.assign("/");
         return;
       }
