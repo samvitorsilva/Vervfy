@@ -533,7 +533,7 @@ def _check_storage_acl_inventory(
                a.is_grantable
         FROM pg_catalog.pg_namespace n
         CROSS JOIN LATERAL pg_catalog.aclexplode(
-            COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+            COALESCE(n.nspacl, pg_catalog.acldefault('n'::"char", n.nspowner))
         ) a
         JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
         WHERE r.rolname IN (:owner, :executor, :worker)
@@ -548,7 +548,7 @@ def _check_storage_acl_inventory(
             COALESCE(
                 c.relacl,
                 pg_catalog.acldefault(
-                    CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END,
+                    CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END,
                     c.relowner
                 )
             )
@@ -581,7 +581,7 @@ def _check_storage_acl_inventory(
         FROM pg_catalog.pg_proc p
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
         CROSS JOIN LATERAL pg_catalog.aclexplode(
-            COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+            COALESCE(p.proacl, pg_catalog.acldefault('f'::"char", p.proowner))
         ) a
         JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
         WHERE n.nspname = 'vervfy_storage'
