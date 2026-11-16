@@ -39,11 +39,18 @@ export default function Homepage() {
 
   if (sessionStatus === "checking") {
     return (
-      <div
-        className="homepage-page"
-        role="status"
-        aria-label={t("Loading your music library")}
-      />
+      <div className="homepage-page homepage-transition" role="status" aria-live="polite">
+        <div className="homepage-transition-inner">
+          <div className="homepage-transition-mark" aria-hidden="true">
+            <Image src="/gemini-svg.svg" alt="" width={44} height={44} priority />
+          </div>
+          <span className="homepage-transition-name">Vervfy</span>
+          <span className="homepage-transition-caption">{t("Loading your music library")}</span>
+          <div className="homepage-transition-progress" aria-hidden="true">
+            <span />
+          </div>
+        </div>
+      </div>
     );
   }
 
