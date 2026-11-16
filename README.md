@@ -1,6 +1,6 @@
 # Vervfy
 
-A self-hosted music player for the web, built with a modern design that feels unique and user-friendly.
+Your personal music player for the web, built with a modern design that feels unique and user-friendly.
 
 Upload your own files, organize them into playlists, look up lyrics and artist bio, and listen through a player that doesn't feel like an afterthought.
 
@@ -8,7 +8,7 @@ Upload your own files, organize them into playlists, look up lyrics and artist b
 
 ## What it does
 
-Vervfy is a self-hosted music player with a Next.js App Router frontend in
+Vervfy is a premium music player with a Next.js App Router frontend in
 `web/` and a FastAPI backend for authentication, library data, uploads, and
 audio streaming. Next.js is the only user-facing frontend.
 
@@ -74,21 +74,9 @@ vervfy/
 
 ---
 
-## Hosted app
-
-The FastAPI backend is deployed at
-https://vervfy.onrender.com. The Next.js frontend is a separate Render web
-service (defined in `render.yaml`) and proxies browser API requests to that
-backend.
-
----
-
 ## Persistent data and deployment
 
-PostgreSQL stores accounts, bcrypt password hashes, profile photos, artist
-photos, track metadata, cover art, custom lyrics, favorites, and playlists.
-New uploads use the private Supabase Storage bucket; audio is redirected to a
-one-hour signed URL, so the FastAPI service never relays the audio bytes.
+Vervfy uses PostgreSQL to store user accounts, bcrypt password hashes for password-based accounts, linked authentication identities, profile photos, track metadata, custom lyrics, favorites, playlists, and storage references. Audio files and some artwork are stored in a private Supabase Storage bucket, while legacy artwork may remain in PostgreSQL. Audio playback uses temporary, one-hour signed URLs, allowing clients to stream directly from Supabase Storage without FastAPI proxying the audio bytes.
 
 ---
 
