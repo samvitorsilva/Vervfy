@@ -812,8 +812,8 @@ def _check_storage_acl_inventory(
         raise RuntimeError(
             "Unexpected direct storage capability ACL entries: "
             + "; ".join(
-                f"{role} {kind} {name} {privilege}"
-                for role, kind, name, privilege, _grantable in sample
+                f"{role} {kind} {name} {privilege} grantable={grantable}"
+                for role, kind, name, privilege, grantable in sample
             )
         )
 
