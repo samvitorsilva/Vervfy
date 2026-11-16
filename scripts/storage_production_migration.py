@@ -16,11 +16,11 @@ from sqlalchemy.engine import URL, Connection, make_url
 from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
-START_REVISION = "0028_webauthn_enrollment"
-TARGET_REVISION = "0031_cleanup_retry_limits"
+START_REVISION = "0031_cleanup_retry_limits"
+TARGET_REVISION = "0033_cleanup_claims_disabled"
 AUTHORIZATION = f"{START_REVISION}..{TARGET_REVISION}"
 AUTHORIZATION_TTL = timedelta(minutes=15)
-EXPECTED_MIGRATION_COUNT = 31
+EXPECTED_MIGRATION_COUNT = 33
 STAGING_PROJECT_REF = "xgqvwqogdtktgfuubzwk"
 PRODUCTION_PROJECT_REF = "llxmskxxchpmeavorusj"
 PRODUCTION_MIGRATION_ROLE = "vervfy_prod_migrator"
@@ -610,39 +610,106 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
             raise MigrationBlocked(
                 f"Expected exactly {START_REVISION}; found a different Alembic revision state"
             )
-        # Storage lifecycle objects must not exist before migration 0029.
-        existing_storage_schema = connection.execute(
-            text("SELECT pg_catalog.to_regnamespace('vervfy_storage')")
+        # Verify the complete restricted storage role graph before
+        # exercising the lifecycle owner's read capability.
+        _check_role_graph(connection, current_user)
+
+        # Verify the existing production storage namespace.
+        schema_exists = connection.execute(
+            text("SELECT pg_catalog.to_regnamespace('vervfy_storage') IS NOT NULL")
         ).scalar_one()
 
-        if existing_storage_schema is not None:
+        if not schema_exists:
+            raise MigrationBlocked("Existing storage lifecycle schema is missing")
+
+        # Read the namespace using its restricted lifecycle-owner capability.
+        connection.exec_driver_sql(
+            "SET LOCAL ROLE vervfy_storage_lifecycle_owner"
+        )
+        namespace_rows = connection.execute(text("""
+            SELECT namespace_id::text, environment, endpoint,
+                   bucket, physical_cleanup_enabled
+            FROM vervfy_storage.namespaces
+            WHERE id = 1
+        """)).all()
+        connection.exec_driver_sql("RESET ROLE")
+
+        expected_namespace = (
+            "31daf7cc-8563-411f-94c7-944d607d1ef1",
+            "production",
+            "https://llxmskxxchpmeavorusj.supabase.co",
+            "songs",
+            False,
+        )
+
+        if len(namespace_rows) != 1 or tuple(namespace_rows[0]) != expected_namespace:
             raise MigrationBlocked(
-                "Storage lifecycle schema already exists before migration 0029"
+                "Existing production storage namespace does not match "
+                "the approved configuration"
             )
 
-        # The new storage migrations add these columns.
-        unexpected_columns = connection.execute(
-            text("""
+        # The storage lifecycle columns must already exist at revision 0031.
+        existing_columns = {
+            (row.table_name, row.column_name)
+            for row in connection.execute(text("""
                 SELECT table_name, column_name
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                   AND (
                       (table_name = 'tracks' AND column_name = 'media_version')
                       OR (table_name = 'artist_photos' AND column_name = 'media_version')
-                      OR (
-                          table_name = 'upload_jobs'
-                          AND column_name = 'processing_token'
-                      )
+                      OR (table_name = 'upload_jobs' AND column_name = 'processing_token')
                   )
-            """)
-        ).all()
+            """)).all()
+        }
 
-        if unexpected_columns:
+        expected_columns = {
+            ("tracks", "media_version"),
+            ("artist_photos", "media_version"),
+            ("upload_jobs", "processing_token"),
+        }
+
+        if not expected_columns.issubset(existing_columns):
             raise MigrationBlocked(
-                "Storage lifecycle columns already exist before migration 0029"
+                "Existing storage lifecycle columns are incomplete"
             )
 
-        _check_role_graph(connection, current_user)
+        # auth_sessions must not exist before migration 0032.
+        sessions_table_exists = connection.execute(text("""
+            SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
+        """)).scalar_one()
+
+        if sessions_table_exists:
+            raise MigrationBlocked(
+                "auth_sessions already exists before migration 0032"
+            )
+
+        # Confirm the expected pre-0033 cleanup permissions.
+        cleanup_privileges = connection.execute(text("""
+            SELECT
+                has_function_privilege(
+                    'vervfy_storage_lifecycle_owner',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'vervfy_storage_cleanup',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'storage_cleanup_worker',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'app_runtime',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                )
+        """)).one()
+
+        if tuple(cleanup_privileges) != (True, True, True, False):
+            raise MigrationBlocked(
+                "Unexpected cleanup-claim privileges before migration 0033"
+            )
+
 
 
 def _engine(target: ProductionTarget):
@@ -656,6 +723,97 @@ def run_check(target: ProductionTarget) -> None:
             preflight(connection, target)
     finally:
         engine.dispose()
+
+
+def _verify_followup_result(connection: Connection) -> None:
+    """Verify revisions 0032/0033 and preserve the production namespace."""
+    with connection.begin():
+        revision = connection.execute(
+            text("SELECT version_num FROM public.alembic_version")
+        ).scalars().all()
+
+        if revision != [TARGET_REVISION]:
+            raise MigrationBlocked("Post-migration revision verification failed")
+
+        sessions_exists = connection.execute(text("""
+            SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
+        """)).scalar_one()
+
+        if not sessions_exists:
+            raise MigrationBlocked("Migration 0032 did not create auth_sessions")
+
+        session_privileges = connection.execute(text("""
+            SELECT
+                has_table_privilege(
+                    'app_runtime', 'public.auth_sessions', 'SELECT'
+                ),
+                has_table_privilege(
+                    'app_runtime', 'public.auth_sessions', 'INSERT'
+                ),
+                has_table_privilege(
+                    'app_runtime', 'public.auth_sessions', 'DELETE'
+                ),
+                has_table_privilege(
+                    'app_runtime', 'public.auth_sessions', 'UPDATE'
+                )
+        """)).one()
+
+        if tuple(session_privileges) != (True, True, True, False):
+            raise MigrationBlocked(
+                "Unexpected effective auth_sessions privileges"
+            )
+
+        cleanup_privileges = connection.execute(text("""
+            SELECT
+                has_function_privilege(
+                    'vervfy_storage_lifecycle_owner',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'vervfy_storage_cleanup',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'storage_cleanup_worker',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                ),
+                has_function_privilege(
+                    'app_runtime',
+                    'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
+                )
+        """)).one()
+
+        if tuple(cleanup_privileges) != (True, False, False, False):
+            raise MigrationBlocked(
+                "Unexpected effective cleanup-claim privileges after 0033"
+            )
+
+        # Verify the immutable namespace using its restricted owner role.
+        connection.exec_driver_sql(
+            "SET LOCAL ROLE vervfy_storage_lifecycle_owner"
+        )
+
+        namespace = connection.execute(text("""
+            SELECT namespace_id::text, environment, endpoint,
+                   bucket, physical_cleanup_enabled
+            FROM vervfy_storage.namespaces
+            WHERE id = 1
+        """)).all()
+
+        connection.exec_driver_sql("RESET ROLE")
+
+        expected = (
+            "31daf7cc-8563-411f-94c7-944d607d1ef1",
+            "production",
+            "https://llxmskxxchpmeavorusj.supabase.co",
+            "songs",
+            False,
+        )
+
+        if len(namespace) != 1 or tuple(namespace[0]) != expected:
+            raise MigrationBlocked(
+                "Production storage namespace changed unexpectedly"
+            )
 
 
 def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
@@ -699,15 +857,8 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
             ):
                 command.upgrade(config, TARGET_REVISION)
 
-            stage = "final_revision"
-            with connection.begin():
-                final_revision = connection.execute(
-                    text("SELECT version_num FROM public.alembic_version")
-                ).scalars().all()
-                if final_revision != [TARGET_REVISION]:
-                    raise MigrationBlocked(
-                        "Alembic completed without recording the exact target revision"
-                    )
+            stage = "post_migration_verification"
+            _verify_followup_result(connection)
     except Exception as exc:
         exc.add_note(f"vervfy_migration_stage={stage}")
         raise

@@ -363,6 +363,7 @@ request_throttle = auth.RequestThrottle(os.environ.get("REDIS_URL"))
 audiodb_queue = TheAudioDBQueue(request_throttle.allow)
 login_throttle = auth.LoginThrottle(limiter=request_throttle)
 signup_throttle = auth.SignupThrottle(limiter=request_throttle)
+# Truthy REDIS_URL selects the durable Postgres allowlist (not Redis itself).
 session_store = auth.SessionStore(os.environ.get("REDIS_URL"))
 password_reset_store = password_reset.PasswordResetStore(os.environ.get("REDIS_URL"))
 email_verification_store = password_reset.EmailVerificationStore(

@@ -125,6 +125,18 @@ class User(Base):
         return getattr(self, key)
 
 
+class AuthSession(Base):
+    """Durable login allowlist so Redis restarts do not invalidate cookies."""
+
+    __tablename__ = "auth_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+
+
 class ProviderIdentity(Base):
     """Authentication identity; email is deliberately not an identity key."""
 

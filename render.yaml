@@ -1,4 +1,6 @@
 services:
+  # Free Key Value has no disk persistence; login allowlists now live in
+  # Postgres (auth_sessions). Redis remains for rate limits / short-lived tokens.
   - type: keyvalue
     name: vervfy-redis
     plan: free

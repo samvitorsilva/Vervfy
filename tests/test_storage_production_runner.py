@@ -69,11 +69,13 @@ def test_runner_restores_database_environment_after_upgrade():
         patch.object(runner, "_engine", return_value=engine),
         patch.object(runner, "preflight"),
         patch.object(runner, "validate_migration_chain"),
+        patch.object(runner, "_verify_followup_result") as postflight,
         patch("alembic.command.upgrade") as upgrade,
     ):
         runner.run_upgrade(target, expiry)
 
     upgrade.assert_called_once()
+    postflight.assert_called_once_with(connection)
 
     config = upgrade.call_args.args[0]
     assert config.attributes["connection"] is connection

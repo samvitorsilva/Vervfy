@@ -13,11 +13,12 @@ from hmac import compare_digest
 
 import bcrypt
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from db import (
     ArtistPhoto,
+    AuthSession,
     Favorite,
     Playlist,
     PlaylistTrack,
@@ -45,31 +46,6 @@ local count = redis.call('INCR', KEYS[1])
 if count == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return count
 """
-
-_CREATE_SESSION_SCRIPT = """
-redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-redis.call('SADD', KEYS[2], ARGV[3])
-redis.call('EXPIRE', KEYS[2], ARGV[2])
-return 1
-"""
-
-_REVOKE_SESSION_SCRIPT = """
-local user_id = redis.call('GET', KEYS[1])
-if user_id then
-    redis.call('SREM', ARGV[1] .. user_id, ARGV[2])
-end
-return redis.call('DEL', KEYS[1])
-"""
-
-_REVOKE_USER_SESSIONS_SCRIPT = """
-local session_ids = redis.call('SMEMBERS', KEYS[1])
-for _, session_id in ipairs(session_ids) do
-    redis.call('DEL', ARGV[1] .. session_id)
-end
-redis.call('DEL', KEYS[1])
-return #session_ids
-"""
-
 
 class RequestThrottle:
     """Fixed-window limiter with Redis sharing across workers and instances."""
@@ -226,7 +202,7 @@ class UserStore:
     def reset_password_and_invalidate_sessions(
         self, user_id: str, new_password: str
     ) -> int:
-        """Set a new password hash and bump session_version (caller revokes Redis)."""
+        """Set a new password hash and bump session_version (caller revokes sessions)."""
         error = validate_password(new_password)
         if error:
             raise ValueError(error)
@@ -610,61 +586,65 @@ class SignupThrottle:
 
 
 class SessionStore:
-    """Allowlist signed-cookie session IDs so logout revokes copied cookies."""
+    """Allowlist signed-cookie session IDs so logout revokes copied cookies.
+
+    Production passes a truthy redis_url for call-site compatibility, but the
+    allowlist lives in Postgres. Render's free Key Value has no persistence, so
+    a Redis-backed allowlist logged everyone out whenever Valkey restarted.
+    """
 
     TTL_SECONDS = 60 * 60 * 24 * 30
-    KEY_PREFIX = "vervfy:session:"
-    USER_SESSIONS_PREFIX = "vervfy:user-sessions:"
 
     def __init__(self, redis_url: str | None = None):
-        self._redis = None
+        self._postgres = bool(redis_url)
         self._sessions: dict[str, tuple[str, float]] = {}
         self._user_sessions: dict[str, set[str]] = {}
         self._lock = threading.Lock()
-        if redis_url:
-            if redis is None:
-                raise RuntimeError("redis is required when REDIS_URL is configured")
-            self._redis = redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_connect_timeout=2.0,
-                socket_timeout=2.0,
-            )
 
     def create(self, user_id: str) -> str:
         session_id = secrets.token_urlsafe(32)
-        if self._redis is not None:
+        now = time.time()
+        expires_at = now + self.TTL_SECONDS
+        if self._postgres:
             try:
-                self._redis.eval(
-                    _CREATE_SESSION_SCRIPT,
-                    2,
-                    f"{self.KEY_PREFIX}{session_id}",
-                    f"{self.USER_SESSIONS_PREFIX}{user_id}",
-                    user_id,
-                    self.TTL_SECONDS,
-                    session_id,
-                )
-            except redis.RedisError as exc:
+                with SessionLocal() as session:
+                    session.add(
+                        AuthSession(
+                            id=session_id,
+                            user_id=user_id,
+                            created_at=now,
+                            expires_at=expires_at,
+                        )
+                    )
+                    session.commit()
+            except SQLAlchemyError as exc:
                 raise RuntimeError("session backend unavailable") from exc
             return session_id
 
-        now = time.time()
         with self._lock:
             if len(self._sessions) > 10_000:
-                for expired_id, (_, expires_at) in list(self._sessions.items()):
-                    if expires_at <= now:
+                for expired_id, (_, item_expires_at) in list(self._sessions.items()):
+                    if item_expires_at <= now:
                         self._remove_memory_session(expired_id)
-            self._sessions[session_id] = (user_id, now + self.TTL_SECONDS)
+            self._sessions[session_id] = (user_id, expires_at)
             self._user_sessions.setdefault(user_id, set()).add(session_id)
         return session_id
 
     def is_valid(self, session_id: str, user_id: str) -> bool:
-        if self._redis is not None:
+        if self._postgres:
+            now = time.time()
             try:
-                stored_user_id = self._redis.get(f"{self.KEY_PREFIX}{session_id}")
-            except redis.RedisError as exc:
+                with SessionLocal() as session:
+                    row = session.get(AuthSession, session_id)
+                    if row is None:
+                        return False
+                    if row.expires_at <= now:
+                        session.delete(row)
+                        session.commit()
+                        return False
+                    return row.user_id == user_id
+            except SQLAlchemyError as exc:
                 raise RuntimeError("session backend unavailable") from exc
-            return stored_user_id == user_id
 
         now = time.time()
         with self._lock:
@@ -677,16 +657,14 @@ class SessionStore:
             return stored[0] == user_id
 
     def revoke(self, session_id: str) -> None:
-        if self._redis is not None:
+        if self._postgres:
             try:
-                self._redis.eval(
-                    _REVOKE_SESSION_SCRIPT,
-                    1,
-                    f"{self.KEY_PREFIX}{session_id}",
-                    self.USER_SESSIONS_PREFIX,
-                    session_id,
-                )
-            except redis.RedisError as exc:
+                with SessionLocal() as session:
+                    session.execute(
+                        delete(AuthSession).where(AuthSession.id == session_id)
+                    )
+                    session.commit()
+            except SQLAlchemyError as exc:
                 raise RuntimeError("session backend unavailable") from exc
             return
 
@@ -694,32 +672,14 @@ class SessionStore:
             self._remove_memory_session(session_id)
 
     def revoke_user(self, user_id: str) -> None:
-        if self._redis is not None:
+        if self._postgres:
             try:
-                # Remove pre-index sessions too, including sessions created before
-                # the reverse user-to-session index was introduced.
-                for key in self._redis.scan_iter(match=f"{self.KEY_PREFIX}*"):
-                    if isinstance(key, bytes):
-                        key = key.decode("utf-8")
-                    session_id = key.removeprefix(self.KEY_PREFIX)
-                    stored_user_id = self._redis.get(key)
-                    if isinstance(stored_user_id, bytes):
-                        stored_user_id = stored_user_id.decode("utf-8")
-                    if stored_user_id == user_id:
-                        self._redis.eval(
-                            _REVOKE_SESSION_SCRIPT,
-                            1,
-                            key,
-                            self.USER_SESSIONS_PREFIX,
-                            session_id,
-                        )
-                self._redis.eval(
-                    _REVOKE_USER_SESSIONS_SCRIPT,
-                    1,
-                    f"{self.USER_SESSIONS_PREFIX}{user_id}",
-                    self.KEY_PREFIX,
-                )
-            except redis.RedisError as exc:
+                with SessionLocal() as session:
+                    session.execute(
+                        delete(AuthSession).where(AuthSession.user_id == user_id)
+                    )
+                    session.commit()
+            except SQLAlchemyError as exc:
                 raise RuntimeError("session backend unavailable") from exc
             return
 

@@ -21,7 +21,7 @@ from sqlalchemy.exc import DBAPIError
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '0031_cleanup_retry_limits'
+HEAD = '0033_cleanup_claims_disabled'
 PRE_ACCOUNT_MIGRATION_HEAD = '0020_playlist_last_played'
 ACCOUNT_TABLES = {
     'users', 'tracks', 'favorites', 'playlists', 'playlist_tracks',
@@ -41,7 +41,7 @@ class MigrationChainTests(unittest.TestCase):
         script = ScriptDirectory.from_config(Config(str(ROOT / 'alembic.ini')))
         self.assertEqual(script.get_heads(), [HEAD])
         chain = list(script.walk_revisions())
-        self.assertEqual(len(chain), 31)
+        self.assertEqual(len(chain), 33)
         for newer, older in itertools.pairwise(chain):
             self.assertEqual(newer.down_revision, older.revision)
         self.assertIsNone(chain[-1].down_revision)
@@ -338,9 +338,15 @@ class StagingPostgresTests(unittest.TestCase):
                         target = node.args[0]
                         if isinstance(target, ast.Constant) and target.value in ACCOUNT_TABLES:
                             violations.append(f'{path.name}: drop_column from {target.value}')
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    if destructive_sql.search(node.value) or dropped_account_columns.search(node.value):
-                        violations.append(f'{path.name}: destructive SQL on account table')
+                if (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and (
+                        destructive_sql.search(node.value)
+                        or dropped_account_columns.search(node.value)
+                    )
+                ):
+                    violations.append(f'{path.name}: destructive SQL on account table')
         self.assertEqual(violations, [])
 
     def denied(self, sql):
@@ -397,9 +403,11 @@ class StagingPostgresTests(unittest.TestCase):
         # escalation on a real restricted login, not the administrator session.
         login_engine = sa.create_engine(self.url.set(username='google_auth_lookup'))
         try:
-            with login_engine.connect() as login:
-                with self.assertRaises(DBAPIError):
-                    login.exec_driver_sql('SET ROLE vervfy_identity_lookup_owner')
+            with (
+                login_engine.connect() as login,
+                self.assertRaises(DBAPIError),
+            ):
+                login.exec_driver_sql('SET ROLE vervfy_identity_lookup_owner')
         finally:
             login_engine.dispose()
 
@@ -411,9 +419,11 @@ class StagingPostgresTests(unittest.TestCase):
                 decode(repeat('00', 32), 'hex'), 1
             )
         """)
-        with self.assertRaisesRegex(RuntimeError, 'security data exists'):
-            with Operations.context(MigrationContext.configure(self.c)):
-                migration('0027_webauthn_foundation.py').downgrade()
+        with (
+            self.assertRaisesRegex(RuntimeError, 'security data exists'),
+            Operations.context(MigrationContext.configure(self.c)),
+        ):
+            migration('0027_webauthn_foundation.py').downgrade()
 
         self.sql("""
             INSERT INTO webauthn_enrollments(
@@ -424,9 +434,11 @@ class StagingPostgresTests(unittest.TestCase):
                 NULL, 1, 301
             )
         """)
-        with self.assertRaisesRegex(RuntimeError, 'retained enrollment/recovery security data'):
-            with Operations.context(MigrationContext.configure(self.c)):
-                migration('0028_webauthn_enrollment.py').downgrade()
+        with (
+            self.assertRaisesRegex(RuntimeError, 'retained enrollment/recovery security data'),
+            Operations.context(MigrationContext.configure(self.c)),
+        ):
+            migration('0028_webauthn_enrollment.py').downgrade()
 
     def test_sequences_are_scoped_and_only_usage_is_granted(self):
         self.sql('SET LOCAL ROLE migration_owner')

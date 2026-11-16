@@ -22,6 +22,7 @@ import server
 from auth import SessionStore
 from db import (
     ArtistPhoto,
+    AuthSession,
     Base,
     Favorite,
     Playlist,
@@ -62,61 +63,78 @@ class SessionStoreTests(unittest.TestCase):
         )
         self.assertTrue(store.is_valid(other_user_session, "other-user"))
 
-    def test_redis_create_session_sets_expiry_and_user_index(self) -> None:
-        store = SessionStore()
-        redis_client = MagicMock()
-        store._redis = redis_client
+    def test_postgres_create_session_persists_allowlist_row(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        sessions = sessionmaker(bind=engine, expire_on_commit=False)
+        store = SessionStore("redis://unused")
+        with sessions() as session:
+            session.add(
+                User(
+                    id="user-a",
+                    username="usera",
+                    username_key="usera",
+                    password_hash="x",
+                    created_at=0.0,
+                )
+            )
+            session.commit()
 
-        session_id = store.create("user-a")
+        with patch.object(server.auth, "SessionLocal", sessions):
+            session_id = store.create("user-a")
+            with sessions() as session:
+                row = session.get(AuthSession, session_id)
+                self.assertIsNotNone(row)
+                self.assertEqual(row.user_id, "user-a")
+                self.assertGreater(row.expires_at, row.created_at)
+            self.assertTrue(store.is_valid(session_id, "user-a"))
+            self.assertFalse(store.is_valid(session_id, "user-b"))
 
-        redis_client.eval.assert_called_once_with(
-            server.auth._CREATE_SESSION_SCRIPT,
-            2,
-            f"{store.KEY_PREFIX}{session_id}",
-            f"{store.USER_SESSIONS_PREFIX}user-a",
-            "user-a",
-            store.TTL_SECONDS,
-            session_id,
-        )
+    def test_postgres_revoke_user_cleans_only_that_users_sessions(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        sessions = sessionmaker(bind=engine, expire_on_commit=False)
+        store = SessionStore("redis://unused")
+        with sessions() as session:
+            for user_id, username in (
+                ("deleted-user", "deleted"),
+                ("other-user", "other"),
+            ):
+                session.add(
+                    User(
+                        id=user_id,
+                        username=username,
+                        username_key=username,
+                        password_hash="x",
+                        created_at=0.0,
+                    )
+                )
+            session.commit()
 
-    def test_redis_revoke_user_cleans_indexed_and_pre_index_sessions(self) -> None:
-        store = SessionStore()
-        redis_client = MagicMock()
-        user_session_key = f"{store.KEY_PREFIX}legacy-session"
-        other_session_key = f"{store.KEY_PREFIX}other-session"
-        redis_client.scan_iter.return_value = [user_session_key, other_session_key]
-        redis_client.get.side_effect = lambda key: {
-            user_session_key: "deleted-user",
-            other_session_key: "other-user",
-        }[key]
-        store._redis = redis_client
+        with patch.object(server.auth, "SessionLocal", sessions):
+            deleted_user_sessions = [
+                store.create("deleted-user"),
+                store.create("deleted-user"),
+            ]
+            other_user_session = store.create("other-user")
 
-        store.revoke_user("deleted-user")
+            store.revoke_user("deleted-user")
 
-        redis_client.eval.assert_any_call(
-            server.auth._REVOKE_SESSION_SCRIPT,
-            1,
-            user_session_key,
-            store.USER_SESSIONS_PREFIX,
-            "legacy-session",
-        )
-        redis_client.eval.assert_called_with(
-            server.auth._REVOKE_USER_SESSIONS_SCRIPT,
-            1,
-            f"{store.USER_SESSIONS_PREFIX}deleted-user",
-            store.KEY_PREFIX,
-        )
-        self.assertEqual(redis_client.eval.call_count, 2)
+            self.assertTrue(
+                all(
+                    not store.is_valid(session_id, "deleted-user")
+                    for session_id in deleted_user_sessions
+                )
+            )
+            self.assertTrue(store.is_valid(other_user_session, "other-user"))
 
-    def test_redis_revoke_user_surfaces_backend_failure(self) -> None:
-        store = SessionStore()
-        redis_client = MagicMock()
-        redis_client.scan_iter.return_value = []
-        redis_client.eval.side_effect = OSError("Redis unavailable")
-        store._redis = redis_client
+    def test_postgres_revoke_user_surfaces_backend_failure(self) -> None:
+        store = SessionStore("redis://unused")
+        failing = MagicMock()
+        failing.side_effect = SQLAlchemyError("database unavailable")
 
         with (
-            patch.object(server.auth, "redis", SimpleNamespace(RedisError=OSError)),
+            patch.object(server.auth, "SessionLocal", failing),
             self.assertRaisesRegex(RuntimeError, "session backend unavailable"),
         ):
             store.revoke_user("deleted-user")
