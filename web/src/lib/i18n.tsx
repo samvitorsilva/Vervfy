@@ -7,6 +7,10 @@ import { languageFromLocale, type Language } from "@/lib/language";
 export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
+  "Playback stopped while buffering. Check your connection and try again.": "A reprodução parou durante o carregamento. Verifique sua conexão e tente novamente.",
+  "Press play to start.": "Toque em reproduzir para começar.",
+  "The track could not start. Please try again.": "Não foi possível iniciar a faixa. Tente novamente.",
+  "The track could not restart. Please try again.": "Não foi possível reiniciar a faixa. Tente novamente.",
   "Loading your music library": "Carregando sua biblioteca de música…",
   "Welcome back": "Que bom ter você de volta!",
   "Forgot password?": "Esqueceu a senha?",
@@ -664,6 +668,10 @@ const translations: Record<string, string> = {
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
+  "Playback stopped while buffering. Check your connection and try again.": ["La lecture s'est arrêtée pendant le chargement. Vérifiez votre connexion et réessayez.", "La reproducción se detuvo durante la carga. Comprueba tu conexión e inténtalo de nuevo."],
+  "Press play to start.": ["Appuyez sur Lecture pour commencer.", "Pulsa Reproducir para comenzar."],
+  "The track could not start. Please try again.": ["Impossible de démarrer la lecture du morceau. Réessayez.", "No se pudo iniciar la canción. Inténtalo de nuevo."],
+  "The track could not restart. Please try again.": ["Impossible de relancer le morceau. Réessayez.", "No se pudo reiniciar la canción. Inténtalo de nuevo."],
   "Loading your music library": ["Chargement de votre bibliothèque musicale…", "Cargando tu biblioteca de música…"],
   "Welcome back": ["Bon retour", "Qué bueno verte de nuevo"],
   "Forgot password?": ["Mot de passe oublié ?", "¿Olvidaste la contraseña?"],
