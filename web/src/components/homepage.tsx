@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useState } from "react";
-import LibraryApp from "@/components/library-app";
+import { lazy, Suspense, useEffect, useState } from "react";
+
+// Keep the large private player out of the public landing-page bundle.
+const LibraryApp = lazy(() => import("@/components/library-app"));
 import SiteFooter from "@/components/site-footer";
 import { useLanguage } from "@/lib/i18n";
 
@@ -16,6 +18,7 @@ export default function Homepage() {
 
   useEffect(() => {
     let active = true;
+
 
     void fetch("/api/me", { credentials: "same-origin", cache: "no-store" })
       .then((response) => {
@@ -54,7 +57,13 @@ export default function Homepage() {
     );
   }
 
-  if (sessionStatus === "authenticated") return <LibraryApp />;
+  if (sessionStatus === "authenticated") {
+    return (
+      <Suspense fallback={<div className="homepage-page homepage-transition" role="status" aria-label={t("Loading your music library")} />}>
+        <LibraryApp />
+      </Suspense>
+    );
+  }
 
   return (
     <div className="homepage-page">
