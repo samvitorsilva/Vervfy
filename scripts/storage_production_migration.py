@@ -704,6 +704,63 @@ def _check_storage_acl_inventory(
             )
         )
 
+    effective_columns = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname || '.' || c.relname || '.' || att.attname AS object_name,
+               privilege.privilege_type
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid
+        CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES'))
+            AS privilege(privilege_type)
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND att.attnum > 0 AND NOT att.attisdropped
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_column_privilege(
+              r.oid, c.oid, att.attnum, privilege.privilege_type
+          )
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    expected_columns = {
+        (owner, "public.users.id", "SELECT"),
+        (owner, "public.tracks.storage_path", "SELECT"),
+        (owner, "public.tracks.cover_path", "SELECT"),
+        (owner, "public.artist_photos.storage_path", "SELECT"),
+        (owner, "public.upload_jobs.storage_path", "SELECT"),
+    }
+    unexpected_columns = {
+        (row.role_name, row.object_name, row.privilege_type)
+        for row in effective_columns
+    } - expected_columns
+    if unexpected_columns:
+        raise RuntimeError(
+            "Unexpected effective storage capability column privileges: "
+            + "; ".join(
+                f"{role} {name} {privilege}"
+                for role, name, privilege in sorted(unexpected_columns)[:3]
+            )
+        )
+
+    effective_sequences = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname || '.' || c.relname AS object_name,
+               privilege.privilege_type
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE'))
+            AS privilege(privilege_type)
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND c.relkind = 'S'
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_sequence_privilege(
+              r.oid, c.oid, privilege.privilege_type
+          )
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    if effective_sequences:
+        raise RuntimeError("Storage capability roles have unexpected sequence privileges")
+
     effective_functions = connection.execute(text("""
         SELECT r.rolname AS role_name,
                n.nspname || '.' || p.proname || '(' ||
