@@ -57,7 +57,7 @@ def acl(role, kind, name, privilege):
     )
 
 
-def inventory_connection(*, extra_acl=(), extra_owner=(), defaults=()):
+def inventory_connection(\n    *, extra_acl=(), extra_owner=(), defaults=(),\n    extra_effective_relation=(), extra_effective_function=(), unsafe_schema=None,\n):
     rows = [
         acl(OWNER, "SCHEMA", "vervfy_storage", "USAGE"),
         acl(OWNER, "SCHEMA", "public", "USAGE"),
@@ -99,13 +99,22 @@ def inventory_connection(*, extra_acl=(), extra_owner=(), defaults=()):
 
     first = MagicMock()
     first.all.return_value = rows
-    second = MagicMock()
-    second.all.return_value = ownership
-    third = MagicMock()
-    third.scalars.return_value.all.return_value = list(defaults)
+    effective_relations = MagicMock()
+    effective_relations.all.return_value = list(extra_effective_relation)
+    effective_functions = MagicMock()
+    effective_functions.all.return_value = list(extra_effective_function)
+    schema_create = MagicMock()
+    schema_create.first.return_value = unsafe_schema
+    owned = MagicMock()
+    owned.all.return_value = ownership
+    default_acls = MagicMock()
+    default_acls.scalars.return_value.all.return_value = list(defaults)
 
     connection = MagicMock()
-    connection.execute.side_effect = [first, second, third]
+    connection.execute.side_effect = [
+        first, effective_relations, effective_functions,
+        schema_create, owned, default_acls,
+    ]
     return connection
 
 
@@ -148,3 +157,25 @@ class StorageAclInventoryTests(unittest.TestCase):
     def test_rejects_default_acl_for_capability_role(self):
         with self.assertRaisesRegex(RuntimeError, "default ACLs"):
             check(inventory_connection(defaults=(OWNER,)))
+    def test_rejects_unexpected_effective_public_relation_privilege(self):
+        extra = SimpleNamespace(
+            role_name=EXECUTOR,
+            object_name="public.users",
+            privilege_type="SELECT",
+        )
+        with self.assertRaisesRegex(RuntimeError, "Unexpected effective storage"):
+            check(inventory_connection(extra_effective_relation=(extra,)))
+
+    def test_rejects_unexpected_effective_function_privilege(self):
+        extra = SimpleNamespace(
+            role_name=WORKER,
+            object_name="public.unreviewed_function()",
+        )
+        with self.assertRaisesRegex(RuntimeError, "Unexpected effective storage capability function"):
+            check(inventory_connection(extra_effective_function=(extra,)))
+
+    def test_rejects_effective_schema_create(self):
+        extra = SimpleNamespace(rolname=OWNER, nspname="public")
+        with self.assertRaisesRegex(RuntimeError, "schema CREATE"):
+            check(inventory_connection(unsafe_schema=extra))
+
