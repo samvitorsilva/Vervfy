@@ -808,11 +808,11 @@ def _check_storage_acl_inventory(
 
     unexpected = actual - allowed
     if unexpected:
-        sample = sorted(unexpected)[:3]
+        sample = sorted(unexpected)
         raise RuntimeError(
-            "Unexpected direct storage capability ACL entries: "
-            + "; ".join(
-                f"{role} {kind} {name} {privilege} grantable={grantable}"
+            "Unexpected direct storage capability ACL entries:\\n"
+            + "\\n".join(
+                repr((role, kind, name, privilege, grantable))
                 for role, kind, name, privilege, grantable in sample
             )
         )
