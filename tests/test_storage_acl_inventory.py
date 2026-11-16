@@ -1,11 +1,11 @@
 """Regression tests for the installed production storage ACL allowlist."""
 
 import importlib.util
+import sys
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-
-import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -13,8 +13,6 @@ SPEC = importlib.util.spec_from_file_location(
     ROOT / "scripts/storage_production_migration.py",
 )
 RUNNER = importlib.util.module_from_spec(SPEC)
-import sys
-
 sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
 
