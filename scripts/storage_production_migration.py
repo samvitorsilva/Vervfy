@@ -575,7 +575,7 @@ def _check_storage_acl_inventory(
         UNION ALL
 
         SELECT r.rolname, 'FUNCTION',
-               n.nspname || '.' || p.proname || '(' ||
+               n.nspname::text || '.' || p.proname::text || '(' ||
                    pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
                a.privilege_type, a.is_grantable
         FROM pg_catalog.pg_proc p
@@ -763,7 +763,7 @@ def _check_storage_acl_inventory(
 
     effective_functions = connection.execute(text("""
         SELECT r.rolname AS role_name,
-               n.nspname || '.' || p.proname || '(' ||
+               n.nspname::text || '.' || p.proname::text || '(' ||
                    pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS object_name
         FROM pg_catalog.pg_roles r
         CROSS JOIN pg_catalog.pg_proc p
@@ -833,7 +833,7 @@ def _check_storage_acl_inventory(
           AND r.rolname IN (:owner, :executor, :worker)
         UNION ALL
         SELECT r.rolname, 'FUNCTION',
-               n.nspname || '.' || p.proname || '(' ||
+               n.nspname::text || '.' || p.proname::text || '(' ||
                    pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
         FROM pg_catalog.pg_proc p
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
