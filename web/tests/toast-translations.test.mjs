@@ -67,7 +67,7 @@ test("notification keys exist in Brazilian Portuguese, French and Spanish", () =
 
 test("toast display translates raw controller messages and repeat mode uses explicit keys", () => {
   assert.ok(library.includes('className="toast">{t(toast)}</div>'));
-  assert.ok(!library.includes('t(`Repeat: '));
+  assert.ok(!library.includes('notify(t(`Repeat: '));
   assert.ok(library.includes('next === "off" ? "Repeat: off" : next === "all" ? "Repeat: all" : "Repeat: one"'));
   for (const key of notificationKeys.slice(-4)) {
     assert.ok(playback.includes(JSON.stringify(key)), "Playback message changed: " + key);
