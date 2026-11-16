@@ -529,7 +529,7 @@ def _check_storage_acl_inventory(
     """
     rows = connection.execute(text("""
         SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
-               n.nspname AS object_name, a.privilege_type,
+               n.nspname::text AS object_name, a.privilege_type,
                a.is_grantable
         FROM pg_catalog.pg_namespace n
         CROSS JOIN LATERAL pg_catalog.aclexplode(
@@ -540,7 +540,7 @@ def _check_storage_acl_inventory(
 
         UNION ALL
 
-        SELECT r.rolname, 'TABLE', n.nspname || '.' || c.relname,
+        SELECT r.rolname, 'TABLE', n.nspname::text || '.' || c.relname::text,
                a.privilege_type, a.is_grantable
         FROM pg_catalog.pg_class c
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -561,7 +561,7 @@ def _check_storage_acl_inventory(
         UNION ALL
 
         SELECT r.rolname, 'COLUMN',
-               n.nspname || '.' || c.relname || '.' || att.attname,
+               n.nspname::text || '.' || c.relname::text || '.' || att.attname::text,
                a.privilege_type, a.is_grantable
         FROM pg_catalog.pg_class c
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -819,12 +819,12 @@ def _check_storage_acl_inventory(
 
     ownership = connection.execute(text("""
         SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
-               n.nspname AS object_name
+               n.nspname::text AS object_name
         FROM pg_catalog.pg_namespace n
         JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
         WHERE r.rolname IN (:owner, :executor, :worker)
         UNION ALL
-        SELECT r.rolname, 'TABLE', n.nspname || '.' || c.relname
+        SELECT r.rolname, 'TABLE', n.nspname::text || '.' || c.relname::text
         FROM pg_catalog.pg_class c
         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
