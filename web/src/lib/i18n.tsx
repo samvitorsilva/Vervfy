@@ -7,6 +7,7 @@ import { languageFromLocale, type Language } from "@/lib/language";
 export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
+  "Loading your music library": "Carregando sua biblioteca de música…",
   "Welcome back": "Que bom ter você de volta!",
   "Forgot password?": "Esqueceu a senha?",
   "Forgot password": "Esqueceu a senha",
@@ -663,6 +664,7 @@ const translations: Record<string, string> = {
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
+  "Loading your music library": ["Chargement de votre bibliothèque musicale…", "Cargando tu biblioteca de música…"],
   "Welcome back": ["Bon retour", "Qué bueno verte de nuevo"],
   "Forgot password?": ["Mot de passe oublié ?", "¿Olvidaste la contraseña?"],
   "Forgot password": ["Mot de passe oublié", "Contraseña olvidada"],
