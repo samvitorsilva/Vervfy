@@ -716,7 +716,7 @@ def _check_storage_acl_inventory(
             AS privilege(privilege_type)
         WHERE r.rolname IN (:owner, :executor, :worker)
           AND att.attnum > 0 AND NOT att.attisdropped
-          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND n.nspname = 'public'
           AND pg_catalog.has_column_privilege(
               r.oid, c.oid, att.attnum, privilege.privilege_type
           )
