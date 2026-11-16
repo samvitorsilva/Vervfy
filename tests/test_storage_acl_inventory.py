@@ -63,6 +63,8 @@ def inventory_connection(
     extra_owner=(),
     defaults=(),
     extra_effective_relation=(),
+    extra_effective_column=(),
+    extra_effective_sequence=(),
     extra_effective_function=(),
     unsafe_schema=None,
 ):
@@ -109,6 +111,10 @@ def inventory_connection(
     first.all.return_value = rows
     effective_relations = MagicMock()
     effective_relations.all.return_value = list(extra_effective_relation)
+    effective_columns = MagicMock()
+    effective_columns.all.return_value = list(extra_effective_column)
+    effective_sequences = MagicMock()
+    effective_sequences.all.return_value = list(extra_effective_sequence)
     effective_functions = MagicMock()
     effective_functions.all.return_value = list(extra_effective_function)
     schema_create = MagicMock()
@@ -120,8 +126,8 @@ def inventory_connection(
 
     connection = MagicMock()
     connection.execute.side_effect = [
-        first, effective_relations, effective_functions,
-        schema_create, owned, default_acls,
+        first, effective_relations, effective_columns, effective_sequences,
+        effective_functions, schema_create, owned, default_acls,
     ]
     return connection
 
@@ -187,4 +193,22 @@ class StorageAclInventoryTests(unittest.TestCase):
         extra = SimpleNamespace(rolname=OWNER, nspname="public")
         with self.assertRaisesRegex(RuntimeError, "schema CREATE"):
             check(inventory_connection(unsafe_schema=extra))
+
+    def test_rejects_unexpected_effective_column_privilege(self):
+        extra = SimpleNamespace(
+            role_name=OWNER,
+            object_name="public.tracks.title",
+            privilege_type="SELECT",
+        )
+        with self.assertRaisesRegex(RuntimeError, "column privileges"):
+            check(inventory_connection(extra_effective_column=(extra,)))
+
+    def test_rejects_effective_sequence_privilege(self):
+        extra = SimpleNamespace(
+            role_name=OWNER,
+            object_name="public.users_id_seq",
+            privilege_type="USAGE",
+        )
+        with self.assertRaisesRegex(RuntimeError, "sequence privileges"):
+            check(inventory_connection(extra_effective_sequence=(extra,)))
 
