@@ -17,7 +17,7 @@ EXECUTOR = "vervfy_storage_cleanup"
 WORKER = "storage_cleanup_worker"
 
 
-def _fresh_privileges(bind, role_ids):
+def _fresh_privileges(bind, role_ids, *, allow_existing_lifecycle=False):
     """Capabilities must not arrive with unrelated application privileges."""
     for role in role_ids:
         unsafe = bind.execute(
@@ -25,6 +25,8 @@ def _fresh_privileges(bind, role_ids):
             SELECT 1 FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+              AND NOT (:allow_existing_lifecycle AND n.nspname='vervfy_storage'
+                       AND c.relname IN ('namespaces','objects','cleanup_jobs'))
               AND (c.relowner=:role OR
                 CASE WHEN c.relkind='S' THEN pg_catalog.has_sequence_privilege(:role,c.oid,'USAGE,SELECT,UPDATE')
                      WHEN c.relkind IN ('r','p','v','m','f') THEN
@@ -87,11 +89,13 @@ def _fresh_privileges(bind, role_ids):
             SELECT 1 FROM pg_catalog.pg_namespace n
             WHERE n.nspowner=:role OR
               (n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+               AND NOT (:allow_existing_lifecycle AND n.nspname='vervfy_storage')
                AND pg_catalog.has_schema_privilege(:role,n.oid,'CREATE'))
             UNION ALL
             SELECT 1 FROM pg_catalog.pg_proc p
             JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
             WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema'
+              AND NOT (:allow_existing_lifecycle AND n.nspname='vervfy_storage')
               AND (p.proowner=:role OR
                    (pg_catalog.has_schema_privilege(:role,n.oid,'USAGE')
                     AND pg_catalog.has_function_privilege(:role,p.oid,'EXECUTE')))
@@ -104,7 +108,7 @@ def _fresh_privileges(bind, role_ids):
                     OR pg_catalog.pg_has_role(:role,a.grantee,'SET')))
             LIMIT 1
         """),
-            {"role": role},
+            {"role": role, "allow_existing_lifecycle": allow_existing_lifecycle},
         ).first()
         if unsafe:
             raise RuntimeError(
