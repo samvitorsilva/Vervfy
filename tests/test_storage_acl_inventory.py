@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
+import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -115,35 +115,36 @@ def check(connection):
     )
 
 
-def test_accepts_exact_reviewed_storage_acl_inventory():
-    check(inventory_connection())
+class StorageAclInventoryTests(unittest.TestCase):
+    def test_accepts_exact_reviewed_storage_acl_inventory(self):
+        check(inventory_connection())
 
+    def test_rejects_unexpected_direct_table_grant(self):
+        connection = inventory_connection(
+            extra_acl=(acl(EXECUTOR, "TABLE", "public.users", "DELETE"),)
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "Unexpected direct storage capability ACL"
+        ):
+            check(connection)
 
-def test_rejects_unexpected_direct_table_grant():
-    connection = inventory_connection(
-        extra_acl=(acl(EXECUTOR, "TABLE", "public.users", "DELETE"),)
-    )
-    with pytest.raises(RuntimeError, match="Unexpected direct storage capability ACL"):
-        check(connection)
+    def test_rejects_grantable_storage_permission(self):
+        entry = acl(OWNER, "TABLE", "vervfy_storage.objects", "UPDATE")
+        entry.is_grantable = True
+        with self.assertRaisesRegex(
+            RuntimeError, "Unexpected direct storage capability ACL"
+        ):
+            check(inventory_connection(extra_acl=(entry,)))
 
+    def test_rejects_unexpected_capability_object_ownership(self):
+        extra = SimpleNamespace(
+            role_name=OWNER,
+            object_type="TABLE",
+            object_name="public.users",
+        )
+        with self.assertRaisesRegex(RuntimeError, "unexpectedly owns"):
+            check(inventory_connection(extra_owner=(extra,)))
 
-def test_rejects_grantable_storage_permission():
-    entry = acl(OWNER, "TABLE", "vervfy_storage.objects", "UPDATE")
-    entry.is_grantable = True
-    with pytest.raises(RuntimeError, match="Unexpected direct storage capability ACL"):
-        check(inventory_connection(extra_acl=(entry,)))
-
-
-def test_rejects_unexpected_capability_object_ownership():
-    extra = SimpleNamespace(
-        role_name=OWNER,
-        object_type="TABLE",
-        object_name="public.users",
-    )
-    with pytest.raises(RuntimeError, match="unexpectedly owns"):
-        check(inventory_connection(extra_owner=(extra,)))
-
-
-def test_rejects_default_acl_for_capability_role():
-    with pytest.raises(RuntimeError, match="default ACLs"):
-        check(inventory_connection(defaults=(OWNER,)))
+    def test_rejects_default_acl_for_capability_role(self):
+        with self.assertRaisesRegex(RuntimeError, "default ACLs"):
+            check(inventory_connection(defaults=(OWNER,)))
