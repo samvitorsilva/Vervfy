@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:e2e": "playwright test",
-    "test:e2e:google-auth": "PLAYWRIGHT_USE_PRODUCTION_SERVER=1 playwright test tests/google-auth.spec.ts"
+    "test:e2e:google-auth": "PLAYWRIGHT_USE_PRODUCTION_SERVER=1 playwright test tests/google-auth.spec.ts",
+    "test:i18n": "node --test tests/toast-translations.test.mjs"
   },
   "dependencies": {
     "next": "16.4.3",
