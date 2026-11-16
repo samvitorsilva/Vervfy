@@ -17,6 +17,12 @@ export default function Homepage() {
   useEffect(() => {
     let active = true;
 
+    // Only a successful login/onboarding redirect sets this one-use hint.
+    // It avoids showing a loading screen, but never replaces server validation.
+    const justAuthenticated = window.sessionStorage.getItem("vervfy-just-authenticated") === "1";
+    window.sessionStorage.removeItem("vervfy-just-authenticated");
+    if (justAuthenticated) setSessionStatus("authenticated");
+
     void fetch("/api/me", { credentials: "same-origin", cache: "no-store" })
       .then((response) => {
         if (!active) return;
