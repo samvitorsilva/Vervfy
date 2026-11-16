@@ -4339,7 +4339,7 @@ export default function LibraryApp() {
         ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div>, document.body)
         : null}
       {toast && typeof document !== "undefined"
-        ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{toast}</div></div>, document.body)
+        ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{t(toast)}</div></div>, document.body)
         : null}
     </div>
   );
