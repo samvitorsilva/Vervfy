@@ -675,7 +675,9 @@ def _check_storage_acl_inventory(
           AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
           AND r.rolname IN (:owner, :executor, :worker)
         UNION ALL
-        SELECT r.rolname, 'FUNCTION', n.nspname || '.' || p.proname
+        SELECT r.rolname, 'FUNCTION',
+               n.nspname || '.' || p.proname || '(' ||
+                   pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
         FROM pg_catalog.pg_proc p
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
         JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
@@ -683,13 +685,16 @@ def _check_storage_acl_inventory(
           AND r.rolname IN (:owner, :executor, :worker)
     """), {"owner": owner, "executor": executor, "worker": worker}).all()
 
+    expected_owned_functions = {
+        "vervfy_storage." + signature for signature in lifecycle_functions
+    }
     unexpected_ownership = [
         (row.role_name, row.object_type, row.object_name)
         for row in ownership
         if not (
             row.role_name == owner
             and row.object_type == "FUNCTION"
-            and row.object_name.startswith("vervfy_storage.")
+            and row.object_name in expected_owned_functions
         )
     ]
     if unexpected_ownership:
