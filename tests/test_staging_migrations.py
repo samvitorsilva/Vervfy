@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -461,6 +462,7 @@ class StagingPostgresTests(unittest.TestCase):
             ROOT / 'scripts/storage_production_migration.py',
         )
         runner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = runner
         spec.loader.exec_module(runner)
         runner._check_storage_acl_inventory(
             self.c,
