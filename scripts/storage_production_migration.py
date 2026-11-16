@@ -616,13 +616,33 @@ def _check_storage_acl_inventory(
     ):
         allowed.add((owner, "COLUMN", f"{table}.{column}", "SELECT", False))
 
-    executor_functions = (
-        "claim_cleanup(p_object uuid)",
+    lifecycle_functions = (
+        "guard_namespace()",
+        "validate_namespace(uuid, text, text, text)",
+        "_has_references(text)",
+        "_queue(uuid, text)",
+        "reserve_object(text, text)",
+        "advance_upload(uuid, uuid, text)",
+        "request_cleanup(uuid)",
+        "guard_references()",
+        "retire_candidate(uuid)",
+        "claim_cleanup(uuid)",
         "claim_next_cleanup()",
-        "complete_cleanup(p_object uuid, p_token uuid)",
-        "retire_candidate(p_object uuid)",
-        "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
-        "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
+        "complete_cleanup(uuid, uuid)",
+        "retry_cleanup(uuid, uuid, text)",
+    )
+    for signature in lifecycle_functions:
+        allowed.add((
+            owner, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
+        ))
+
+    executor_functions = (
+        "claim_cleanup(uuid)",
+        "claim_next_cleanup()",
+        "complete_cleanup(uuid, uuid)",
+        "retire_candidate(uuid)",
+        "retry_cleanup(uuid, uuid, text)",
+        "validate_namespace(uuid, text, text, text)",
     )
     for signature in executor_functions:
         allowed.add((
