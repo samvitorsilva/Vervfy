@@ -519,7 +519,9 @@ export class PlaybackController {
     const attempt = this.attempt;
     if (!attempt?.wantsPlayback || this.audio.paused) return;
     usePlayerStore.getState().setPlaybackStatus("buffering");
-    if (attempt.stallTimer !== null) return;
+    // Android installed PWAs may throttle timers while the screen is locked.
+    // Do not turn a background buffering event into a terminal playback failure.
+    if (document.visibilityState === "hidden" || attempt.stallTimer !== null) return;
 
     const stalledAt = this.audio.currentTime;
     attempt.stallTimer = window.setTimeout(() => {
@@ -529,7 +531,8 @@ export class PlaybackController {
         attempt.wantsPlayback &&
         !this.audio.paused &&
         !this.audio.ended &&
-        this.audio.currentTime <= stalledAt + 0.1
+        this.audio.currentTime <= stalledAt + 0.1 &&
+        document.visibilityState === "visible"
       ) {
         this.handlePlaybackFailure(
           attempt,
@@ -594,8 +597,24 @@ export class PlaybackController {
   };
 
   private readonly onVisibilityChange = (): void => {
-    if (document.visibilityState !== "visible") return;
+    const attempt = this.attempt;
+    if (document.visibilityState !== "visible") {
+      // Clear watchdogs before the OS suspends JavaScript timers. Native audio
+      // can continue buffering independently while the PWA is backgrounded.
+      this.clearStallTimer(attempt);
+      return;
+    }
     this.restorePlayback();
+    if (
+      attempt &&
+      this.attempt === attempt &&
+      attempt.wantsPlayback &&
+      !attempt.failed &&
+      !this.audio.paused &&
+      this.audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+    ) {
+      this.onBuffering();
+    }
   };
 
   private readonly onOnline = (): void => {
