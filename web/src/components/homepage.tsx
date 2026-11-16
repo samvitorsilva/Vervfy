@@ -37,6 +37,16 @@ export default function Homepage() {
     };
   }, [sessionAttempt]);
 
+  if (sessionStatus === "checking") {
+    return (
+      <div
+        className="homepage-page"
+        role="status"
+        aria-label={t("Loading your music library")}
+      />
+    );
+  }
+
   if (sessionStatus === "authenticated") return <LibraryApp />;
 
   return (
