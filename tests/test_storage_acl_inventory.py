@@ -57,7 +57,15 @@ def acl(role, kind, name, privilege):
     )
 
 
-def inventory_connection(\n    *, extra_acl=(), extra_owner=(), defaults=(),\n    extra_effective_relation=(), extra_effective_function=(), unsafe_schema=None,\n):
+def inventory_connection(
+    *,
+    extra_acl=(),
+    extra_owner=(),
+    defaults=(),
+    extra_effective_relation=(),
+    extra_effective_function=(),
+    unsafe_schema=None,
+):
     rows = [
         acl(OWNER, "SCHEMA", "vervfy_storage", "USAGE"),
         acl(OWNER, "SCHEMA", "public", "USAGE"),
