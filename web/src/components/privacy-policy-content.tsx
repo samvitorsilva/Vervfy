@@ -25,7 +25,7 @@ export default function PrivacyPolicyContent() {
           {t("Vervfy supports username/password accounts and Google sign-in. Google sign-in requests OpenID Connect identity, email, and basic profile scopes. Google processes the sign-in request; Vervfy receives the stable Google account identifier and may store an email when Google marks it verified. Vervfy does not receive your Google password, request Gmail or Drive access, or store your Google profile name or photo.")}
         </p>
         <p>
-          {t("For username/password accounts, email is optional and is not used to sign in; email verification and email-based password recovery are not implemented. You can link or unlink Google in account settings. Google-only accounts must add a password before unlinking Google. Sensitive actions may require your current password or a fresh Google sign-in.")}
+          {t("For username/password accounts, email is optional and is not used to sign in. Password recovery sends a one-time email-verification link to unverified addresses, then a separate reset link. Google-only accounts cannot use password recovery. You can link or unlink Google in account settings. Sensitive actions may require your current password or a fresh Google sign-in.")}
         </p>
         <p>
           {t("The app and its hosting infrastructure also process technical request information, including IP address and browser or network details, to deliver the service, manage sessions, prevent abuse, and apply rate limits. Hosting and service-provider log retention has not been independently verified.")}
