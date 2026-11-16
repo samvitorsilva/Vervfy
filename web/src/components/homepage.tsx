@@ -11,9 +11,9 @@ import { useLanguage } from "@/lib/i18n";
 
 type SessionStatus = "checking" | "anonymous" | "authenticated" | "error";
 
-export default function Homepage() {
+export default function Homepage({ hasSessionCookie = false }: { hasSessionCookie?: boolean }) {
   const { t } = useLanguage();
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("checking");
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(hasSessionCookie ? "checking" : "anonymous");
   const [sessionAttempt, setSessionAttempt] = useState(0);
 
   useEffect(() => {
