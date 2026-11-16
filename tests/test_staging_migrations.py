@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -453,3 +454,19 @@ class StagingPostgresTests(unittest.TestCase):
         self.denied("SELECT setval('users_test_serial_seq',100)")
         self.denied("SELECT nextval('unrelated_sequence')")
         self.denied('CREATE TABLE public.unapproved(id int)')
+
+
+    def test_installed_storage_acl_inventory_matches_reviewed_allowlist(self):
+        spec = importlib.util.spec_from_file_location(
+            'storage_production_runner_acl_integration',
+            ROOT / 'scripts/storage_production_migration.py',
+        )
+        runner = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = runner
+        spec.loader.exec_module(runner)
+        runner._check_storage_acl_inventory(
+            self.c,
+            owner='vervfy_storage_lifecycle_owner',
+            executor='vervfy_storage_cleanup',
+            worker='storage_cleanup_worker',
+        )

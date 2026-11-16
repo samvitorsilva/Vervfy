@@ -20,6 +20,21 @@ jobs:
         env:
           DATABASE_URL: "sqlite:///:memory:"
 
+  storage-acl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y postgresql
+      - run: python -m pip install --require-hashes -r requirements.lock
+      - name: Run isolated PostgreSQL storage migration and ACL regressions
+        run: |
+          export PATH="$(pg_config --bindir):$PATH"
+          python -m unittest discover -s tests -p 'test_staging_migrations.py' -v
+          python -m unittest discover -s tests -p 'test_storage_acl_inventory.py' -v
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

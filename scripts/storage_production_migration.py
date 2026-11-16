@@ -498,19 +498,375 @@ def _check_role_graph(connection: Connection, migration_user: str) -> None:
         ).scalar_one_or_none(),
     )
 
-    # Read-only privilege scan: accept only the reviewed Supabase extension ACL
-    # exception; reject unrelated grants and inherited dashboard_user access.
+    # Migration 0029's fresh-install scan is not valid after 0029-0031
+    # intentionally grant lifecycle table and function capabilities. Validate
+    # the exact post-install ACL inventory instead; never revoke existing ACLs.
     try:
-        migration._fresh_privileges(
-            connection,
-            (by_name[owner].oid, by_name[executor].oid, by_name[worker].oid),
+        _check_storage_acl_inventory(
+            connection, owner=owner, executor=executor, worker=worker
         )
     except RuntimeError:
         _block_role_graph(
             ROLE_GRAPH_CATEGORY_PREEXISTING_PRIVILEGES,
-            "storage capability has preexisting object privileges, "
-            "ownership, routines or default ACLs",
+            "storage capability ACL inventory differs from the reviewed "
+            "0029-0031 allowlist",
         )
+
+
+
+def _check_storage_acl_inventory(
+    connection: Connection,
+    *,
+    owner: str,
+    executor: str,
+    worker: str,
+) -> None:
+    """Accept only the reviewed 0029-0031 storage ACLs; reject privilege drift.
+
+    This is intentionally a post-install inventory, not migration 0029's
+    fresh-role check. Existing grants on the lifecycle tables and functions
+    are required for the application to operate and must not be revoked.
+    """
+    rows = connection.execute(text("""
+        SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
+               n.nspname::text AS object_name, a.privilege_type,
+               a.is_grantable
+        FROM pg_catalog.pg_namespace n
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            COALESCE(n.nspacl, pg_catalog.acldefault('n'::"char", n.nspowner))
+        ) a
+        JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+        WHERE r.rolname IN (:owner, :executor, :worker)
+
+        UNION ALL
+
+        SELECT r.rolname, 'TABLE', n.nspname::text || '.' || c.relname::text,
+               a.privilege_type, a.is_grantable
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            COALESCE(
+                c.relacl,
+                pg_catalog.acldefault(
+                    CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END,
+                    c.relowner
+                )
+            )
+        ) a
+        JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+        WHERE c.relkind IN ('r','p','v','m','f','S')
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND r.rolname IN (:owner, :executor, :worker)
+
+        UNION ALL
+
+        SELECT r.rolname, 'COLUMN',
+               n.nspname::text || '.' || c.relname::text || '.' || att.attname::text,
+               a.privilege_type, a.is_grantable
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid
+        CROSS JOIN LATERAL pg_catalog.aclexplode(att.attacl) a
+        JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+        WHERE att.attnum > 0 AND NOT att.attisdropped
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND r.rolname IN (:owner, :executor, :worker)
+
+        UNION ALL
+
+        SELECT r.rolname, 'FUNCTION',
+               n.nspname::text || '.' || p.proname::text || '(' ||
+                   pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
+               a.privilege_type, a.is_grantable
+        FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            COALESCE(p.proacl, pg_catalog.acldefault('f'::"char", p.proowner))
+        ) a
+        JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+        WHERE n.nspname = 'vervfy_storage'
+          AND r.rolname IN (:owner, :executor, :worker)
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    actual = {
+        (row.role_name, row.object_type, row.object_name,
+         row.privilege_type, bool(row.is_grantable))
+        for row in rows
+    }
+
+    allowed = set()
+    for object_name in ("vervfy_storage", "public"):
+        allowed.add((owner, "SCHEMA", object_name, "USAGE", False))
+    allowed.add((executor, "SCHEMA", "vervfy_storage", "USAGE", False))
+
+    for table, privileges in {
+        "vervfy_storage.namespaces": ("SELECT",),
+        "vervfy_storage.objects": ("SELECT", "INSERT", "UPDATE"),
+        "vervfy_storage.cleanup_jobs": ("SELECT", "INSERT", "UPDATE"),
+    }.items():
+        for privilege in privileges:
+            allowed.add((owner, "TABLE", table, privilege, False))
+
+    for table, column in (
+        ("public.users", "id"),
+        ("public.tracks", "storage_path"),
+        ("public.tracks", "cover_path"),
+        ("public.artist_photos", "storage_path"),
+        ("public.upload_jobs", "storage_path"),
+    ):
+        allowed.add((owner, "COLUMN", f"{table}.{column}", "SELECT", False))
+
+    lifecycle_functions = (
+        "guard_namespace()",
+        "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
+        "_has_references(p_path text)",
+        "_queue(p_object uuid, p_actor text)",
+        "reserve_object(p_kind text, p_extension text)",
+        "advance_upload(p_object uuid, p_token uuid, p_next text)",
+        "request_cleanup(p_object uuid)",
+        "guard_references()",
+        "retire_candidate(p_object uuid)",
+        "claim_cleanup(p_object uuid)",
+        "claim_next_cleanup()",
+        "complete_cleanup(p_object uuid, p_token uuid)",
+        "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
+    )
+    for signature in lifecycle_functions:
+        allowed.add((
+            owner, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
+        ))
+
+    executor_functions = (
+        "claim_cleanup(p_object uuid)",
+        "claim_next_cleanup()",
+        "complete_cleanup(p_object uuid, p_token uuid)",
+        "retire_candidate(p_object uuid)",
+        "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
+        "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
+    )
+    for signature in executor_functions:
+        allowed.add((
+            executor, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
+        ))
+
+    # Also inspect effective privileges, not just direct ACL entries. This
+    # catches PUBLIC grants and privileges inherited through an unexpected role.
+    effective_relations = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname || '.' || c.relname AS object_name,
+               privilege.privilege_type
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN (VALUES
+            ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'),
+            ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
+        ) AS privilege(privilege_type)
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND c.relkind IN ('r','p','v','m','f')
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_table_privilege(
+              r.oid, c.oid, privilege.privilege_type
+          )
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    effective_allowed = set()
+    for table, privileges in {
+        "vervfy_storage.namespaces": ("SELECT",),
+        "vervfy_storage.objects": ("SELECT", "INSERT", "UPDATE"),
+        "vervfy_storage.cleanup_jobs": ("SELECT", "INSERT", "UPDATE"),
+        "public.users": ("SELECT",),
+        "public.tracks": ("SELECT",),
+        "public.artist_photos": ("SELECT",),
+        "public.upload_jobs": ("SELECT",),
+        "extensions.pg_stat_statements": ("SELECT",),
+        "extensions.pg_stat_statements_info": ("SELECT",),
+    }.items():
+        for privilege in privileges:
+            effective_allowed.add((owner, table, privilege))
+    for role in (executor, worker):
+        for view in (
+            "extensions.pg_stat_statements",
+            "extensions.pg_stat_statements_info",
+        ):
+            effective_allowed.add((role, view, "SELECT"))
+
+    unexpected_effective = {
+        (row.role_name, row.object_name, row.privilege_type)
+        for row in effective_relations
+    } - effective_allowed
+    if unexpected_effective:
+        raise RuntimeError(
+            "Unexpected effective storage capability relation privileges: "
+            + "; ".join(
+                f"{role} {name} {privilege}"
+                for role, name, privilege in sorted(unexpected_effective)[:3]
+            )
+        )
+
+    effective_columns = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname || '.' || c.relname || '.' || att.attname AS object_name,
+               privilege.privilege_type
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_attribute att ON att.attrelid = c.oid
+        CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES'))
+            AS privilege(privilege_type)
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND att.attnum > 0 AND NOT att.attisdropped
+          AND n.nspname = 'public'
+          AND pg_catalog.has_column_privilege(
+              r.oid, c.oid, att.attnum, privilege.privilege_type
+          )
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    expected_columns = {
+        (owner, "public.users.id", "SELECT"),
+        (owner, "public.tracks.storage_path", "SELECT"),
+        (owner, "public.tracks.cover_path", "SELECT"),
+        (owner, "public.artist_photos.storage_path", "SELECT"),
+        (owner, "public.upload_jobs.storage_path", "SELECT"),
+    }
+    unexpected_columns = {
+        (row.role_name, row.object_name, row.privilege_type)
+        for row in effective_columns
+    } - expected_columns
+    if unexpected_columns:
+        raise RuntimeError(
+            "Unexpected effective storage capability column privileges: "
+            + "; ".join(
+                f"{role} {name} {privilege}"
+                for role, name, privilege in sorted(unexpected_columns)[:3]
+            )
+        )
+
+    effective_sequences = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname || '.' || c.relname AS object_name,
+               privilege.privilege_type
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE'))
+            AS privilege(privilege_type)
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND c.relkind = 'S'
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_sequence_privilege(
+              r.oid, c.oid, privilege.privilege_type
+          )
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    if effective_sequences:
+        raise RuntimeError("Storage capability roles have unexpected sequence privileges")
+
+    effective_functions = connection.execute(text("""
+        SELECT r.rolname AS role_name,
+               n.nspname::text || '.' || p.proname::text || '(' ||
+                   pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS object_name
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE')
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    expected_function_access = {
+        (owner, "vervfy_storage." + signature)
+        for signature in lifecycle_functions
+    } | {
+        (role, "vervfy_storage." + signature)
+        for role in (executor, worker)
+        for signature in executor_functions
+    }
+    actual_function_access = {
+        (row.role_name, row.object_name) for row in effective_functions
+    }
+    unexpected_function_access = actual_function_access - expected_function_access
+    if unexpected_function_access:
+        raise RuntimeError(
+            "Unexpected effective storage capability function privileges: "
+            + "; ".join(
+                f"{role} {name}"
+                for role, name in sorted(unexpected_function_access)[:3]
+            )
+        )
+
+    unsafe_schema_create = connection.execute(text("""
+        SELECT r.rolname, n.nspname
+        FROM pg_catalog.pg_roles r
+        CROSS JOIN pg_catalog.pg_namespace n
+        WHERE r.rolname IN (:owner, :executor, :worker)
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE')
+        LIMIT 1
+    """), {"owner": owner, "executor": executor, "worker": worker}).first()
+    if unsafe_schema_create:
+        raise RuntimeError("Storage capability roles have unexpected schema CREATE access")
+
+    unexpected = actual - allowed
+    if unexpected:
+        sample = sorted(unexpected)
+        raise RuntimeError(
+            "Unexpected direct storage capability ACL entries:" + chr(10)
+            + chr(10).join(
+                repr((role, kind, name, privilege, grantable))
+                for role, kind, name, privilege, grantable in sample
+            )
+        )
+
+    ownership = connection.execute(text("""
+        SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
+               n.nspname::text AS object_name
+        FROM pg_catalog.pg_namespace n
+        JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
+        WHERE r.rolname IN (:owner, :executor, :worker)
+        UNION ALL
+        SELECT r.rolname, 'TABLE', n.nspname::text || '.' || c.relname::text
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_roles r ON r.oid = c.relowner
+        WHERE c.relkind IN ('r','p','v','m','f','S')
+          AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND r.rolname IN (:owner, :executor, :worker)
+        UNION ALL
+        SELECT r.rolname, 'FUNCTION',
+               n.nspname::text || '.' || p.proname::text || '(' ||
+                   pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
+        FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND r.rolname IN (:owner, :executor, :worker)
+    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+
+    expected_owned_functions = {
+        "vervfy_storage." + signature for signature in lifecycle_functions
+    }
+    unexpected_ownership = [
+        (row.role_name, row.object_type, row.object_name)
+        for row in ownership
+        if not (
+            row.role_name == owner
+            and row.object_type == "FUNCTION"
+            and row.object_name in expected_owned_functions
+        )
+    ]
+    if unexpected_ownership:
+        raise RuntimeError("Storage capability role unexpectedly owns database objects")
+
+    defaults = connection.execute(text("""
+        SELECT DISTINCT r.rolname
+        FROM pg_catalog.pg_default_acl d
+        CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) a
+        JOIN pg_catalog.pg_roles r
+          ON r.oid = d.defaclrole OR r.oid = a.grantee
+        WHERE r.rolname IN (:owner, :executor, :worker) OR a.grantee = 0
+    """), {"owner": owner, "executor": executor, "worker": worker}).scalars().all()
+    if defaults:
+        raise RuntimeError("Storage capability roles have unexpected default ACLs")
 
 
 def _verify_client_tls(connection: Connection) -> None:
