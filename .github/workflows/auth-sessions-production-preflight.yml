@@ -1,0 +1,35 @@
+name: Production auth sessions migration preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vervfy-production-auth-session-migration
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production-migration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements.lock
+      - name: Read-only production preflight
+        env:
+          VERVFY_ENVIRONMENT: production
+          VERVFY_PRODUCTION_PROJECT_REF: llxmskxxchpmeavorusj
+          VERVFY_PRODUCTION_EXPECTED_DATABASE: postgres
+          VERVFY_PRODUCTION_EXPECTED_USER: vervfy_prod_migrator
+          VERVFY_PRODUCTION_CA_FILE: /etc/ssl/certs/ca-certificates.crt
+          VERVFY_PRODUCTION_DATABASE_URL: ${{ secrets.VERVFY_PRODUCTION_DATABASE_URL }}
+        run: |
+          python scripts/auth_sessions_production_migration.py check \
+            --confirm-project-ref llxmskxxchpmeavorusj
