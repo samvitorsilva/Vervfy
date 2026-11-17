@@ -1,6 +1,6 @@
 """Transactional email via SMTP or Mailjet Send API v3.1.
 
-Select the transport with EMAIL_TRANSPORT=smtp|mailjet_api (default: smtp).
+Select the transport with EMAIL_TRANSPORT=smtp|mailjet_api|resend (default: smtp).
 SMTP uses VERVFY_SMTP_* variables. Mailjet uses VERVFY_MAILJET_API_KEY and
 VERVFY_MAILJET_SECRET_KEY over HTTPS; it never falls back to SMTP.
 """
@@ -57,6 +57,8 @@ MAILJET_SEND_URL = "https://api.mailjet.com/v3.1/send"
 _MAILJET_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 _EMAIL_TRANSPORT_SMTP = "smtp"
 _EMAIL_TRANSPORT_MAILJET_API = "mailjet_api"
+_EMAIL_TRANSPORT_RESEND = "resend"
+RESEND_SEND_URL = "https://api.resend.com/emails"
 
 
 class EmailTransport(Protocol):
@@ -435,6 +437,95 @@ class MailjetApiTransport:
         )
 
 
+
+class ResendSettings:
+    def __init__(self, *, api_key: str | None = None, mail_from: str | None = None):
+        self.api_key = api_key if api_key is not None else _env("RESEND_API_KEY")
+        self.mail_from = mail_from if mail_from is not None else _env("VERVFY_EMAIL_FROM")
+
+    def require_ready(self) -> None:
+        if not self.api_key or not self.mail_from:
+            raise SmtpConfigError("RESEND_API_KEY and VERVFY_EMAIL_FROM are required")
+        _reject_resend_test_sender(self.mail_from)
+        if _env("VERVFY_ENVIRONMENT").lower() == "production":
+            if parseaddr(self.mail_from)[1].lower().split("@")[-1] != "vervfy.com":
+                raise SmtpConfigError("Production Resend sender must use vervfy.com")
+
+
+def email_message_to_resend_payload(message: EmailMessage) -> dict[str, Any]:
+    from_address = message.get("From", "")
+    to_address = parseaddr(message.get("To", ""))[1]
+    text_part, html_part = _message_text_and_html(message)
+    if not parseaddr(from_address)[1] or not to_address or not (text_part or html_part):
+        raise SmtpSendError("Could not send email", reason=SMTP_REASON_MESSAGE_REJECTED)
+    payload: dict[str, Any] = {
+        "from": from_address,
+        "to": [to_address],
+        "subject": message.get("Subject", ""),
+    }
+    if text_part is not None:
+        payload["text"] = text_part
+    if html_part is not None:
+        payload["html"] = html_part
+    return payload
+
+
+class ResendApiTransport:
+    """Resend HTTPS API; single attempt, no provider fallback."""
+
+    def __init__(
+        self,
+        settings: ResendSettings | None = None,
+        *,
+        client: httpx.Client | None = None,
+    ):
+        self.settings = settings or ResendSettings()
+        self._client = client
+
+    def send(self, message: EmailMessage) -> None:
+        self.settings.require_ready()
+        payload = email_message_to_resend_payload(message)
+        try:
+            if self._client is not None:
+                response = self._post(self._client, payload)
+            else:
+                with httpx.Client(
+                    timeout=_MAILJET_TIMEOUT, verify=True, trust_env=False
+                ) as client:
+                    response = self._post(client, payload)
+        except Exception as exc:
+            raise SmtpSendError(
+                "Could not send email", reason=classify_smtp_failure(exc)
+            ) from None
+        if response.status_code in {401, 403}:
+            reason = SMTP_REASON_AUTHENTICATION_FAILURE
+        elif response.status_code == 429:
+            reason = SMTP_REASON_RATE_LIMITED
+        elif response.status_code in {400, 422}:
+            reason = SMTP_REASON_MESSAGE_REJECTED
+        elif not 200 <= response.status_code < 300:
+            reason = SMTP_REASON_PROVIDER_ERROR
+        else:
+            try:
+                result = response.json()
+                if isinstance(result, dict) and isinstance(result.get("id"), str) and result["id"]:
+                    return
+            except ValueError:
+                pass
+            reason = SMTP_REASON_MALFORMED_RESPONSE
+        raise SmtpSendError("Could not send email", reason=reason)
+
+    def _post(self, client: httpx.Client, payload: dict[str, Any]) -> httpx.Response:
+        return client.post(
+            RESEND_SEND_URL,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {self.settings.api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+
+
 class MemoryTransport:
     """In-memory sink for local tests; never logs message bodies."""
 
@@ -456,7 +547,7 @@ class _MisconfiguredTransport:
         self.settings = None
 
     def send(self, message: EmailMessage) -> None:
-        raise SmtpConfigError("EMAIL_TRANSPORT must be smtp or mailjet_api")
+        raise SmtpConfigError("EMAIL_TRANSPORT must be smtp, mailjet_api or resend")
 
 
 def selected_email_transport() -> str:
@@ -465,6 +556,8 @@ def selected_email_transport() -> str:
 
 def build_default_transport() -> EmailTransport:
     choice = selected_email_transport()
+    if choice == _EMAIL_TRANSPORT_RESEND:
+        return ResendApiTransport()
     if choice == _EMAIL_TRANSPORT_MAILJET_API:
         return MailjetApiTransport()
     if choice == _EMAIL_TRANSPORT_SMTP:
