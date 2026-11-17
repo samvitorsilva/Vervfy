@@ -204,6 +204,24 @@ class ConfigurationTests(unittest.TestCase):
             ):
                 google_oauth.GoogleOAuthConfig.from_environment()
 
+    def test_public_signup_accepts_verified_google_email_without_test_allowlist(self):
+        config = google_oauth.GoogleOAuthConfig(
+            client_id="id", client_secret="secret",
+            redirect_uri="https://app.example/api/auth/google/callback",
+            frontend_origin="https://app.example", redis_url="redis://localhost",
+            identity_lookup_database_url="postgresql://example",
+            public_signup_enabled=True,
+        )
+        config.require_test_user("someone@example.com", email_verified=True)
+        for email, verified in ((None, True), ("someone@example.com", False), (123, True)):
+            with self.subTest(email=email, verified=verified), self.assertRaises(google_oauth.GoogleTokenError):
+                config.require_test_user(email, email_verified=verified)
+
+    def test_public_signup_flag_defaults_to_restricted_and_rejects_invalid_value(self):
+        with patch.dict(os.environ, {"GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED": "invalid", "GOOGLE_OAUTH_ENABLED": "1"}, clear=True):
+            with self.assertRaisesRegex(google_oauth.OAuthConfigurationError, "GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED"):
+                google_oauth.GoogleOAuthConfig.from_environment()
+
     def test_https_configuration_uses_host_cookie_and_separate_lookup_role(self):
         values = {
             "GOOGLE_OAUTH_ENABLED": "1",
