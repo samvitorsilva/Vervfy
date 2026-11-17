@@ -213,15 +213,13 @@ class GoogleOAuthConfig:
     public_signup_enabled: bool = False
 
     def require_test_user(self, email: Any, *, email_verified: Any) -> None:
-        """Accept only the configured email from verified server-owned claims."""
+        """Require a verified Google email; optionally enforce a test allowlist."""
         if email_verified is not True or not isinstance(email, str):
             raise GoogleTokenError("Google authentication requires verified email")
         if self.public_signup_enabled:
             return
         if (
             not self.test_user_email
-            or email_verified is not True
-            or not isinstance(email, str)
             or email.casefold() != self.test_user_email.casefold()
         ):
             raise GoogleTokenError("Google authentication is restricted")
@@ -234,20 +232,29 @@ class GoogleOAuthConfig:
         if enabled not in {"1", "true", "on", "yes"}:
             raise OAuthConfigurationError("GOOGLE_OAUTH_ENABLED must be boolean")
 
-        public_signup_flag = os.environ.get("GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED", "0").strip().lower()
-        if public_signup_flag not in {"0", "1", "false", "true", "off", "on", "no", "yes", ""}:
-            raise OAuthConfigurationError("GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED must be boolean")
+        public_signup_flag = os.environ.get(
+            "GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED", "0"
+        ).strip().lower()
+        if public_signup_flag not in {
+            "0", "1", "false", "true", "off", "on", "no", "yes", "",
+        }:
+            raise OAuthConfigurationError(
+                "GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED must be boolean"
+            )
         public_signup_enabled = public_signup_flag in {"1", "true", "on", "yes"}
         test_user_email = os.environ.get("GOOGLE_OAUTH_TEST_USER_EMAIL", "").strip()
         if (
             (not test_user_email and not public_signup_enabled)
             or len(test_user_email) > 254
-            or (test_user_email and not re.fullmatch(
-                r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
-                r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-                r"[A-Za-z]{2,63}",
-                test_user_email,
-            ))
+            or (
+                test_user_email
+                and not re.fullmatch(
+                    r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
+                    r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+                    r"[A-Za-z]{2,63}",
+                    test_user_email,
+                )
+            )
             or len(test_user_email.split("@", 1)[0]) > 64
         ):
             raise OAuthConfigurationError(
