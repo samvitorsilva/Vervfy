@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
 
 import server
+from passkeys import Binding
 
 TOKEN = "x" * 43
 ENDPOINTS = [
@@ -131,7 +132,7 @@ def test_distributed_limiter_fails_closed(result, status):
     request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
     with pytest.raises(HTTPException) as caught:
         server.PasskeyRequestLimiter(backend).check(
-            request, server.passkeys.Binding("a", "sid", 1, "logout_all"), "test"
+            request, Binding("a", "sid", 1, "logout_all"), "test"
         )
     assert caught.value.status_code == status
     args = backend.eval.call_args.args
@@ -160,3 +161,12 @@ def test_rotation_refreshes_csrf(monkeypatch):
     assert request.session["csrf_token"] != "old"
     assert request.session["sid"] == "new-session"
     assert request.session["sv"] == 2
+
+
+def test_security_methods_returns_404_when_passkeys_disabled(client, monkeypatch):
+    monkeypatch.setattr(server, "passkey_config", None)
+    response = client.get(
+        "/api/account/security-methods", headers={"x-csrf-token": "csrf"}
+    )
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found"}

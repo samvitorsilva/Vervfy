@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2
@@ -218,9 +218,11 @@ class ConfigurationTests(unittest.TestCase):
                 config.require_test_user(email, email_verified=verified)
 
     def test_public_signup_flag_defaults_to_restricted_and_rejects_invalid_value(self):
-        with patch.dict(os.environ, {"GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED": "invalid", "GOOGLE_OAUTH_ENABLED": "1"}, clear=True):
-            with self.assertRaisesRegex(google_oauth.OAuthConfigurationError, "GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED"):
-                google_oauth.GoogleOAuthConfig.from_environment()
+        with (
+            patch.dict(os.environ, {"GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED": "invalid", "GOOGLE_OAUTH_ENABLED": "1"}, clear=True),
+            self.assertRaisesRegex(google_oauth.OAuthConfigurationError, "GOOGLE_OAUTH_PUBLIC_SIGNUP_ENABLED"),
+        ):
+            google_oauth.GoogleOAuthConfig.from_environment()
 
     def test_https_configuration_uses_host_cookie_and_separate_lookup_role(self):
         values = {
@@ -313,6 +315,8 @@ class GoogleTokenTests(unittest.TestCase):
             oauth_client_factory=client_factory,
         )
         service._oidc_app.server_metadata = metadata
+        # Unknown signing keys trigger a JWKS refresh; keep that request offline too.
+        service._oidc_app.fetch_jwk_set = AsyncMock(return_value=metadata["jwks"])
         return service, expected_verifier, expected_nonce
 
     def start_and_consume(self, service, verifier, nonce):
@@ -626,7 +630,7 @@ class CallbackTests(unittest.TestCase):
     def test_onboarding_rechecks_current_test_email_before_creation(self):
         for email in (None, "previous-test-user@example.com"):
             with self.subTest(email=email):
-                flow = SimpleNamespace(consume_pending_signup=lambda _: {
+                flow = SimpleNamespace(consume_pending_signup=lambda _, email=email: {
                     "issuer": google_oauth.GOOGLE_ISSUER,
                     "subject": "pending-subject", "email": email,
                 })
@@ -886,7 +890,10 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         create_user.assert_not_called()
 
-    def test_link_callback_requires_bound_account_and_rotates_sessions(self):
+    def _assert_link_callback(
+        self, *, claims, password_age=0, identity=None, session_id="active-session",
+        expected_success=True, password_override=None, omit_password=False,
+    ):
         user = {
             "id": "password-user",
             "session_version": 4,
@@ -896,15 +903,19 @@ class CallbackTests(unittest.TestCase):
             "user_id": "password-user",
             "session_id": "active-session",
             "session_version": 4,
-            "password_verified_at": int(time.time()),
+            "password_verified_at": int(time.time()) - password_age,
         }
+        if omit_password:
+            context.pop("password_verified_at")
+        if password_override is not None:
+            context["password_verified_at"] = password_override
         flow = self._flow(
             claims={
                 "iss": google_oauth.GOOGLE_ISSUER,
                 "sub": "new-google-subject",
-                "auth_time": int(time.time()),
+                **claims,
             },
-            user_id=None,
+            user_id=identity,
             purpose="link",
             context=context,
         )
@@ -919,7 +930,7 @@ class CallbackTests(unittest.TestCase):
             },
             session={
                 "user_id": "password-user",
-                "sid": "active-session",
+                "sid": session_id,
                 "sv": 4,
             },
         )
@@ -939,6 +950,12 @@ class CallbackTests(unittest.TestCase):
             patch.object(server.session_store, "create", return_value="rotated"),
         ):
             response = asyncio.run(server.google_oauth_callback(request))
+        if not expected_success:
+            self.assertIn("google_link=failed", response.headers["location"])
+            link.assert_not_called()
+            revoke.assert_not_called()
+            self.assertEqual(request.session["sid"], session_id)
+            return
         self.assertEqual(
             response.headers["location"], "/?view=account&google_link=success"
         )
@@ -948,6 +965,39 @@ class CallbackTests(unittest.TestCase):
             request.session,
             {"user_id": "password-user", "sv": 5, "sid": "rotated"},
         )
+
+    def test_link_callback_requires_bound_account_and_rotates_sessions(self):
+        self._assert_link_callback(claims={"auth_time": int(time.time())})
+
+    def test_link_without_google_auth_time_accepts_recent_password(self):
+        self._assert_link_callback(claims={}, password_age=299)
+
+    def test_link_without_google_auth_time_rejects_expired_password(self):
+        self._assert_link_callback(claims={}, password_age=301, expected_success=False)
+
+    def test_link_without_google_auth_time_rejects_invalid_password_proof(self):
+        for value in (True, "invalid", int(time.time()) + 120):
+            with self.subTest(password_verified_at=value):
+                self._assert_link_callback(
+                    claims={}, password_override=value, expected_success=False,
+                )
+
+    def test_link_without_google_auth_time_preserves_binding_and_uniqueness(self):
+        for overrides in (
+            {"omit_password": True},
+            {"identity": "another-user"},
+            {"identity": "password-user"},
+            {"session_id": "different-session"},
+        ):
+            with self.subTest(**overrides):
+                self._assert_link_callback(claims={}, expected_success=False, **overrides)
+
+    def test_link_rejects_invalid_or_stale_supplied_google_auth_time(self):
+        for value in (None, True, "invalid", int(time.time()) - 301, int(time.time()) + 120):
+            with self.subTest(auth_time=value):
+                self._assert_link_callback(
+                    claims={"auth_time": value}, expected_success=False,
+                )
 
     def test_google_only_password_setup_stores_bound_identity_proof(self):
         user = {
@@ -1060,7 +1110,12 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(flow.stored_identity_proofs, [])
         self.assertEqual(request.session["sid"], "active-session")
 
-    def test_missing_auth_time_email_change_rejects_without_storing_proof(self):
+    def test_missing_auth_time_sensitive_actions_reject_without_storing_proof(self):
+        for purpose in ("email_change", "account_delete", "logout_all"):
+            with self.subTest(purpose=purpose):
+                self._assert_sensitive_action_rejects_missing_auth_time(purpose)
+
+    def _assert_sensitive_action_rejects_missing_auth_time(self, purpose):
         user = {
             "id": "google-user",
             "session_version": 2,
@@ -1077,7 +1132,7 @@ class CallbackTests(unittest.TestCase):
                 "sub": "linked-google-subject",
             },
             user_id="google-user",
-            purpose="email_change",
+            purpose=purpose,
             context=context,
         )
         flow.browser_binding = "browser-binding-token-12345678901234567890"

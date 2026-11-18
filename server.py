@@ -2149,7 +2149,11 @@ async def google_oauth_callback(request: Request) -> Response:
             return failed(config, purpose)
         auth_time = None
         identity_verified_at = None
-        if purpose not in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES:
+        # Linking already requires a recent, transaction-bound Vervfy password
+        # check below. Google may omit auth_time; only link can use that fallback.
+        if purpose not in google_oauth.GOOGLE_IDENTITY_CONFIRMATION_PURPOSES and not (
+            purpose == "link" and "auth_time" not in claims
+        ):
             stage = "freshness"
             auth_time = service.require_fresh_authentication(claims)
         if purpose == "link":
@@ -4741,3 +4745,4 @@ def track_stream(track_id: str, user=Depends(require_api_user)) -> Response:
         status_code=302,
         headers={"Cache-Control": "private, no-store"},
     )
+
