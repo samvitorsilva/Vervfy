@@ -331,6 +331,11 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               {passwordHint}
             </p>
           </div>
+          {isLogin ? (
+            <div style={{ textAlign: "right", marginBottom: "1rem" }}>
+              <Link href="/forgot-password">{t("Forgot password?")}</Link>
+            </div>
+          ) : null}
           <button
             className="auth-submit"
             type="submit"
@@ -351,12 +356,6 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           <Link href={isLogin ? "/register" : "/login"}>
             {t(isLogin ? "Create one" : "Log in")}
           </Link>
-          {isLogin ? (
-            <>
-              {" · "}
-              <Link href="/forgot-password">{t("Forgot password?")}</Link>
-            </>
-          ) : null}
         </div> : null}
         <SiteFooter showLanguage={false} />
       </section>
