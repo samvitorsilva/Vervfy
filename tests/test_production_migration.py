@@ -1,19 +1,21 @@
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock, patch
 
+from migration_snapshot import copy_migration_snapshot
 from sqlalchemy.engine import URL
 
+from scripts import production_migration as production_runner
 from scripts.production_migration import (
     AUTHORIZATION_TTL,
-    MigrationBlocked,
     PRODUCTION_PROJECT_REF,
+    REQUIRED_TABLES,
     START_REVISION,
     TARGET_REVISION,
-    REQUIRED_TABLES,
+    MigrationBlocked,
     ProductionTarget,
     load_target,
     preflight,
@@ -271,7 +273,7 @@ class ProductionTLSPreflightTests(unittest.TestCase):
 
 class ProductionAuthorizationTests(unittest.TestCase):
     def test_requires_exact_short_lived_future_expiry(self):
-        now = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
         expiry = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         validate_authorization(expiry, now=now)
         for invalid in (
@@ -291,4 +293,14 @@ class ProductionAuthorizationTests(unittest.TestCase):
             f"{START_REVISION}..{TARGET_REVISION}",
             "0019_track_listens..0028_webauthn_enrollment",
         )
-        validate_migration_chain()
+        with tempfile.TemporaryDirectory(prefix="vervfy-history-test-") as directory:
+            root = Path(directory)
+            copy_migration_snapshot(
+                production_runner.ROOT, root, "0028_webauthn_enrollment"
+            )
+            with patch.object(production_runner, "ROOT", root):
+                validate_migration_chain()
+
+    def test_newer_checkout_does_not_expand_production_authorization(self):
+        with self.assertRaisesRegex(MigrationBlocked, "reviewed linear chain"):
+            validate_migration_chain()

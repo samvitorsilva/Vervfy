@@ -12,6 +12,9 @@ const backendOrigin = getBackendOrigin(
 validateStagingSiteUrl(process.env.SITE_URL, environment);
 
 const nextConfig: NextConfig = {
+  experimental: {
+    agentUpgrade: "security",
+  },
   poweredByHeader: false,
   devIndicators: false,
   async headers() {

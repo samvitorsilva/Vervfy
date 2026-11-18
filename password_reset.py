@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 try:
     import redis
-except ImportError:  # pragma: no cover - dependency is required in production
+except ImportError:  # praifespan(_app: Fagma: no cover - dependency is required in production
     redis = None
 
 _CREATE_TOKEN_SCRIPT = """

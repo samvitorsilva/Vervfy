@@ -287,6 +287,7 @@ class PasswordResetUserStoreTests(unittest.TestCase):
             version = store.reset_password_and_invalidate_sessions(
                 "account-1",
                 "new-password-123",
+                expected_binding=store.get_password_reset_binding("account-1"),
             )
 
         self.assertEqual(version, 5)
@@ -318,6 +319,12 @@ class PasswordResetUserStoreTests(unittest.TestCase):
 
 class PasswordResetRouteTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Route fixtures mock the account lookup; supply its corresponding state
+        # binding. Real database invalidation is exercised separately.
+        binding_patch = patch.object(server.user_store, "get_password_reset_binding",
+                                     return_value="synthetic-credential-binding")
+        binding_patch.start()
+        self.addCleanup(binding_patch.stop)
         self.recovery_enabled_patch = patch.dict(
             "os.environ",
             {"VERVFY_PASSWORD_RECOVERY_ENABLED": "1"},
@@ -907,7 +914,7 @@ class PasswordResetRouteTests(unittest.TestCase):
                 "commit",
                 side_effect=RuntimeError("sensitive commit exception detail"),
             ),
-            patch.object(server.user_store, "verify_password_reset_email"),
+            patch.object(server.user_store, "verify_password_reset_email", return_value="a" * 64),
             self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
             self.assertRaises(HTTPException) as raised,
         ):
@@ -939,7 +946,7 @@ class PasswordResetRouteTests(unittest.TestCase):
             patch.object(server, "email_verification_store", verification_store),
             patch.object(server, "password_reset_store", reset_store),
             patch.object(server, "email_sender", mailer),
-            patch.object(server.user_store, "verify_password_reset_email") as verify,
+            patch.object(server.user_store, "verify_password_reset_email", return_value="a" * 64) as verify,
             patch.object(
                 server.user_store,
                 "get_by_id",
@@ -976,7 +983,7 @@ class PasswordResetRouteTests(unittest.TestCase):
             patch.object(server, "email_verification_store", verification_store),
             patch.object(server, "password_reset_store", reset_store),
             patch.object(server, "email_sender", mailer),
-            patch.object(server.user_store, "verify_password_reset_email"),
+            patch.object(server.user_store, "verify_password_reset_email", return_value="a" * 64),
             patch.object(
                 server.user_store,
                 "get_by_id",
@@ -1003,6 +1010,7 @@ class PasswordResetRouteTests(unittest.TestCase):
         token = store.issue("account-1")
         with (
             patch.object(server, "password_reset_store", store),
+            patch.object(server.request_throttle, "allow", return_value=True),
             self.assertRaises(HTTPException) as raised,
         ):
             server.reset_password(
@@ -1278,7 +1286,7 @@ class PasswordResetRouteTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        update_password.assert_called_once_with("account-1", "new-password-123")
+        update_password.assert_called_once_with("account-1", "new-password-123", expected_binding=None)
         revoke_user.assert_called_once_with("account-1")
         self.assertNotIn("user_id", request.session)
         self.assertIsNone(store.claim(token))
@@ -1350,7 +1358,7 @@ class PasswordResetRouteTests(unittest.TestCase):
                 "issue",
                 side_effect=RuntimeError("sensitive reset-token issue detail"),
             ),
-            patch.object(server.user_store, "verify_password_reset_email"),
+            patch.object(server.user_store, "verify_password_reset_email", return_value="a" * 64),
             self.assertLogs("vervfy.password_reset", level="WARNING") as diagnostics,
             self.assertRaises(HTTPException) as raised,
         ):

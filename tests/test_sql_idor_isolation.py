@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 import auth
 import library
 import server
-from db import Base, User, TrackRecord, Playlist, UploadJob
+from db import Base, Playlist, TrackRecord, UploadJob, User
 
 
 class IsolationTests(unittest.TestCase):

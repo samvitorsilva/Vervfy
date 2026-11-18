@@ -6,6 +6,27 @@ created, dedicated test account and synthetic test-owned files. Do not use a
 maintainer's or customer's account. Never run broad Redis scans, bucket listings,
 unfiltered SQL queries, or commands that read or change another account's data.
 
+## Current deferred-cleanup architecture
+
+Account deletion revokes sessions, then deletes account records and queues storage
+cleanup obligations in one PostgreSQL transaction. A successful API response is
+`{"ok": true, "storage_cleanup": "pending"}`. It does **not** confirm physical
+Supabase object deletion. Browser offline cleanup follows API success.
+
+Physical production deletion remains disabled:
+
+- `scripts/storage_cleanup_worker.py` refuses to run; there is no authorized
+  production storage deleter.
+- Migration 0033 revokes `claim_next_cleanup()` execution from the runtime,
+  cleanup capability and worker roles. Do not restore those grants.
+- The immutable namespace has `physical_cleanup_enabled=false`, enforced by a
+  database constraint. Do not alter that constraint or binding.
+- `audio_store.delete`, `delete_quietly`, and nonempty `delete_many` refuse
+  physical deletion. Legacy and unverified objects remain held for review.
+
+Cleanup obligations intentionally survive account-record deletion. Do not purge
+those obligations or mistake their presence for an incomplete account-row delete.
+
 ## Prepare an isolated test
 
 1. Use a dedicated test browser profile with no personal Vervfy data. Create a
@@ -64,11 +85,12 @@ unfiltered SQL queries, or commands that read or change another account's data.
    listings or queries. Include only playlist IDs recorded for this test
    account; omit the last query if it had no playlists. This direct child-row
    check remains meaningful after the parent playlist rows are deleted.
-5. In Supabase Storage, query only the exact bucket and object names recorded
-   for this test account. Each test audio, cover, artist-photo, and staging
-   object must be absent. Do not browse or export bucket contents. A profile
-   photo is stored in the account database row in the current implementation,
-   not as a Supabase Storage object.
+5. Verify cleanup obligations for only the previously recorded test-owned
+   object paths using an appropriately authorized read-only database check.
+   Expect pending or held obligations, not physical absence. Supabase objects
+   may remain indefinitely while cleanup is disabled. Do not delete them,
+   restore claim grants, browse the bucket, or run a production cleanup worker.
+   A profile photo is stored in the account row, not a Supabase object.
 6. In the isolated browser profile, inspect only the synthetic account's
    `offlineTracks` records. The test account's record must be gone and the
    synthetic sentinel must remain byte-for-byte unchanged. Reopen the app and
@@ -77,36 +99,68 @@ unfiltered SQL queries, or commands that read or change another account's data.
 
 ## Failure handling and recovery
 
-- **Session/version or Redis failure (503):** deletion must stop before Storage
-  or database deletion. The session version may already have advanced, so
-  reauthenticate after Redis recovers and retry only for the test account.
-- **Storage failure (502):** the bulk request may have removed some objects
-  before failing. The database transaction must not be committed. Sign in
-  again, verify only the test account's recorded object paths, and retry
-  deletion after Storage is healthy. Do not delete a broad folder or bucket.
-- **Database failure after Storage succeeded (503):** the account's database
-  rows should remain because their transaction did not commit, while some or
-  all referenced files may already be gone. The session version has advanced
-  and Redis sessions have been revoked. After the database is healthy, sign in
-  again with the dedicated test account and retry deletion; the route repeats
-  deletion for paths still referenced by that account. If the commit outcome
-  is uncertain, first check only `users.id = :test_user_id`. If that row is
-  absent, do not repeat account deletion; finish the isolated browser cleanup
-  and verify the previously recorded test-owned Storage paths. Escalate if the
-  exact test account's state cannot be established.
-- **Browser cleanup warning after API success:** server deletion is complete,
-  but offline bytes may remain in that test browser. In the isolated profile,
-  remove only `offlineTracks` records whose `accountId` equals the test
-  account ID, then reopen the app and verify the synthetic sentinel remains.
-  Do not clear all site storage where it could contain other accounts' data.
-- **Lost response or any ambiguous result:** stop and reconcile the exact test
-  account row, its recorded object paths, its recorded Redis session IDs, and
-  its isolated-browser IndexedDB entries before retrying. Do not infer success
-  from a cleared cookie or infer failure from a client timeout.
+- **Session/version or Redis failure (503):** account-record deletion stops.
+  Session version may already have advanced; reauthenticate after recovery.
+- **Database failure (503):** account-row deletion and queued obligations roll
+  back together. No physical Storage deletion occurs. Sessions may already be
+  revoked. If commit outcome is ambiguous, reconcile only the exact test account
+  and recorded paths before retrying; do not infer failure from a timeout.
+- **Browser cleanup warning after API success:** database deletion succeeded,
+  but offline bytes may remain. Remove only records for the synthetic account
+  in its isolated browser profile, preserving the synthetic sentinel.
+- **Future cleanup failure:** timeout, ambiguous deletion, failed absence checks,
+  or persistence failure must never imply completion. Preserve the obligation.
+  Exhausted retries require manual review, not automatic job removal or reset.
 
-Deletion is not atomic across Redis, Supabase Storage, PostgreSQL, and browser
-IndexedDB. Session-version advancement and Redis revocation happen first;
-Storage objects are removed before the database transaction commits; browser
-cleanup follows only after a successful API response. Retrying is scoped to
-the still-existing test account and its recorded paths. Backups and provider
-retention are outside this procedure.
+Redis revocation, PostgreSQL commits, and browser IndexedDB cleanup are not one
+atomic transaction. Physical Supabase cleanup is a separate, currently disabled
+operation. Backups and provider retention are outside this procedure.
+
+## Disposable cleanup rehearsal
+
+`tests/isolated_storage_cleanup.py` implements a memory-only synthetic worker;
+`tests/test_isolated_storage_cleanup.py` creates a fresh PostgreSQL cluster with
+no TCP listener and a private `/tmp/vervfy-storage-pg-*` Unix socket. It applies
+the existing migration chain only to that empty disposable database. Test-only
+`cleanup_rehearsal` wrappers reuse the existing claim function as its owner;
+the original production claim ACL remains revoked throughout. Never install
+these wrappers in a persistent environment. No Supabase or filesystem deletion
+adapter is accepted by the rehearsal worker.
+
+The worker validates disposable-only configuration before opening a database
+connection and revalidates after checkout. Claims commit before storage access.
+Before synthetic deletion the worker checks
+the immutable namespace, path identity, tenant/requester ownership, reference
+absence, token and lease, holding object/job locks through the memory operation.
+Reference triggers prevent reattachment of deleting objects. Absence is checked
+before completion. Existing SQL implements unique fencing tokens, eight maximum
+attempts, bounded exponential backoff, and retained manual-review obligations.
+After an ambiguous completion commit, replay/reclaim checks the object again;
+already absent objects are safe to process. Unknown errors abort the transaction.
+
+Run from the repository with an empty environment (no `.env` sourcing):
+
+```sh
+env -i PATH="$PATH" HOME=/tmp DATABASE_URL=sqlite:// \
+  VERVFY_SECRET_KEY=synthetic-test PYTHONPATH=.:tests \
+  .venv/bin/python -m pytest -q tests/test_isolated_storage_cleanup.py \
+  tests/test_isolated_storage_guards.py tests/test_storage_cleanup_worker_disabled.py
+```
+
+The bootstrap placeholder URL does not supply PostgreSQL evidence: the integration
+fixture creates its own PostgreSQL URLs. PostgreSQL binaries, a non-root user,
+and permission to bind a local Unix socket are required. Setup errors or skips
+mean PostgreSQL behavior is **unverified**, never passing RLS evidence.
+
+## Separate production authorization required
+
+This rehearsal is not a production cleanup release. Production activation needs
+separate review and explicit authorization for provider deletion semantics,
+bounded network deadlines, independent absence confirmation, lease expiry during
+remote I/O, credentials and effective ACLs, monitoring, retained manual-review
+jobs, legacy ownership reconciliation, and a narrowly scoped synthetic canary.
+PostgreSQL concurrency/RLS tests must actually pass first. A remote provider
+cannot participate atomically in the database transaction; an expired request
+must not be treated as confirmed completion. Do not add a production adapter,
+change grants/constraints, migrate production, or enable a worker as part of this
+local rehearsal.

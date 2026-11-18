@@ -319,9 +319,12 @@ class Library:
 
     def total_bytes(self) -> int:
         with tenant_session(self.user_id) as s:
-            return s.scalar(
+            active_bytes = s.scalar(
                 select(func.sum(TrackRecord.size_bytes)).where(TrackRecord.user_id == self.user_id)
             ) or 0
+        if audio_store.enabled():
+            return max(active_bytes, storage_lifecycle.retained_bytes(self.user_id))
+        return active_bytes
 
     def set_custom_lyrics(self, track_id: str, lyrics: str):
         with tenant_session(self.user_id) as s:
@@ -408,6 +411,57 @@ class Library:
             has_cover=False
             output=io.BytesIO()
             make_placeholder_cover(title).save(output,format="JPEG",quality=90)
+        # Fail fast before irreversible storage allocation. The final check
+        # under the owner lock below remains authoritative for races.
+        with tenant_session(self.user_id) as s:
+            storage_lifecycle.bound_transaction(s)
+            if s.get(User, self.user_id) is None:
+                raise RuntimeError("Account no longer exists")
+            if job_context is not None:
+                from db import UploadJob
+                job = s.get(UploadJob, job_context[0])
+                if (job is None or job.user_id != self.user_id
+                    or job.processing_token != job_context[1]
+                    or job.status != "processing"):
+                    raise StaleUploadOperation("Upload job no longer owns this attempt")
+            duplicate = s.get(TrackRecord, {"id": track_id, "user_id": self.user_id})
+            if duplicate is None:
+                duplicate = self._find_duplicate_recording(s, title, artist, duration)
+            if duplicate is not None and job_context is not None:
+                # A queued duplicate needs no second audio object. Complete its
+                # fenced job while retaining the staged allocation for cleanup.
+                owner = s.get(User, self.user_id, with_for_update=True)
+                from db import UploadJob
+                job = s.get(UploadJob, job_context[0], with_for_update=True)
+                if (owner is None or job is None or job.user_id != self.user_id
+                    or job.processing_token != job_context[1]
+                    or job.status != "processing"):
+                    raise StaleUploadOperation("Upload job no longer owns this attempt")
+                job.status = "completed"
+                job.track_id = duplicate.id
+                job.storage_path = None
+                if job.cover_data is not None:
+                    job.processing_token = None  # Do not attach art to another recording.
+                s.commit()
+                return self._track(duplicate)
+            if duplicate is None:
+                current_count = s.scalar(
+                    select(func.count()).select_from(TrackRecord)
+                    .where(TrackRecord.user_id == self.user_id)
+                ) or 0
+                if max_tracks is not None and current_count >= max_tracks:
+                    raise UploadQuotaExceeded()
+                current_bytes = s.scalar(
+                    select(func.coalesce(func.sum(TrackRecord.size_bytes), 0))
+                    .where(TrackRecord.user_id == self.user_id)
+                ) or 0
+                if audio_store.enabled():
+                    current_bytes = max(
+                        current_bytes, storage_lifecycle.retained_bytes(self.user_id)
+                    )
+                if quota_bytes is not None and current_bytes + size_bytes > quota_bytes:
+                    raise UploadQuotaExceeded()
+
         storage_path=None
         cover_path=None
         if audio_store.enabled():
@@ -434,7 +488,14 @@ class Library:
             if duplicate is None:
                 current_bytes=s.scalar(select(func.coalesce(func.sum(TrackRecord.size_bytes),0)).where(TrackRecord.user_id==self.user_id)) or 0
                 current_count=s.scalar(select(func.count()).select_from(TrackRecord).where(TrackRecord.user_id==self.user_id)) or 0
-                if ((quota_bytes is not None and current_bytes+size_bytes>quota_bytes)
+                # The new audio reservation is already included in retained_bytes().
+                # Adding size_bytes again would charge this upload twice.
+                accounted_bytes = current_bytes + size_bytes
+                if audio_store.enabled():
+                    accounted_bytes = max(
+                        accounted_bytes, storage_lifecycle.retained_bytes(self.user_id)
+                    )
+                if ((quota_bytes is not None and accounted_bytes > quota_bytes)
                     or (max_tracks is not None and current_count>=max_tracks)):
                     raise UploadQuotaExceeded()
                 s.add(row)

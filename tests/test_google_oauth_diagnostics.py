@@ -196,6 +196,7 @@ def test_google_only_password_creation_consumes_bound_proof():
     import time
     from types import SimpleNamespace
     from unittest.mock import Mock
+
     import server
 
     user = {"id": "local-user", "password_hash": None, "session_version": 2}
@@ -237,9 +238,10 @@ def test_google_only_password_creation_consumes_bound_proof():
 
 
 def test_google_only_password_setup_rejects_expired_identity_proof():
-    import server
     from types import SimpleNamespace
     from unittest.mock import Mock, patch
+
+    import server
 
     user = {"id": "local-user", "session_version": 2}
     request = SimpleNamespace(session={"sid": "local-session", "sv": 2})
@@ -264,9 +266,10 @@ def test_google_only_password_setup_rejects_expired_identity_proof():
 
 
 def test_google_password_setup_rate_limit_is_bounded_and_fails_closed():
-    import server
     from types import SimpleNamespace
     from unittest.mock import Mock, patch
+
+    import server
 
     request = SimpleNamespace(client=None, headers={})
     limiter = Mock()

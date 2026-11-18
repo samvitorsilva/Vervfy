@@ -487,7 +487,16 @@ def test_migration_graph_is_additive():
     from alembic.script import ScriptDirectory
 
     graph = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert graph.get_heads() == ["0031_cleanup_retry_limits"]
+    assert graph.get_heads() == ["0034_storage_byte_reservations"]
+    assert graph.get_revision("0034_storage_byte_reservations").down_revision == "0033_cleanup_claims_disabled"
+    assert (
+        graph.get_revision("0033_cleanup_claims_disabled").down_revision
+        == "0032_auth_sessions"
+    )
+    assert (
+        graph.get_revision("0032_auth_sessions").down_revision
+        == "0031_cleanup_retry_limits"
+    )
     assert (
         graph.get_revision("0027_webauthn_foundation").down_revision
         == "0026_application_runtime_grants"

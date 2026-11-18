@@ -20,6 +20,7 @@ from urllib.parse import quote
 
 import httpx
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 import audio_store
 from db import tenant_session
@@ -212,27 +213,60 @@ def _advance(user_id, reservation, state):
         session.commit()
 
 
-def _reserve(user_id, kind, extension):
+class RetainedStorageQuotaExceeded(audio_store.StorageError):
+    """A committed retained-byte ceiling prevents another allocation."""
+
+
+def _reserve(user_id, kind, extension, size):
     try:
         local_storage_selected()
     except LocalStorageConfigurationError as exc:
         raise audio_store.StorageError(str(exc)) from None
+    try:
+        with tenant_session(user_id) as session:
+            if session.bind.dialect.name != "postgresql":
+                raise audio_store.StorageError("Managed storage requires PostgreSQL")
+            validate_local_session(session)
+            bound_transaction(session)
+            row = session.execute(
+                text(
+                    "SELECT * FROM vervfy_storage.reserve_sized_object(:kind,:ext,:size,:limit)"
+                ),
+                {
+                    "kind": kind,
+                    "ext": extension,
+                    "size": size,
+                    "limit": int(os.environ.get("VERVFY_USER_QUOTA_MB", "150"))
+                    * 1024
+                    * 1024,
+                },
+            ).one()
+            obj = Reservation(row.object_id, row.object_path, row.upload_token)
+            _validate(session, obj.path)
+            session.execute(
+                text("SELECT vervfy_storage.request_cleanup(:id)"),
+                {"id": obj.object_id},
+            )
+            session.commit()
+            return obj
+    except SQLAlchemyError as exc:
+        if getattr(getattr(exc, "orig", None), "sqlstate", None) == "54000":
+            raise RetainedStorageQuotaExceeded(
+                "Retained storage quota reached"
+            ) from None
+        raise audio_store.StorageError("Storage reservation is unavailable") from None
+
+
+def retained_bytes(user_id):
+    """Committed charges include failed/retired allocations, never auto-refunded."""
     with tenant_session(user_id) as session:
         if session.bind.dialect.name != "postgresql":
             raise audio_store.StorageError("Managed storage requires PostgreSQL")
         validate_local_session(session)
         bound_transaction(session)
-        row = session.execute(
-            text("SELECT * FROM vervfy_storage.reserve_object(:kind,:ext)"),
-            {"kind": kind, "ext": extension},
-        ).one()
-        obj = Reservation(row.object_id, row.object_path, row.upload_token)
-        _validate(session, obj.path)
-        session.execute(
-            text("SELECT vervfy_storage.request_cleanup(:id)"), {"id": obj.object_id}
-        )
-        session.commit()
-        return obj
+        return session.execute(
+            text("SELECT vervfy_storage.retained_bytes()")
+        ).scalar_one()
 
 
 def _digest(path):
@@ -296,7 +330,7 @@ def upload_file(user_id, kind, file_path, content_type, extension):
             raise audio_store.StorageError(str(exc)) from None
     size = os.path.getsize(file_path)
     expected_digest = _digest(file_path)
-    obj = _reserve(user_id, kind, extension)
+    obj = _reserve(user_id, kind, extension, size)
     try:
         _advance(user_id, obj, "uploading")
         # Binding is immutable in SQL; close validation transaction before I/O.

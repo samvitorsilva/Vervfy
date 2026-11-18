@@ -1,0 +1,11 @@
+/* Keep the application's existing reset; utilities are unlayered so they can
+   override the existing unlayered global styles. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" source("../components/ui");
+
+/* Auth screens are always dark; standalone demos also follow OS preference. */
+@custom-variant dark {
+  &:where(.dark, .dark *) { @slot; }
+  @media (prefers-color-scheme: dark) { @slot; }
+}

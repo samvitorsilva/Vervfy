@@ -22,7 +22,7 @@ class DatabaseConnectionSecurityTests(unittest.TestCase):
         ):
             parsed_url = make_url(db.database_url())
 
-        self.assertEqual(parsed_url.query["sslmode"], "require")
+        self.assertEqual(parsed_url.query["sslmode"], "verify-full")
         self.assertEqual(parsed_url.password, "secret")
 
     def test_production_postgres_preserves_stronger_sslmode(self) -> None:

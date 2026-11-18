@@ -4,6 +4,7 @@ No default privileges or schema-wide grants: unrelated objects, Alembic state,
 provider identities and the private authentication capability remain untouched.
 """
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0026_application_runtime_grants"

@@ -39,6 +39,8 @@ from sqlalchemy.orm import (
     sessionmaker,
 )
 
+from runtime_environment import runtime_environment
+
 
 def normalize_database_url(value: str) -> str:
     """Normalize PostgreSQL URLs to use the psycopg 3 driver."""
@@ -55,14 +57,16 @@ def database_url() -> str:
     if not value:
         raise RuntimeError("DATABASE_URL must be set (use your Supabase PostgreSQL connection string).")
     value = normalize_database_url(value)
-    if os.environ.get("VERVFY_ENVIRONMENT", "").strip().lower() == "production":
+    if runtime_environment() == "production":
         parsed_url = make_url(value)
-        if parsed_url.get_backend_name() == "postgresql" and parsed_url.query.get(
-            "sslmode"
-        ) not in {"require", "verify-ca", "verify-full"}:
-            value = parsed_url.set(
-                query={**parsed_url.query, "sslmode": "require"}
-            ).render_as_string(hide_password=False)
+        if parsed_url.get_backend_name() == "postgresql":
+            # Explicit parameters override libpq environment defaults. The system
+            # trust store is used unless a deployment supplies its reviewed CA.
+            # Missing/untrusted certificates fail at connection time.
+            query = dict(parsed_url.query)
+            query.update(sslmode="verify-full", gssencmode="disable")
+            query.setdefault("sslrootcert", "system")
+            value = parsed_url.set(query=query).render_as_string(hide_password=False)
     return value
 
 

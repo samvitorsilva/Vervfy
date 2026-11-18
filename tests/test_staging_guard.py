@@ -2,14 +2,17 @@
 import hashlib
 import runpy
 import shlex
+import shutil
 import ssl
 import tempfile
 import types
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlencode
+
+from migration_snapshot import copy_migration_snapshot
 
 import staging_guard as guard
 
@@ -207,21 +210,34 @@ class StagingGuardTests(unittest.TestCase):
 
     def test_complete_approval_validation_without_connections(self):
         import json
+        self.assertEqual(guard.MIGRATION_HEAD, '0031_cleanup_retry_limits')
+        self.assertEqual(guard.MIGRATION_COUNT, 31)
+        source_root = guard.ROOT
+        directory = tempfile.TemporaryDirectory(prefix='vervfy-manifest-test-')
+        self.addCleanup(directory.cleanup)
+        snapshot = Path(directory.name)
+        copy_migration_snapshot(source_root, snapshot, '0031_cleanup_retry_limits')
         files = [
             'alembic.ini', 'alembic/env.py', 'db.py', 'staging_guard.py',
             'supabase_role_memberships.py', 'requirements.lock',
             'docs/staging-alembic-preflight.sql', 'docs/staging-alembic-postflight.sql',
         ]
+        for name in files:
+            if name == 'alembic.ini':
+                continue
+            destination = snapshot / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_root / name, destination)
         files += [
-            str(path.relative_to(guard.ROOT))
-            for path in (guard.ROOT / 'alembic/versions').glob('*.py')
+            str(path.relative_to(snapshot))
+            for path in (snapshot / 'alembic/versions').glob('*.py')
         ]
         digest = lambda data: hashlib.sha256(data).hexdigest()
         manifest = json.dumps({
-            name: digest((guard.ROOT / name).read_bytes()) for name in files
+            name: digest((snapshot / name).read_bytes()) for name in files
         }).encode()
         ca_digest = digest(b'CA')
-        issued_at = datetime.now(timezone.utc).replace(microsecond=0)
+        issued_at = datetime.now(UTC).replace(microsecond=0)
         approval = {
             **self.approval,
             'ca_sha256': ca_digest,
@@ -254,7 +270,8 @@ class StagingGuardTests(unittest.TestCase):
             key: self.url(role)
             for key, role in guard.ROLES.items()
         })
-        with patch.object(guard, 'STAGING_CA_SHA256', ca_digest), \
+        with patch.object(guard, 'ROOT', snapshot), \
+             patch.object(guard, 'STAGING_CA_SHA256', ca_digest), \
              patch.object(guard.Path, 'read_bytes', read), \
              patch.object(guard.Path, 'is_file', return_value=True), \
              patch.object(guard.Path, 'is_symlink', return_value=False), \
@@ -276,8 +293,15 @@ class StagingGuardTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'approved file digest mismatch'):
                 guard.validate(env, operation='preflight')
 
+            virtual['/approved/source.tar.gz'] = b'archive'
+            # The real newer checkout must not inherit this older approval.
+            with patch.object(guard, 'ROOT', source_root), self.assertRaisesRegex(
+                RuntimeError, 'execution manifest file set mismatch'
+            ):
+                guard.validate(env, operation='preflight')
+
     def test_operation_approval_is_explicit_unexpired_and_limited_to_24_hours(self):
-        now = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
         approved = {
             'operation': 'preflight',
             'issued_at': '2026-11-11T11:00:00Z',
@@ -600,8 +624,8 @@ class LocalProfileTests(unittest.TestCase):
 @unittest.skip('Replaced by strict Supabase staging guard coverage')
 class RenderExceptionTests(unittest.TestCase):
     def setUp(self):
-        from datetime import datetime, timedelta, timezone
-        now = datetime.now(timezone.utc)
+        from datetime import datetime, timedelta
+        now = datetime.now(UTC)
         self.approval = {
             'hostname': 'dpg-isolated-a.oregon-postgres.render.com', 'port': 5432,
             'database': 'vervfy_oauth_staging', 'resource_id': 'dpg-isolated-a',

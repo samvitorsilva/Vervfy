@@ -22,7 +22,8 @@ from sqlalchemy.exc import DBAPIError
 from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
-HEAD = '0033_cleanup_claims_disabled'
+HEAD = '0034_storage_byte_reservations'
+POSTGRES_TEST_PORT = 55432
 PRE_ACCOUNT_MIGRATION_HEAD = '0020_playlist_last_played'
 ACCOUNT_TABLES = {
     'users', 'tracks', 'favorites', 'playlists', 'playlist_tracks',
@@ -42,7 +43,7 @@ class MigrationChainTests(unittest.TestCase):
         script = ScriptDirectory.from_config(Config(str(ROOT / 'alembic.ini')))
         self.assertEqual(script.get_heads(), [HEAD])
         chain = list(script.walk_revisions())
-        self.assertEqual(len(chain), 33)
+        self.assertEqual(len(chain), 34)
         for newer, older in itertools.pairwise(chain):
             self.assertEqual(newer.down_revision, older.revision)
         self.assertIsNone(chain[-1].down_revision)
@@ -88,9 +89,9 @@ class StagingPostgresTests(unittest.TestCase):
         cls.root = Path(cls.directory.name)
         env = {k: v for k, v in os.environ.items() if not k.startswith('PG')}
         subprocess.run(['initdb', '-D', str(cls.root / 'data'), '-A', 'trust', '-U', 'test_admin', '--no-locale', '--encoding=UTF8'], env=env, check=True, capture_output=True)
-        subprocess.run(['pg_ctl', '-D', str(cls.root / 'data'), '-l', str(cls.root / 'log'), '-o', f"-k {cls.root} -c listen_addresses='' -c unix_socket_permissions=0700", '-w', 'start'], env=env, check=True, capture_output=True)
+        subprocess.run(['pg_ctl', '-D', str(cls.root / 'data'), '-l', str(cls.root / 'log'), '-o', f"-p {POSTGRES_TEST_PORT} -k {cls.root} -c listen_addresses='' -c unix_socket_permissions=0700", '-w', 'start'], env=env, check=True, capture_output=True)
         cls.addClassCleanup(subprocess.run, ['pg_ctl', '-D', str(cls.root / 'data'), '-m', 'fast', '-w', 'stop'], env=env, check=True, capture_output=True)
-        cls.url = sa.URL.create('postgresql+psycopg', username='test_admin', database='postgres', query={'host': str(cls.root)})
+        cls.url = sa.URL.create('postgresql+psycopg', username='test_admin', database='postgres', port=POSTGRES_TEST_PORT, query={'host': str(cls.root)})
         cls.engine = sa.create_engine(cls.url)
         cls.addClassCleanup(cls.engine.dispose)
         with cls.engine.begin() as c:

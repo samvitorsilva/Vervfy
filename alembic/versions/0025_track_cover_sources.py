@@ -1,5 +1,6 @@
 """Align persisted cover sources with the application's supported values."""
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0025_track_cover_sources"

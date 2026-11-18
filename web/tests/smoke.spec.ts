@@ -609,26 +609,32 @@ test("login displays JSON authentication errors", async ({ page }) => {
   await expect(page.getByLabel("Password")).toBeFocused();
 });
 
-test("registration gives live password length and byte-limit guidance", async ({ page }) => {
+test("registration gives live password strength and byte-limit guidance", async ({ page }) => {
+  await page.route("**/api/csrf", (route) => route.fulfill({ json: { csrf_token: "strength-ui-test" } }));
   await page.goto("/register");
-  const password = page.getByLabel("Password");
-  const hint = page.locator("#password-hint");
+  await expect(page.locator(".auth-submit")).toBeEnabled();
+  const password = page.getByLabel("Password", { exact: true });
+  const strength = page.locator("#password-strength");
+  const lengthRule = strength.getByRole("listitem").filter({ hasText: "8 characters or more" });
+  await expect(page.locator("#password-hint")).toHaveCount(0);
 
-  await expect(hint).toHaveText("Use at least 8 characters.");
+  await expect(lengthRule).toContainText("not met");
+  await expect(page.getByRole("meter")).toHaveAttribute("aria-valuenow", "0");
   await password.fill("short");
-  await expect(hint).toHaveText("Add 3 more characters to meet the 8-character minimum.");
+  await expect(lengthRule).toContainText("not met");
   await expect(password).toHaveAttribute("aria-invalid", "true");
 
-  await password.fill("long-enough");
-  await expect(hint).toHaveText("Password meets the 8-character minimum.");
+  await password.fill("Birch!27");
+  await expect(page.getByRole("meter")).toHaveAttribute("aria-valuetext", "Strong");
+  await expect(lengthRule).not.toContainText("not met");
   await expect(password).toHaveAttribute("aria-invalid", "false");
 
   await password.fill("é".repeat(36));
-  await expect(hint).toHaveText("Password meets the 8-character minimum.");
+  await expect(lengthRule).not.toContainText("not met");
   await expect(password).toHaveAttribute("aria-invalid", "false");
 
   await password.fill(`${"é".repeat(36)}a`);
-  await expect(hint).toHaveText(
+  await expect(strength.getByRole("alert")).toHaveText(
     "Password must be 72 UTF-8 bytes or fewer. Remove some characters.",
   );
   await expect(password).toHaveAttribute("aria-invalid", "true");

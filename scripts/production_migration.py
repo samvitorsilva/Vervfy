@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import os
-from pathlib import Path
 import re
 import sys
-from typing import Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection, URL, make_url
+from sqlalchemy.engine import URL, Connection, make_url
 from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,11 +155,11 @@ def validate_authorization(expires_at: str, *, now: datetime | None = None) -> N
         raise MigrationBlocked("Authorization expiry must be UTC RFC3339 seconds ending in Z")
     try:
         expiry = datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         )
     except ValueError:
         raise MigrationBlocked("Authorization expiry is not a valid UTC timestamp") from None
-    current = datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    current = datetime.now(UTC) if now is None else now.astimezone(UTC)
     if expiry <= current or expiry > current + AUTHORIZATION_TTL:
         raise MigrationBlocked("Authorization must be active and expire within 15 minutes")
 
@@ -414,8 +414,9 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
             os.environ["MIGRATION_DATABASE_URL"] = target.url.render_as_string(
                 hide_password=False
             )
-            from alembic import command
             from alembic.config import Config
+
+            from alembic import command
 
             config = Config(str(ROOT / "alembic.ini"))
             config.attributes["vervfy_production_migration_runner"] = True

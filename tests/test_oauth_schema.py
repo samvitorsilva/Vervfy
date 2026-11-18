@@ -241,27 +241,40 @@ class StartupSchemaTests(unittest.TestCase):
             self.start()
         self.assertEqual(sa.inspect(self.engine).get_table_names(), [])
 
-    def test_existing_schema_is_not_created_or_altered_at_startup(self):
+    def create_current_schema(self):
         with self.engine.begin() as connection:
             connection.exec_driver_sql(
                 'CREATE TABLE users (id VARCHAR(32) PRIMARY KEY)'
             )
             connection.exec_driver_sql(
-                'CREATE TABLE upload_jobs (id VARCHAR(32) PRIMARY KEY, cover_data BLOB)'
+                'CREATE TABLE upload_jobs (id VARCHAR(32) PRIMARY KEY, '
+                'cover_data BLOB, processing_token TEXT)'
             )
             connection.exec_driver_sql(
                 "INSERT INTO upload_jobs (id) VALUES ('preserve-me')"
             )
             connection.exec_driver_sql(
-                'CREATE TABLE tracks (id VARCHAR(64) PRIMARY KEY, cover_url TEXT)'
+                'CREATE TABLE tracks (id VARCHAR(64) PRIMARY KEY, '
+                'cover_url TEXT, media_version TEXT)'
             )
             connection.exec_driver_sql(
-                "INSERT INTO tracks VALUES ('track-1', 'preserve-url')"
+                "INSERT INTO tracks (id, cover_url) VALUES ('track-1', 'preserve-url')"
             )
+            connection.exec_driver_sql(
+                'CREATE TABLE artist_photos (user_id TEXT, media_version TEXT)'
+            )
+
+    def test_existing_schema_is_not_created_or_altered_at_startup(self):
+        self.create_current_schema()
+        schema_sql = 'SELECT type, name, sql FROM sqlite_master ORDER BY type, name'
+        with self.engine.connect() as connection:
+            before = connection.exec_driver_sql(schema_sql).all()
         self.start()
+        with self.engine.connect() as connection:
+            self.assertEqual(connection.exec_driver_sql(schema_sql).all(), before)
         self.assertEqual(
             {column['name'] for column in sa.inspect(self.engine).get_columns('upload_jobs')},
-            {'id', 'cover_data'},
+            {'id', 'cover_data', 'processing_token'},
         )
         with self.engine.connect() as connection:
             self.assertEqual(
@@ -274,6 +287,33 @@ class StartupSchemaTests(unittest.TestCase):
                 ).one(),
                 ('track-1', 'preserve-url'),
             )
+
+    def test_missing_lifecycle_columns_are_rejected_without_repair(self):
+        for table, column in (
+            ('tracks', 'media_version'),
+            ('artist_photos', 'media_version'),
+            ('upload_jobs', 'processing_token'),
+        ):
+            engine = sa.create_engine('sqlite://')
+            try:
+                with (
+                    self.subTest(table=table, column=column),
+                    patch.object(self, 'engine', engine),
+                ):
+                    self.create_current_schema()
+                    with engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f'ALTER TABLE {table} DROP COLUMN {column}'
+                        )
+                    with self.assertRaisesRegex(
+                        RuntimeError, 'missing_tables_or_columns'
+                    ):
+                        self.start()
+                    self.assertNotIn(
+                        column, {c['name'] for c in sa.inspect(engine).get_columns(table)}
+                    )
+            finally:
+                engine.dispose()
 
     def test_existing_schema_missing_0023_column_is_rejected_without_repair(self):
         with self.engine.begin() as connection:

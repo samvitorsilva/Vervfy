@@ -2,22 +2,22 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import socket
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import sqlalchemy as sa
-from alembic import command
 from alembic.config import Config
 
+from alembic import command
 from scripts.production_migration import (
-    MigrationBlocked,
     REQUIRED_TABLES,
     TARGET_REVISION,
+    MigrationBlocked,
     ProductionTarget,
     preflight,
     validate_migration_chain,
@@ -292,9 +292,47 @@ class ProductionProvisioningPostgresTests(unittest.TestCase):
             self.assertTrue(all(sequence_privileges), sequence_privileges)
 
     def test_migrator_passes_runner_preflight_and_upgrades_0020_to_0028(self):
-        validate_migration_chain()
+        # Verify the historical reviewed migration chain separately.
+        with tempfile.TemporaryDirectory(
+            prefix="vervfy-historical-migrations-"
+        ) as tmp:
+            historical_root = Path(tmp)
+
+            shutil.copy2(
+                ROOT / "alembic.ini",
+                historical_root / "alembic.ini",
+            )
+            shutil.copytree(
+                ROOT / "alembic",
+                historical_root / "alembic",
+            )
+
+            versions = historical_root / "alembic" / "versions"
+
+            for migration in versions.glob("*.py"):
+                if (
+                    migration.name[:4].isdigit()
+                    and int(migration.name[:4]) > 28
+                ):
+                    migration.unlink()
+
+            historical_config = historical_root / "alembic.ini"
+            config_text = historical_config.read_text()
+            config_text = config_text.replace(
+                "script_location = alembic",
+                f"script_location = {historical_root / 'alembic'}",
+            )
+            historical_config.write_text(config_text)
+
+            with patch(
+                "scripts.production_migration.ROOT",
+                historical_root,
+            ):
+                validate_migration_chain()
+
         with self.migration_engine.connect() as connection:
             preflight(connection, self.target)
+
             session_target = ProductionTarget(
                 url=self.migration_url,
                 project_ref=self.target.project_ref,
@@ -316,6 +354,7 @@ class ProductionProvisioningPostgresTests(unittest.TestCase):
 
             config = Config(str(ROOT / "alembic.ini"))
             config.attributes["connection"] = connection
+
             with patch.dict(
                 os.environ,
                 {
@@ -330,6 +369,7 @@ class ProductionProvisioningPostgresTests(unittest.TestCase):
                 os.environ.pop("VERVFY_ENVIRONMENT", None)
                 os.environ.pop("VERVFY_STAGING_PROFILE", None)
                 command.upgrade(config, TARGET_REVISION)
+
             self.assertEqual(
                 connection.execute(
                     sa.text("SELECT version_num FROM public.alembic_version")

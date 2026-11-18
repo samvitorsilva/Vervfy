@@ -22,7 +22,6 @@ import redis
 
 import google_oauth
 
-
 REDIS_SERVER = shutil.which("redis-server")
 
 

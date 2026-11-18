@@ -1,0 +1,44 @@
+"""Rehearse the production storage migration boundary in an isolated cluster."""
+
+import os
+import unittest
+from unittest.mock import patch
+
+import sqlalchemy as sa
+from alembic import command
+from alembic.config import Config
+
+from test_staging_migrations import ROOT, StagingPostgresTests
+
+
+class StorageUpgradeRehearsal(StagingPostgresTests):
+    """Reuse the disposable PostgreSQL cluster and synthetic test accounts."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        with cls.engine.connect() as connection:
+            revision = connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one()
+
+        if revision != "0031_cleanup_retry_limits":
+            raise AssertionError(f"Unexpected final revision: {revision}")
+
+    def test_storage_migration_result(self):
+        self.assertEqual(
+            self.sql("SELECT version_num FROM alembic_version").scalar_one(),
+            "0031_cleanup_retry_limits",
+        )
+        self.assertEqual(
+            self.account_snapshot(self.c),
+            self.pre_upgrade_snapshot,
+        )
+        for table in ("namespaces", "objects", "cleanup_jobs"):
+            self.assertIsNotNone(
+                self.c.execute(
+                    sa.text("SELECT to_regclass(:name)"),
+                    {"name": f"vervfy_storage.{table}"},
+                ).scalar_one()
+            )

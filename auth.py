@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -165,6 +166,32 @@ class UserStore:
                 return None
             return row.id, bool(row.email_verified)
 
+    @staticmethod
+    def _password_reset_binding(row: User) -> str:
+        # Bind to both credential and identity state, without storing a password
+        # hash in the token backend. Version changes invalidate unused links too.
+        return hashlib.sha256(json.dumps([
+            row.id, row.password_hash, row.session_version,
+            row.email, bool(row.email_verified),
+        ], separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def get_password_reset_binding(
+        self, user_id: str, *, expected_email: str | None = None,
+        expected_email_digest: str | None = None, verified: bool = True,
+    ) -> str | None:
+        with SessionLocal() as session:
+            row = session.get(User, user_id)
+            if row is None or not row.password_hash or not row.email or bool(row.email_verified) != verified:
+                return None
+            email = row.email.strip().lower()
+            if expected_email is not None and email != expected_email.strip().lower():
+                return None
+            if expected_email_digest is not None and not compare_digest(
+                hashlib.sha256(email.encode("utf-8")).hexdigest(), expected_email_digest
+            ):
+                return None
+            return self._password_reset_binding(row)
+
     def get_password_reset_target(self, email: str) -> str | None:
         """Return only password accounts whose email has already been verified."""
         target = self.get_password_reset_account(email)
@@ -172,8 +199,8 @@ class UserStore:
             return None
         return target[0]
 
-    def verify_password_reset_email(self, user_id: str, email_digest: str) -> None:
-        """Verify the same email address that received the reset-verification link."""
+    def verify_password_reset_email(self, user_id: str, binding: str) -> str:
+        """Verify unchanged recovery state, returning the post-verification binding."""
         with SessionLocal() as session:
             row = session.scalar(
                 select(User).where(User.id == user_id).with_for_update()
@@ -183,24 +210,22 @@ class UserStore:
                 or row.password_hash is None
                 or not row.email
                 or row.email_verified
-                or not compare_digest(
-                    hashlib.sha256(
-                        row.email.strip().lower().encode("utf-8")
-                    ).hexdigest(),
-                    email_digest,
-                )
+                or not isinstance(binding, str)
+                or not compare_digest(self._password_reset_binding(row), binding)
             ):
                 raise ValueError("This verification link is invalid or has expired")
             row.email_verified = True
+            verified_binding = self._password_reset_binding(row)
             try:
                 session.commit()
             except SQLAlchemyError as exc:
                 raise PasswordResetCommitUncertain(
                     "Email verification may have committed"
                 ) from exc
+            return verified_binding
 
     def reset_password_and_invalidate_sessions(
-        self, user_id: str, new_password: str
+        self, user_id: str, new_password: str, *, expected_binding: str | None
     ) -> int:
         """Set a new password hash and bump session_version (caller revokes sessions)."""
         error = validate_password(new_password)
@@ -215,6 +240,10 @@ class UserStore:
                 raise ValueError("Account not found")
             if row.password_hash is None or not row.email or not row.email_verified:
                 raise ValueError("Password reset is not available for this account")
+            if not isinstance(expected_binding, str) or not compare_digest(
+                self._password_reset_binding(row), expected_binding
+            ):
+                raise ValueError("This reset link is invalid or has expired")
             row.password_hash = new_password_hash
             row.session_version += 1
             try:

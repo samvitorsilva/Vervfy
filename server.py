@@ -54,6 +54,7 @@ import password_reset
 import staging_guard
 import storage_lifecycle
 import upload_queue
+from runtime_environment import runtime_environment
 
 # Password/Google authentication must not require the optional WebAuthn stack.
 # Keep its implementation and migrations intact, but load them only on opt-in.
@@ -163,10 +164,7 @@ def close_audio_store() -> None:
 # Provisional until startup reads the DB; must exist so /register never AttributeErrors
 # if a request somehow arrives before the startup hook finishes.
 app.state.is_first_account = True
-environment = (
-    os.environ.get("VERVFY_ENVIRONMENT")
-    or os.environ.get("ENVIRONMENT", "development")
-).lower()
+environment = runtime_environment()
 staging_guard.validate_runtime_redis_url(
     os.environ.get("REDIS_URL"), environment, os.environ
 )
@@ -2431,14 +2429,18 @@ def forgot_password(
     user_id, email_verified = account
     try:
         if email_verified:
-            token = password_reset_store.issue(user_id)
+            binding = user_store.get_password_reset_binding(user_id, expected_email=email)
+            if binding is None:
+                return _password_reset_generic_response()
+            token = password_reset_store.issue(user_id, binding=binding)
         else:
-            email_digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
-            token = email_verification_store.issue(
-                user_id,
-                binding=email_digest,
+            binding = user_store.get_password_reset_binding(
+                user_id, expected_email=email, verified=False
             )
-    except RuntimeError as exc:
+            if binding is None:
+                return _password_reset_generic_response()
+            token = email_verification_store.issue(user_id, binding=binding)
+    except (RuntimeError, SQLAlchemyError) as exc:
         _log_password_recovery_diagnostic(
             "token_storage",
             "token_issue_failed",
@@ -2518,6 +2520,7 @@ def reset_password(
         user_store.reset_password_and_invalidate_sessions(
             claim.user_id,
             payload.password,
+            expected_binding=claim.binding,
         )
     except ValueError as exc:
         if not _release_token_claim(password_reset_store, payload.token, claim):
@@ -2640,7 +2643,7 @@ def verify_reset_email(
         )
 
     try:
-        user_store.verify_password_reset_email(claim.user_id, claim.binding)
+        binding = user_store.verify_password_reset_email(claim.user_id, claim.binding)
     except ValueError as exc:
         if not _release_token_claim(email_verification_store, payload.token, claim):
             raise HTTPException(
@@ -2685,8 +2688,10 @@ def verify_reset_email(
         ) from exc
 
     try:
-        token = password_reset_store.issue(claim.user_id)
-    except RuntimeError as exc:
+        # Use the state captured by the verification transaction, never a fresh
+        # lookup that could reauthorize a link after concurrent credential change.
+        token = password_reset_store.issue(claim.user_id, binding=binding)
+    except (RuntimeError, SQLAlchemyError) as exc:
         _log_password_recovery_diagnostic(
             "token_storage",
             "reset_token_issue_failed",
@@ -3306,6 +3311,8 @@ def _queue_staged_upload(
             ))
             session.commit()
         upload_queue.enqueue(job_id, user_id)
+    except storage_lifecycle.RetainedStorageQuotaExceeded:
+        raise HTTPException(status_code=413, detail="Retained storage quota reached") from None
     except Exception as exc:
         try:
             with tenant_session(user_id) as session:
@@ -4405,6 +4412,8 @@ async def upload_track(
                 status_code=413,
                 detail=f"Storage quota reached ({used_mb:.1f} MB of {quota_mb:.1f} MB used)",
             ) from None
+        except storage_lifecycle.RetainedStorageQuotaExceeded:
+            raise HTTPException(status_code=413, detail="Retained storage quota reached") from None
         except audio_store.StorageError:
             log.exception("audio storage failed during upload")
             raise HTTPException(

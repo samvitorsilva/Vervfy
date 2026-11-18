@@ -7,6 +7,7 @@ import { siteUrl } from "@/lib/site-metadata";
 import "./styles.css";
 import "./auth.css";
 import "./theme-preview.css";
+import "./tailwind.css";
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,
