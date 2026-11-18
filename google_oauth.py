@@ -127,6 +127,34 @@ def local_diagnostic(stage: str) -> None:
         logging.getLogger("vervfy.oauth").warning("Google OAuth stage: %s", stage)
 
 
+GOOGLE_LINK_FAILURE_STAGES = frozenset({
+    "transaction",
+    "authorization_response",
+    "token_validation",
+    "identity_lookup",
+    "account_session_binding",
+    "identity_already_linked",
+    "freshness_missing_auth_time",
+    "freshness_stale_auth_time",
+    "password_proof",
+    "identity_link_write",
+})
+
+
+def log_google_link_failure(stage: str) -> None:
+    """Record a bounded, non-identifying failure reason for production linking."""
+    environment = (
+        os.environ.get("VERVFY_ENVIRONMENT")
+        or os.environ.get("ENVIRONMENT", "")
+    ).strip().lower()
+    if environment not in {"production", "prod"}:
+        return
+    safe_stage = stage if stage in GOOGLE_LINK_FAILURE_STAGES else "other_validation"
+    logging.getLogger("vervfy.oauth").warning(
+        "Google account linking failure stage=%s", safe_stage
+    )
+
+
 def log_google_reauthentication_failure(stage: str) -> None:
     environment = (
         os.environ.get("VERVFY_ENVIRONMENT")
