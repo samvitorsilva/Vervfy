@@ -331,16 +331,6 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               </div>
             ) : null}
           </div>
-          {isLogin ? (
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-0.25rem", marginBottom: "0.875rem" }}>
-              <Link
-                href="/forgot-password"
-                style={{ fontSize: "0.8125rem", lineHeight: "1.5", padding: "0.375rem 0", color: "inherit", opacity: 0.8, textUnderlineOffset: "3px" }}
-              >
-                {t("Forgot password?")}
-              </Link>
-            </div>
-          ) : null}
           <button
             className="auth-submit"
             type="submit"

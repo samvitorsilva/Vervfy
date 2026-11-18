@@ -57,7 +57,7 @@
   font-size:0.85rem; margin-bottom:16px;
 }
 .auth-notice{
-  background:rgba(84,232,212,0.1); border:1px solid rgba(84,232,212,0.28);
+  background:rgba(143,211,232,0.1); border:1px solid rgba(143,211,232,0.28);
   color:var(--text); padding:12px 14px; border-radius:var(--radius-s);
   font-size:0.88rem; line-height:1.5; margin-bottom:16px;
 }
@@ -75,10 +75,10 @@
 .auth-divider::before,.auth-divider::after{ content:""; height:1px; flex:1; background:var(--border); }
 .auth-submit{
   width:100%; padding:12px 16px; border:1px solid rgba(255,255,255,0.18);
-  border-radius:var(--radius-button); background:linear-gradient(135deg, rgba(139,127,255,0.92), rgba(84,232,212,0.88));
+  border-radius:var(--radius-button); background:linear-gradient(135deg, rgba(143,211,232,0.92), rgba(143,211,232,0.88));
   color:#0c0e14; font-weight:700; font-size:0.95rem; cursor:pointer; margin-top:6px;
   transition:filter var(--dur-fast) var(--ease);
-  font-family:var(--font-display); box-shadow:0 8px 24px rgba(96,102,255,0.28), inset 0 1px 0 rgba(255,255,255,0.38);
+  font-family:var(--font-display); box-shadow:0 8px 24px rgba(143,211,232,0.19), inset 0 1px 0 rgba(255,255,255,0.38);
 }
 .auth-submit:hover{ filter:brightness(1.06); }
 .auth-footer{ margin-top:20px; text-align:center; font-size:0.85rem; color:var(--text-mid); }
@@ -99,12 +99,12 @@
 
 .homepage-page{
   --home-ui-font:var(--font-body);
-  --home-bg:#0c0e14;
-  --home-text:#f2f3f7;
-  --home-secondary:rgba(199,206,220,0.9);
-  --home-line:#343944;
-  --home-accent:#54e8d4;
-  --home-accent-ink:#0c0e14;
+  --home-bg:var(--bg);
+  --home-text:var(--text);
+  --home-secondary:var(--text-mid);
+  --home-line:var(--border);
+  --home-accent:var(--cyan);
+  --home-accent-ink:#0e2e33;
   --home-error:#ff9aa4;
   position:relative;
   z-index:1;
@@ -180,8 +180,8 @@
   border:1px solid rgba(255,255,255,.24);
   border-radius:12px;
   color:#0a0d15;
-  background:linear-gradient(135deg,rgba(139,127,255,.94),rgba(84,232,212,.9));
-  box-shadow:0 8px 24px rgba(108,102,255,.28),inset 0 1px 0 rgba(255,255,255,.42);
+  background:linear-gradient(135deg,rgba(143,211,232,.94),rgba(143,211,232,.9));
+  box-shadow:0 8px 24px rgba(143,211,232,.19),inset 0 1px 0 rgba(255,255,255,.42);
   font-family:var(--home-ui-font);
   font-weight:650;
   text-decoration:none;
@@ -222,7 +222,7 @@
 }
 .homepage-tagline{
   margin:14px 0 0;
-  color:rgba(120, 230, 212, 0.9);
+  color:var(--home-accent);
   font-family:var(--font-display);
   font-size:0.75rem;
   font-weight:600;
@@ -232,7 +232,7 @@
 .homepage-description{
   max-width:58ch;
   margin-top:18px;
-  color:rgba(200, 208, 220, 0.88);
+  color:var(--home-secondary);
   font-family:var(--home-ui-font);
   font-size:1.125rem;
   line-height:1.65;
@@ -270,7 +270,7 @@
 }
 .homepage-details p{
   margin-top:7px;
-  color:rgba(199, 206, 220, 0.84);
+  color:var(--home-secondary);
   font-family:var(--home-ui-font);
   font-size:.95rem;
   line-height:1.6;
@@ -343,19 +343,6 @@
   color:var(--home-accent);
 }
 
-@media (prefers-color-scheme:light){
-  .homepage-page{
-    --home-bg:#f5f6f3;
-    --home-text:#171b20;
-    --home-secondary:#46515c;
-    --home-line:#d4d9dd;
-    --home-accent:#00766d;
-    --home-accent-ink:#fff;
-    --home-error:#a61b2b;
-    color-scheme:light;
-  }
-}
-
 @media (max-width:760px){
   .homepage-main{
     justify-content:flex-start;
@@ -412,7 +399,7 @@
   display:grid;
   place-items:center;
   overflow:hidden;
-  background:radial-gradient(ellipse 55% 45% at 50% 45%, rgba(84,232,212,.065), transparent 75%),var(--home-bg);
+  background:radial-gradient(ellipse 55% 45% at 50% 45%, rgba(143,211,232,.065), transparent 75%),var(--home-bg);
   color:var(--home-text);
 }
 .homepage-transition-inner{
@@ -432,9 +419,9 @@
   height:76px;
   margin-bottom:5px;
   border-radius:24px;
-  border:1px solid rgba(84,232,212,.23);
-  background:linear-gradient(145deg,rgba(84,232,212,.12),rgba(139,127,255,.09));
-  box-shadow:0 16px 48px rgba(0,0,0,.18),0 0 42px rgba(84,232,212,.08);
+  border:1px solid rgba(143,211,232,.23);
+  background:linear-gradient(145deg,rgba(143,211,232,.12),rgba(143,211,232,.09));
+  box-shadow:0 16px 48px rgba(0,0,0,.18),0 0 42px rgba(143,211,232,.08);
 }
 .homepage-transition-name{
   font:700 1.5rem/1.2 var(--font-display);

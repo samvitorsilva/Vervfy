@@ -619,6 +619,7 @@ export default function LyricsOverlay({
   const [syncText, setSyncText] = useState<string[]>([]);
   const lyricsViewportRef = useRef<HTMLDivElement>(null);
   const lyricsTrackRef = useRef<HTMLDivElement>(null);
+  const manualScrollUntilRef = useRef(0);
   const seekingPointerRef = useRef<{ pointerId: number; wasPlaying: boolean } | null>(null);
   const [scrubbingTime, setScrubbingTime] = useState<number | null>(null);
   const smoothTimeRef = useRef(currentTime);
@@ -718,11 +719,20 @@ export default function LyricsOverlay({
     const viewport = lyricsViewportRef.current;
     const lyricTrack = lyricsTrackRef.current;
     if (!viewport || !lyricTrack) return;
-    const line = lyricTrack.children[Math.max(0, lineIndex)];
-    if (!(line instanceof HTMLElement)) return;
-    const offset = viewport.clientHeight / 2 - line.offsetTop - line.offsetHeight / 2;
-    lyricTrack.style.transform = `translate3d(0, ${offset}px, 0)`;
-  }, [lineIndex, lyrics]);
+    const centerLine = (behavior: ScrollBehavior) => {
+      lyricTrack.style.paddingBlock = `${viewport.clientHeight / 2}px`;
+      const line = lyricTrack.children[Math.max(0, lineIndex)];
+      if (!(line instanceof HTMLElement) || Date.now() < manualScrollUntilRef.current) return;
+      viewport.scrollTo({
+        top: line.offsetTop - viewport.clientHeight / 2 + line.offsetHeight / 2,
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : behavior,
+      });
+    };
+    centerLine("smooth");
+    const observer = new ResizeObserver(() => centerLine("instant"));
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [lineIndex, lyrics, editorOpen, syncLines]);
   const duration = audioElement && Number.isFinite(audioElement.duration)
     ? audioElement.duration
     : 0;
@@ -925,8 +935,18 @@ export default function LyricsOverlay({
         </div>
 
         <div
-          className={`lyrics-viewport${!syncLines && !editorOpen && (!lyrics || (!lyrics.lines?.length && !lyrics.text)) ? " lyrics-viewport-empty" : ""}`}
+          className={`lyrics-viewport${syncLines || editorOpen ? " lyrics-viewport-editing" : !lyrics || (!lyrics.lines?.length && !lyrics.text) ? " lyrics-viewport-empty" : ""}`}
           ref={lyricsViewportRef}
+          onWheel={() => { manualScrollUntilRef.current = Date.now() + 4000; }}
+          onTouchStart={() => { manualScrollUntilRef.current = Date.now() + 4000; }}
+          onKeyDown={(event) => {
+            if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+              manualScrollUntilRef.current = Date.now() + 4000;
+            }
+          }}
+          tabIndex={0}
+          role="region"
+          aria-label={t("Lyrics")}
         >
           {syncLines ? (
             <div className="lyrics-sync-editor">

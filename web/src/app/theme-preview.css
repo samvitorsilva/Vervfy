@@ -1,6 +1,9 @@
-/* Isolated Vervfy visual preview — no behavioral changes. */
+/* Shared graphite and teal theme for every application route. */
 :root {
   --bg:#11191d;
+  --surface:var(--bg-2);
+  --line:var(--border);
+  --muted:var(--text-mid);
   --bg-2:#2b2d31;
   --surface-control:rgba(238,244,244,.085);
   --surface-control-hover:rgba(238,244,244,.14);
@@ -21,7 +24,7 @@ body{background:radial-gradient(ellipse at 75% 0%,#0e2e33 0%,#11191d 47%,#16191e
 .rail{background:linear-gradient(180deg,#20343a 0%,#192328 52%,#2b2d31 100%);border-right:1px solid rgba(217,210,197,.2);}
 .logo-squircle{box-shadow:0 0 20px rgba(143,211,232,.19);}
 .brand-logo{filter:drop-shadow(0 0 12px rgba(143,211,232,.3));}
-.rail-btn.active{color:#0e2e33;background:linear-gradient(135deg,#ede8df,#d9d2c5);border-color:rgba(237,232,223,.75);box-shadow:0 7px 22px rgba(0,0,0,.18);}
+.rail-btn.active{color:var(--cyan);background:rgba(143,211,232,.1);border-color:rgba(143,211,232,.25);box-shadow:none;}
 .rail-btn[data-tip]:is(:hover,:focus-visible)::after{background:#2b2d31;}
 .topbar{background:linear-gradient(180deg,rgba(14,46,51,.45),rgba(43,45,49,.04));border-bottom:1px solid rgba(217,210,197,.08);}
 .search-wrap,.view-toggle{background:rgba(43,45,49,.8);border-color:rgba(217,210,197,.22);}
@@ -43,3 +46,27 @@ body{background:radial-gradient(ellipse at 75% 0%,#0e2e33 0%,#11191d 47%,#16191e
 .home-profile-avatar{background:rgba(143,211,232,.13);color:#8fd3e8;}
 a:focus-visible,button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline-color:#8fd3e8;}
 @media (prefers-reduced-motion:reduce){.field-blob{animation:none;}}
+
+/* Authentication matches the original landing page palette. */
+.auth-page{
+  --bg:#0c0e14;
+  --bg-2:#12151e;
+  --surface-control:rgba(255,255,255,.10);
+  --surface-control-hover:rgba(255,255,255,.14);
+  --border:rgba(255,255,255,.10);
+  --border-hi:rgba(255,255,255,.18);
+  --text:#f2f3f7;
+  --text-mid:#c0c5d1;
+  --text-dim:#a0a8ba;
+  --blue:#5daec7;
+  --cyan:#54e8d4;
+  color:var(--text);
+  color-scheme:dark;
+  background:var(--bg);
+}
+.auth-submit,.homepage-signup,.homepage-cta{
+  background:linear-gradient(125deg,#8fd3e8,#a9e8ef);
+  color:#0e2e33;
+  border-color:rgba(238,244,244,.45);
+  box-shadow:0 8px 25px rgba(143,211,232,.19);
+}
