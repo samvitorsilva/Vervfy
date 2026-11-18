@@ -6,6 +6,7 @@ import { languageFromAcceptLanguage, languageFromLocale } from "@/lib/language";
 import { siteUrl } from "@/lib/site-metadata";
 import "./styles.css";
 import "./auth.css";
+import "./theme-preview.css";
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,
@@ -34,7 +35,7 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#0c0e14",
+  themeColor: "#11191d",
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
