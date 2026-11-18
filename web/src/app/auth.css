@@ -40,6 +40,17 @@
 }
 .auth-password-hint.error{ color:var(--danger); }
 .auth-password-hint.ok{ color:var(--cyan); }
+.auth-recovery{ display:flex; justify-content:flex-end; margin-top:4px; }
+.auth-recovery-link{
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:44px; padding:8px 10px; max-width:100%;
+  border-radius:var(--radius-s); color:var(--cyan);
+  font-size:.85rem; font-weight:600; line-height:1.4; text-align:end;
+  text-decoration:underline; text-underline-offset:3px;
+  transition:background var(--dur-fast) var(--ease);
+}
+.auth-recovery-link:hover{ background:var(--surface-control-hover); }
+.auth-recovery-link:focus-visible{ outline:2px solid var(--cyan); outline-offset:2px; }
 .auth-error{
   background:rgba(255,107,122,0.12); border:1px solid rgba(255,107,122,0.35);
   color:var(--danger); padding:10px 14px; border-radius:var(--radius-s);
@@ -461,3 +472,21 @@
   .homepage-transition-inner,.homepage-transition-progress span{animation:none}
   .homepage-transition-progress span{width:100%;opacity:.7}
 }
+
+@keyframes authPasswordShake{
+  0%,100%{ transform:translateX(0); }
+  16.67%{ transform:translateX(-10px); }
+  33.33%{ transform:translateX(10px); }
+  50%{ transform:translateX(-6px); }
+  66.67%{ transform:translateX(6px); }
+  83.33%{ transform:translateX(-3px); }
+}
+.auth-field input.password-incorrect{ animation:authPasswordShake 360ms ease-out; }
+@media (prefers-reduced-motion:reduce){ .auth-field input.password-incorrect{ animation:none; } }
+
+/* The application also uses .grid for music cards. Keep the meter to one row. */
+.password-strength-meter{ display:grid; gap:6px; align-items:stretch; }
+.password-strength-meter > div{ min-width:0; height:6px; }
+
+.password-strength-rules{ display:grid; gap:6px; }
+.password-strength-check{ display:grid; place-items:center; }

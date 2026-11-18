@@ -1,5 +1,6 @@
 /* Vervfy application styles. */
 :root{
+  interpolate-size:allow-keywords;
   --bg:#0c0e14;
   --bg-2:#12151e;
   --surface-control:rgba(255,255,255,0.10);
@@ -295,7 +296,7 @@ input{ background:none; border:none; }
 .card-play svg{
   width:44px; height:44px; padding:14px; border-radius:50%;
   background:rgba(255,255,255,0.94); color:#0c0e14;
-  transform:scale(.92); transition:transform var(--dur-fast) var(--ease);
+  transform:scale(.97); transition:transform var(--dur-fast) var(--ease);
   box-shadow:0 8px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,0.8);
 }
 .card-art:hover .card-play svg, .card-art:focus-visible .card-play svg{ transform:scale(1); }
@@ -441,7 +442,7 @@ input{ background:none; border:none; }
 .playlist-cover-play{
   position:absolute; right:7px; bottom:7px; display:flex; align-items:center; justify-content:center;
   width:30px; height:30px; border-radius:50%; color:#0c0e14; background:var(--cyan);
-  box-shadow:0 4px 12px rgba(0,0,0,.3); opacity:0; transform:translateY(3px) scale(.92);
+  box-shadow:0 4px 12px rgba(0,0,0,.3); opacity:0; transform:translateY(3px) scale(.97);
   transition:opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .playlist-cover-play svg{ width:13px; height:13px; }
@@ -1320,7 +1321,7 @@ span.artist-photo{
 .seek-fill{ position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg, var(--cyan), var(--blue)); border-radius:99px; transition:width 250ms linear; }
 .seek-thumb{
   position:absolute; top:50%; width:13px; height:13px; border-radius:50%;
-  background:#fff; transform:translate(-50%,-50%); opacity:0; transition:left 250ms linear, opacity var(--dur-fast);
+  background:#fff; transform:translate(-50%,-50%); opacity:0; transition:opacity var(--dur-fast);
   box-shadow:0 0 0 4px rgba(93,174,199,.18), 0 2px 8px rgba(0,0,0,.35);
 }
 .seek:hover .seek-thumb{ opacity:1; }
@@ -1799,7 +1800,7 @@ span.artist-photo{
   padding:10px 18px; border-radius:999px; font-size:12.5px; font-weight:500;
   box-shadow:var(--shadow-soft); animation:toastin .25s var(--ease);
 }
-@keyframes toastin{ from{ opacity:0; transform:translateY(6px); } to{ opacity:1; transform:none; } }
+@keyframes toastin{ from{ opacity:0; transform:translateY(6px) scale(.97); } to{ opacity:1; transform:none; } }
 
 .hidden-input{ display:none; }
 
@@ -2640,3 +2641,18 @@ button:focus-visible{
   color:var(--cyan);
   text-underline-offset:3px;
 }
+
+/* Consistent press feedback and theme changes. */
+:root button {
+  transition-property:scale, transform, opacity, color, background-color, border-color, box-shadow, filter;
+  transition-duration:150ms;
+  transition-timing-function:ease-out;
+}
+:root button:active:not(:disabled){ scale:.97; }
+.theme-switching *, .theme-switching *::before, .theme-switching *::after{ transition:none !important; }
+@media (prefers-reduced-motion:reduce){ :root button{ transition:none; } :root button:active:not(:disabled){ scale:1; } }
+
+/* Pause for the first rail hint; subsequent hints in the same hover run are immediate. */
+.rail-btn[data-tip]:is(:hover,:focus-visible)::after{ opacity:0; animation:railTipShow 0s 300ms forwards; }
+.tooltip-warm .rail-btn[data-tip]:is(:hover,:focus-visible)::after{ animation-delay:0s; }
+@keyframes railTipShow{ to{ opacity:1; } }

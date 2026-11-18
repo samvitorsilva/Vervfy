@@ -12,9 +12,29 @@ const translations: Record<string, string> = {
   "The track could not start. Please try again.": "Não foi possível iniciar a faixa. Tente novamente.",
   "The track could not restart. Please try again.": "Não foi possível reiniciar a faixa. Tente novamente.",
   "Loading your music library": "Carregando sua biblioteca de música…",
+  "Password strength": "Força da senha",
+  "Empty": "Vazia",
+  "Weak": "Fraca",
+  "Fair": "Razoável",
+  "Good": "Boa",
+  "Strong": "Forte",
+  "8 characters or more": "8 caracteres ou mais",
+  "Upper and lower case": "Letras maiúsculas e minúsculas",
+  "A number": "Um número",
+  "A symbol": "Um símbolo",
+  "Commonly guessed": "Fácil de adivinhar",
+  "met": "atendido",
+  "not met": "não atendido",
+  "Password strength {label}.": "Força da senha: {label}.",
+  "This is a commonly guessed pattern.": "Este é um padrão fácil de adivinhar.",
+  "All requirements met.": "Todos os critérios foram atendidos.",
+  "Still needed: {rules}.": "Ainda falta: {rules}.",
+  "Type a password": "Digite uma senha",
   "Welcome back": "Que bom ter você de volta!",
   "Forgot password?": "Esqueceu a senha?",
   "Forgot password": "Esqueceu a senha",
+  "Request secure password reset instructions for your Vervfy account.": "Solicite instruções seguras para redefinir a senha da sua conta Vervfy.",
+  "Reset password": "Redefinir senha",
   "Reset your password": "Redefina sua senha",
   "Verify your email": "Verifique seu e-mail",
   "Enter your account email. If an account can be recovered with it, we will send instructions.": "Informe o e-mail da sua conta. Se ele puder ser usado para recuperar uma conta, enviaremos as instruções.",
@@ -26,7 +46,6 @@ const translations: Record<string, string> = {
   "New password": "Nova senha",
   "Confirm new password": "Confirme a nova senha",
   "Passwords do not match.": "As senhas não coincidem.",
-  "Reset password": "Redefinir senha",
   "Updating password…": "Atualizando senha…",
   "Your password has been updated. You can log in with your new password.": "Sua senha foi atualizada. Você pode entrar com a nova senha.",
   "Request another reset link": "Solicitar outro link de redefinição",
@@ -674,9 +693,28 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "The track could not start. Please try again.": ["Impossible de démarrer la lecture du morceau. Réessayez.", "No se pudo iniciar la canción. Inténtalo de nuevo."],
   "The track could not restart. Please try again.": ["Impossible de relancer le morceau. Réessayez.", "No se pudo reiniciar la canción. Inténtalo de nuevo."],
   "Loading your music library": ["Chargement de votre bibliothèque musicale…", "Cargando tu biblioteca de música…"],
+  "Password strength": ["Robustesse du mot de passe", "Seguridad de la contraseña"],
+  "Empty": ["Vide", "Vacía"],
+  "Weak": ["Faible", "Débil"],
+  "Fair": ["Moyenne", "Regular"],
+  "Good": ["Bonne", "Buena"],
+  "Strong": ["Forte", "Fuerte"],
+  "8 characters or more": ["8 caractères ou plus", "8 caracteres o más"],
+  "Upper and lower case": ["Majuscules et minuscules", "Mayúsculas y minúsculas"],
+  "A number": ["Un chiffre", "Un número"],
+  "A symbol": ["Un symbole", "Un símbolo"],
+  "Commonly guessed": ["Facile à deviner", "Fácil de adivinar"],
+  "met": ["satisfait", "cumplido"],
+  "not met": ["non satisfait", "no cumplido"],
+  "Password strength {label}.": ["Robustesse du mot de passe : {label}.", "Seguridad de la contraseña: {label}."],
+  "This is a commonly guessed pattern.": ["Ce modèle est facile à deviner.", "Este patrón es fácil de adivinar."],
+  "All requirements met.": ["Tous les critères sont satisfaits.", "Se cumplen todos los criterios."],
+  "Still needed: {rules}.": ["Critères restants : {rules}.", "Falta: {rules}."],
+  "Type a password": ["Saisissez un mot de passe", "Escribe una contraseña"],
   "Welcome back": ["Bon retour", "Qué bueno verte de nuevo"],
   "Forgot password?": ["Mot de passe oublié ?", "¿Olvidaste la contraseña?"],
   "Forgot password": ["Mot de passe oublié", "Contraseña olvidada"],
+  "Request secure password reset instructions for your Vervfy account.": ["Demandez des instructions sécurisées pour réinitialiser le mot de passe de votre compte Vervfy.", "Solicita instrucciones seguras para restablecer la contraseña de tu cuenta de Vervfy."],
   "Reset your password": ["Réinitialiser votre mot de passe", "Restablece tu contraseña"],
   "Verify your email": ["Vérifier votre adresse e-mail", "Verifica tu correo electrónico"],
   "Enter your account email. If an account can be recovered with it, we will send instructions.": ["Saisissez l’e-mail de votre compte. S’il permet de récupérer un compte, nous vous enverrons les instructions.", "Introduce el correo de tu cuenta. Si permite recuperar una cuenta, te enviaremos instrucciones."],
@@ -1378,6 +1416,8 @@ const pageMetadata: Record<string, readonly [string, string]> = {
   "/": ["Your personal music library, accessible from anywhere.", "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place."],
   "/login": ["Log in", "Log in to your Vervfy account to access your music library."],
   "/register": ["Create an account", "Create a Vervfy account to organize and listen to your music library."],
+  "/forgot-password": ["Forgot password", "Request secure password reset instructions for your Vervfy account."],
+  "/reset-password": ["Reset password", "Choose a new password for your Vervfy account."],
   "/credits": ["Credits and data sources", "Attribution, licenses, and data sources used by Vervfy."],
   "/privacy": ["Privacy Policy", "How Vervfy handles account, library, and device information."],
   "/terms": ["Terms and Conditions", "Terms for using the Vervfy music library service."],
@@ -1464,10 +1504,19 @@ export function LanguageProvider({
     document.documentElement.lang = language;
     const [title, description] =
       pageMetadata[pathname] ?? ["Page not found", "The requested Vervfy page could not be found."];
-    document.title = `${t(title)} | Vervfy`;
-    document
-      .querySelector('meta[name="description"]')
-      ?.setAttribute("content", t(description));
+    const translatedTitle = `${t(title)} | Vervfy`;
+    const translatedDescription = t(description);
+    const applyMetadata = () => {
+      if (document.title !== translatedTitle) document.title = translatedTitle;
+      const meta = document.querySelector('meta[name="description"]');
+      if (meta?.getAttribute("content") !== translatedDescription) {
+        meta?.setAttribute("content", translatedDescription);
+      }
+    };
+    applyMetadata();
+    const observer = new MutationObserver(applyMetadata);
+    observer.observe(document.head, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["content"] });
+    return () => observer.disconnect();
   }, [language, pathname, t]);
 
   const value = useMemo<LanguageContextValue>(

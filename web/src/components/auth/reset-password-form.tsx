@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 import SiteFooter from "@/components/site-footer";
+import { PasswordStrength } from "@/components/ui/password-strength";
 
 declare global {
   interface Window {
@@ -30,17 +31,6 @@ export default function ResetPasswordForm() {
   const initialLink = useRef<{ token: string | null; mode: LinkMode } | null>(null);
   const passwordLength = Array.from(password).length;
   const passwordBytes = new TextEncoder().encode(password).length;
-  const passwordHint =
-    passwordBytes > 72
-      ? t("Password must be 72 UTF-8 bytes or fewer. Remove some characters.")
-      : passwordLength < 8
-        ? passwordLength > 0
-          ? t(passwordLength === 7
-            ? "Add 1 more character to meet the 8-character minimum."
-            : "Add {count} more characters to meet the 8-character minimum.")
-            .replace("{count}", String(8 - passwordLength))
-          : t("Use at least 8 characters.")
-        : t("Password meets the 8-character minimum.");
   const passwordInvalid =
     passwordLength > 0 && (passwordLength < 8 || passwordBytes > 72);
   const confirmationMismatch =
@@ -254,19 +244,20 @@ export default function ResetPasswordForm() {
                 autoFocus
                 value={password}
                 aria-invalid={passwordInvalid}
-                aria-describedby="password-hint"
+                aria-describedby="password-strength"
                 onChange={(event) => {
                   setPassword(event.currentTarget.value);
                   setError(null);
                 }}
               />
-              <p
-                id="password-hint"
-                className={`auth-password-hint${passwordInvalid ? " error" : passwordLength >= 8 && passwordBytes <= 72 ? " ok" : ""}`}
-                aria-live="polite"
-              >
-                {passwordHint}
-              </p>
+              <div id="password-strength">
+                <PasswordStrength value={password} className="dark mt-3" />
+                {passwordBytes > 72 && (
+                  <p className="auth-password-hint error" role="alert">
+                    {t("Password must be 72 UTF-8 bytes or fewer. Remove some characters.")}
+                  </p>
+                )}
+              </div>
             </div>
             <div className="auth-field">
               <label htmlFor="confirmation">{t("Confirm new password")}</label>

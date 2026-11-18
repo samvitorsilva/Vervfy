@@ -1,12 +1,9 @@
-import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import ForgotPasswordForm from "@/components/auth/forgot-password-form";
 
-export const metadata: Metadata = {
-  title: "Forgot password",
-  description: "Request secure password reset instructions for your Vervfy account.",
-  robots: { index: false, follow: false },
-  referrer: "no-referrer",
-};
+export async function generateMetadata() {
+  return pageMetadata("/forgot-password");
+}
 
 export default function ForgotPasswordPage() {
   return <ForgotPasswordForm />;

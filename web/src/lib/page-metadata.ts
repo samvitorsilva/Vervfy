@@ -4,6 +4,18 @@ import { languageFromAcceptLanguage, languageFromLocale, type Language } from "@
 import { websiteMetadata } from "@/lib/site-metadata";
 
 const localizedTitles: Record<string, Record<Language, string>> = {
+  "/forgot-password": {
+    en: "Forgot password",
+    "pt-BR": "Esqueceu a senha",
+    fr: "Mot de passe oublié",
+    es: "Contraseña olvidada",
+  },
+  "/reset-password": {
+    en: "Reset password",
+    "pt-BR": "Redefinir senha",
+    fr: "Réinitialiser le mot de passe",
+    es: "Restablecer contraseña",
+  },
   "/credits": {
     en: "Credits and data sources",
     "pt-BR": "Créditos e fontes de dados",
@@ -25,6 +37,8 @@ const localizedTitles: Record<string, Record<Language, string>> = {
 };
 
 const descriptions: Record<string, string> = {
+  "/forgot-password": "Request secure password reset instructions for your Vervfy account.",
+  "/reset-password": "Choose a new password for your Vervfy account.",
   "/credits": "Attribution, licenses, and data sources used by Vervfy.",
   "/privacy": "How Vervfy handles account, library, and device information.",
   "/terms": "Terms for using the Vervfy music library service.",
@@ -39,5 +53,8 @@ export async function pageMetadata(path: string): Promise<Metadata> {
   const description = descriptions[path];
   if (!titles || !description) throw new Error(`Unknown metadata path: ${path}`);
 
+  if (path === "/forgot-password" || path === "/reset-password") {
+    return { title: titles[language], description, robots: { index: false, follow: false }, referrer: "no-referrer" };
+  }
   return websiteMetadata(titles[language], description, path);
 }

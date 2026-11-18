@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 import SiteFooter from "@/components/site-footer";
+import { PasswordStrength } from "@/components/ui/password-strength";
 
 type AuthMode = "login" | "register";
 
@@ -26,18 +27,6 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const passwordLength = Array.from(password).length;
   const passwordBytes = new TextEncoder().encode(password).length;
-  const passwordHint = isLogin
-    ? t("Your password is checked when you log in. If it doesn't match, check it and try again.")
-    : passwordBytes > 72
-      ? t("Password must be 72 UTF-8 bytes or fewer. Remove some characters.")
-      : passwordLength < 8
-        ? passwordLength > 0
-          ? t(passwordLength === 7
-            ? "Add 1 more character to meet the 8-character minimum."
-            : "Add {count} more characters to meet the 8-character minimum.")
-              .replace("{count}", String(8 - passwordLength))
-          : t("Use at least 8 characters.")
-        : t("Password meets the 8-character minimum.");
   const passwordInvalid = isLogin
     ? passwordIncorrect
     : passwordLength > 0 && (passwordLength < 8 || passwordBytes > 72);
@@ -309,6 +298,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
             <input
               id="password"
               name="password"
+              className={passwordIncorrect ? "password-incorrect" : undefined}
               type="password"
               autoComplete={isLogin ? "current-password" : "new-password"}
               minLength={isLogin ? undefined : 8}
@@ -316,20 +306,30 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               ref={passwordInputRef}
               value={password}
               aria-invalid={passwordInvalid}
-              aria-describedby={passwordIncorrect ? "auth-error password-hint" : "password-hint"}
+              aria-describedby={isLogin ? (passwordIncorrect ? "auth-error" : undefined) : "password-strength"}
               onChange={(event) => {
                 setPassword(event.currentTarget.value);
                 setError(null);
                 setPasswordIncorrect(false);
               }}
             />
-            <p
-              id="password-hint"
-              className={`auth-password-hint${passwordInvalid ? " error" : !isLogin && passwordLength >= 8 && passwordBytes <= 72 ? " ok" : ""}`}
-              aria-live="polite"
-            >
-              {passwordHint}
-            </p>
+            {!isLogin && (
+              <div id="password-strength">
+                <PasswordStrength value={password} className="dark mt-3" />
+                {passwordBytes > 72 && (
+                  <p className="auth-password-hint error" role="alert">
+                    {t("Password must be 72 UTF-8 bytes or fewer. Remove some characters.")}
+                  </p>
+                )}
+              </div>
+            )}
+            {isLogin ? (
+              <div className="auth-recovery">
+                <Link className="auth-recovery-link" href="/forgot-password">
+                  {t("Forgot password?")}
+                </Link>
+              </div>
+            ) : null}
           </div>
           {isLogin ? (
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-0.25rem", marginBottom: "0.875rem" }}>

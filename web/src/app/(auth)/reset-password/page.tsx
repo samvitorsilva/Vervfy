@@ -1,12 +1,9 @@
-import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import ResetPasswordForm from "@/components/auth/reset-password-form";
 
-export const metadata: Metadata = {
-  title: "Reset password",
-  description: "Choose a new password for your Vervfy account.",
-  robots: { index: false, follow: false },
-  referrer: "no-referrer",
-};
+export async function generateMetadata() {
+  return pageMetadata("/reset-password");
+}
 
 export default function ResetPasswordPage() {
   return <ResetPasswordForm />;
