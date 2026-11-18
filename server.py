@@ -2050,6 +2050,8 @@ async def google_oauth_callback(request: Request) -> Response:
             google_oauth.log_google_identity_confirmation_failure(stage)
         elif purpose in google_oauth.GOOGLE_REAUTHENTICATION_PURPOSES:
             google_oauth.log_google_reauthentication_failure(stage)
+        elif purpose == "link":
+            google_oauth.log_google_link_failure(stage)
         else:
             google_oauth.local_diagnostic(stage)
         return _google_oauth_failed(*args, **kwargs)
@@ -2136,15 +2138,15 @@ async def google_oauth_callback(request: Request) -> Response:
             or user["id"] != expected_user_id
             or request.session.get("sid") != expected_session_id
             or request.session.get("sv") != expected_version
-            or (
-                purpose == "link"
-                and user_id is not None
-            )
+
             or (
                 purpose != "link"
                 and (not isinstance(user_id, str) or user_id != user["id"])
             )
         ):
+            return failed(config, purpose)
+        if purpose == "link" and user_id is not None:
+            stage = "identity_already_linked"
             return failed(config, purpose)
         auth_time = None
         identity_verified_at = None
@@ -2152,6 +2154,7 @@ async def google_oauth_callback(request: Request) -> Response:
             stage = "freshness"
             auth_time = service.require_fresh_authentication(claims)
         if purpose == "link":
+            stage = "password_proof"
             password_verified_at = transaction.get("password_verified_at")
             if (
                 not isinstance(password_verified_at, int)
@@ -2161,6 +2164,7 @@ async def google_oauth_callback(request: Request) -> Response:
                 or password_verified_at > time.time() + google_oauth.CLOCK_SKEW_SECONDS
             ):
                 return failed(config, purpose)
+            stage = "identity_link_write"
             session_version = await run_in_threadpool(
                 user_store.link_google_identity, user["id"], claims["sub"]
             )
