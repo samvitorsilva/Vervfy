@@ -15,6 +15,12 @@ export default function ForgotPasswordForm() {
   const [pending, setPending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
+  // Keep the browser tab title correct after client-side navigation, even if
+  // a stale not-found metadata payload was previously applied by the router.
+  useEffect(() => {
+    document.title = `${t("Forgot password")} | Vervfy`;
+  }, [t]);
+
   useEffect(() => {
     let active = true;
     void getCsrfToken()
