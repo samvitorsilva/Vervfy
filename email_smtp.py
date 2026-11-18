@@ -593,6 +593,43 @@ def public_app_origin() -> str:
     return "http://localhost:3000"
 
 
+def _branded_email_html(
+    *, title: str, description: str, action_label: str, action_url: str,
+    closing: str,
+) -> str:
+    """Responsive, email-client-friendly markup with a public app icon."""
+    logo_url = f"{public_app_origin()}/apple-icon.png"
+    safe_logo = escape(logo_url, quote=True)
+    safe_action = escape(action_url, quote=True)
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Vervfy</title></head>'
+        '<body style="margin:0;padding:24px 12px;background:#f3f6f8;'
+        'font-family:Arial,Helvetica,sans-serif;color:#17212b;">'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'style="width:100%;max-width:520px;margin:0 auto;background:#ffffff;'
+        'border-radius:18px;"><tr><td style="padding:36px 30px;">'
+        f'<img src="{safe_logo}" width="64" height="64" alt="Vervfy" '
+        'style="display:block;border:0;border-radius:16px;width:64px;height:64px;">'
+        '<p style="margin:18px 0 0;font-size:18px;font-weight:bold;">Vervfy</p>'
+        f'<h1 style="font-size:25px;line-height:1.25;margin:24px 0 12px;">{escape(title)}</h1>'
+        f'<p style="font-size:15px;line-height:1.6;">{escape(description)}</p>'
+        '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+        'style="margin:28px 0;"><tr><td bgcolor="#00cfb3" '
+        'style="border-radius:10px;">'
+        f'<a href="{safe_action}" style="display:inline-block;padding:15px 22px;'
+        'color:#071319;text-decoration:none;font-size:15px;font-weight:bold;">'
+        f'{escape(action_label)}</a></td></tr></table>'
+        f'<p style="font-size:13px;line-height:1.6;color:#566371;">{escape(closing)}</p>'
+        '<p style="font-size:12px;color:#566371;line-height:1.5;">'
+        'If the button does not work, copy this link into your browser:</p>'
+        f'<p style="font-size:12px;overflow-wrap:anywhere;word-break:break-all;">'
+        f'<a href="{safe_action}" style="color:#087b76;">{safe_action}</a></p>'
+        '</td></tr></table></body></html>'
+    )
+
+
 def build_password_reset_message(
     *,
     to_email: str,
@@ -612,11 +649,12 @@ def build_password_reset_message(
         "This link expires soon and can be used only once. "
         "If you did not request a reset, you can ignore this email.\n"
     )
-    html_body = (
-        "<p>We received a request to reset your Vervfy password.</p>"
-        f'<p><a href="{escape(reset_url, quote=True)}">Choose a new password</a></p>'
-        "<p>This link expires soon and can be used only once. "
-        "If you did not request a reset, you can ignore this email.</p>"
+    html_body = _branded_email_html(
+        title="Reset your password",
+        description="We received a request to reset your Vervfy password.",
+        action_label="Choose a new password",
+        action_url=reset_url,
+        closing="This link expires soon and can be used only once. If you did not request a reset, you can ignore this email.",
     )
     message.set_content(text_body)
     message.add_alternative(html_body, subtype="html")
@@ -643,12 +681,12 @@ def build_email_verification_message(
         "This link expires soon and can be used only once. "
         "If you did not request verification, you can ignore this email.\n"
     )
-    html_body = (
-        "<p>We received a request to verify this email address for your Vervfy account.</p>"
-        f'<p><a href="{escape(verification_url, quote=True)}">'
-        "Verify your email to continue</a></p>"
-        "<p>This link expires soon and can be used only once. "
-        "If you did not request verification, you can ignore this email.</p>"
+    html_body = _branded_email_html(
+        title="Verify your email",
+        description="Verify that you own this email address to continue using Vervfy.",
+        action_label="Verify your email",
+        action_url=verification_url,
+        closing="This link expires soon and can be used only once. If you did not request verification, you can ignore this email.",
     )
     message.set_content(text_body)
     message.add_alternative(html_body, subtype="html")
