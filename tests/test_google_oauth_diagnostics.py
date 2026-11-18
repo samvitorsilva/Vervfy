@@ -288,3 +288,27 @@ def test_google_password_setup_rate_limit_is_bounded_and_fails_closed():
     ) as error:
         server._check_google_password_setup_rate(request, "local-user", "submit")
     assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize("stage,expected", [
+    ("account_session_binding", "account_session_binding"),
+    ("identity_already_linked", "identity_already_linked"),
+    ("freshness_missing_auth_time", "freshness_missing_auth_time"),
+    ("password_proof_expired", "password_proof_expired"),
+    ("private-token", "other_validation"),
+])
+def test_production_link_failure_logger_is_allowlisted(caplog, stage, expected):
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "production"}):
+        google_oauth.log_google_link_failure(stage)
+    assert [r.getMessage() for r in caplog.records if r.name == "vervfy.oauth"] == [
+        f"Google account linking failure stage={expected}"
+    ]
+    assert "private-token" not in caplog.text
+
+
+def test_link_failure_logger_silent_outside_production(caplog):
+    caplog.set_level(logging.WARNING, logger="vervfy.oauth")
+    with patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "development"}):
+        google_oauth.log_google_link_failure("account_session_binding")
+    assert not caplog.records

@@ -50,6 +50,35 @@ GOOGLE_FLOW_PURPOSES = {
     "account_delete",
     "logout_all",
 }
+GOOGLE_LINK_FAILURE_STAGES = frozenset({
+    "transaction",
+    "authorization_response",
+    "token_validation",
+    "identity_lookup",
+    "account_session_binding",
+    "identity_already_linked",
+    "freshness_missing_auth_time",
+    "freshness_stale_auth_time",
+    "freshness",
+    "password_proof_expired",
+    "other_validation",
+})
+
+
+def log_google_link_failure(stage: str) -> None:
+    """Log only allowlisted link failure categories in production."""
+    environment = (
+        os.environ.get("VERVFY_ENVIRONMENT")
+        or os.environ.get("ENVIRONMENT", "")
+    ).strip().lower()
+    if environment not in {"production", "prod"}:
+        return
+    safe_stage = stage if stage in GOOGLE_LINK_FAILURE_STAGES else "other_validation"
+    logging.getLogger("vervfy.oauth").warning(
+        "Google account linking failure stage=%s", safe_stage
+    )
+
+
 GOOGLE_REAUTHENTICATION_PURPOSES = frozenset(
     {"email_change", "account_delete", "logout_all"}
 )
