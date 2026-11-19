@@ -18,6 +18,10 @@ import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
 import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
 import ResilientImage from "@/components/resilient-image";
+import CommandMenu from "@/components/command-menu";
+import { useSheetSwipe } from "@/lib/ui/use-sheet-swipe";
+import { useUndoableRemovals } from "@/lib/ui/use-undoable-removals";
+import { useViewHistory } from "@/lib/ui/use-view-history";
 import VisualizerOverlay from "@/components/visualizer-overlay";
 import { useLanguage } from "@/lib/i18n";
 import { getPlaybackController } from "@/lib/playback-controller";
@@ -46,6 +50,26 @@ interface ServerTrack {
 interface LibraryMeta {
   favorites: string[];
   playlists: PlaylistRecord[];
+}
+
+// Memory only; replay only after /api/me confirms the same account.
+let librarySnapshot: { account: Account; tracks: ServerTrack[]; meta: LibraryMeta; etag: string | null; savedAt: number } | null = null;
+
+function recordsFromServer(tracks: ServerTrack[]): TrackRecord[] {
+  return tracks.map((track) => ({
+    id: track.id,
+    title: track.title || "Unknown title",
+    artist: track.artist || "Unknown artist",
+    album: track.album || "Unknown album",
+    duration: track.duration || 0,
+    hasCover: track.has_cover,
+    coverUrl: coverUrlForTrack(track),
+    remoteCoverUrl: coverUrlForTrack(track),
+    streamUrl: track.stream_url,
+    coverSource: track.cover_source ?? "unknown",
+    favorite: false,
+    customLyrics: track.custom_lyrics ?? null,
+  }));
 }
 
 interface OfflineTrackRecord {
@@ -1162,6 +1186,7 @@ export default function LibraryApp() {
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const loadedAccountRef = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const pullStartRef = useRef<{ x: number; y: number } | null>(null);
   const pullDistanceRef = useRef(0);
@@ -1227,6 +1252,7 @@ export default function LibraryApp() {
   const [volume, setVolume] = useState(0.7);
   const [muted, setMuted] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const uploadBatchRef = useRef(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -1247,17 +1273,17 @@ export default function LibraryApp() {
   const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
 
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    if (url.searchParams.get("view") !== "account") return;
-    setView("account");
-    url.searchParams.delete("view");
-    window.history.replaceState(
-      null,
-      "",
-      `${url.pathname}${url.search}${url.hash}`,
-    );
-  }, [setView]);
+  useViewHistory();
+  const removals = useUndoableRemovals();
+  const pendingTrackIds = useMemo(() => new Set(removals.items.filter((item) => item.id.startsWith("track:")).map((item) => item.id.slice(6))), [removals.items]);
+  const pendingPlaylistIds = useMemo(() => new Set(removals.items.filter((item) => item.id.startsWith("playlist:")).map((item) => item.id.slice(9))), [removals.items]);
+  const playerSwipe = useSheetSwipe(() => setExpandedPlayerOpen(false), ".mobile-player");
+  const queueSwipe = useSheetSwipe(() => setQueueOpen(false), ".side-panel");
+  const shortcutsSwipe = useSheetSwipe(() => setShortcutsOpen(false), ".shortcuts-dialog");
+  const queuePickerSwipe = useSheetSwipe(() => setQueuePickerOpen(false), ".queue-picker-card");
+  const playlistPickerSwipe = useSheetSwipe(() => setPlaylistPicker(null), ".queue-picker-card");
+  const playlistAddSwipe = useSheetSwipe(() => setPlaylistAddTarget(null), ".queue-picker-card");
+  const timerSwipe = useSheetSwipe(() => setSleepTimerOpen(false), ".sleep-timer-popover, .sleep-timer-card");
 
   const updateProfilePhoto = useCallback((photoUrl: string | null) => {
     setProfile((current) => current ? { ...current, photo_url: photoUrl } : current);
@@ -1511,7 +1537,7 @@ export default function LibraryApp() {
     : null;
 
   const visibleTracks = useMemo(() => {
-    let list = tracks;
+    let list = tracks.filter((track) => !pendingTrackIds.has(track.id));
     if (view === "offline") list = list.filter((track) => track.offline);
     if (view === "favorites") list = list.filter((track) => track.favorite);
     if (view.startsWith("playlist:")) {
@@ -1530,15 +1556,16 @@ export default function LibraryApp() {
       list = list.filter((track) => track.artist.toLocaleLowerCase().includes(artistName));
     }
     return list;
-  }, [playlists, search, tracks, view]);
+  }, [pendingTrackIds, playlists, search, tracks, view]);
   const filteredPlaylists = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
+    const available = playlists.filter((playlist) => !pendingPlaylistIds.has(playlist.id));
     return query
-      ? playlists.filter((playlist) =>
+      ? available.filter((playlist) =>
           playlist.name.toLocaleLowerCase().includes(query),
         )
-      : playlists;
-  }, [playlists, search]);
+      : available;
+  }, [pendingPlaylistIds, playlists, search]);
   const playlistRecommendations = useMemo(() => {
     const cutoff = (listeningSummary?.asOf ?? 0) - 30 * 24 * 60 * 60;
     return playlists
@@ -1810,6 +1837,9 @@ export default function LibraryApp() {
 
   const uploadFiles = useCallback(
     async (selectedFiles: FileList | File[]) => {
+      if (uploadBatchRef.current) return;
+      uploadBatchRef.current = true;
+      try {
       const files = Array.from(selectedFiles).filter(
         (file) =>
           file.type.startsWith("audio/") ||
@@ -1935,6 +1965,9 @@ export default function LibraryApp() {
       } else {
         notify(t("Those tracks were already in your library."));
       }
+      } finally {
+        uploadBatchRef.current = false;
+      }
     },
     [notify, reloadTracks, t, translateError],
   );
@@ -1982,15 +2015,17 @@ export default function LibraryApp() {
       while (true) {
         const etag = etagRef.current;
         if (!etag) return;
+        const serialized = JSON.stringify(snapshot);
         const response = await apiFetch(
           "/api/library/state",
           {
             method: "PUT",
+            keepalive: new TextEncoder().encode(serialized).byteLength < 60_000,
             headers: {
               "Content-Type": "application/json",
               "If-Match": etag,
             },
-            body: JSON.stringify(snapshot),
+            body: serialized,
           },
           { csrf: true, retryCsrfOnForbidden: true },
         );
@@ -2012,6 +2047,9 @@ export default function LibraryApp() {
         await expectOk(response);
         etagRef.current = response.headers.get("ETag") ?? etagRef.current;
         baselineRef.current = normalizeMeta((await response.json()) as LibraryState);
+        if (librarySnapshot?.account.id === loadedAccountRef.current) {
+          librarySnapshot = { ...librarySnapshot, meta: baselineRef.current, etag: etagRef.current };
+        }
         dirtyRef.current = !sameMeta(getMetaFromStore(), snapshot);
         return;
       }
@@ -2175,6 +2213,7 @@ export default function LibraryApp() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
@@ -2257,37 +2296,61 @@ export default function LibraryApp() {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let lastRefresh = 0;
     async function loadLibrary() {
-      setLoading(true);
+      if (inFlight) return;
+      if (dirtyRef.current) {
+        await saveMeta();
+        if (dirtyRef.current || cancelled) return;
+      }
+      const baselineAtStart = baselineRef.current;
+      const accountAtStart = loadedAccountRef.current;
+      const tracksAtStart = new Map(usePlayerStore.getState().tracks.map((track) => [track.id, track]));
+      inFlight = true;
+      lastRefresh = Date.now();
+      setLoading(loadedAccountRef.current === null);
       setLoadError(null);
       try {
-        const [tracksResponse, stateResponse, accountResponse] = await Promise.all([
+        const accountRequest = fetchWithRetry("/api/me", { cache: "no-store" }, 3)
+          .then(expectOk).then((response) => response.json() as Promise<Account>)
+          .then((account) => {
+            if (cancelled) return account;
+            if (loadedAccountRef.current && loadedAccountRef.current !== account.id) {
+              setLoading(true);
+              setTracks([]);
+              setLibraryMeta([], []);
+              setProfile(account);
+              getPlaybackController()?.stop();
+              setQueue([], -1);
+              baselineRef.current = { favorites: [], playlists: [] };
+              etagRef.current = null;
+              loadedAccountRef.current = null;
+            }
+            const cached = librarySnapshot;
+            if (!loadedAccountRef.current && cached?.account.id === account.id && Date.now() - cached.savedAt < 5 * 60_000) {
+              setProfile(account);
+              setTracks(recordsFromServer(cached.tracks));
+              baselineRef.current = cached.meta;
+              etagRef.current = cached.etag;
+              applyMeta(cached.meta);
+              loadedAccountRef.current = account.id;
+              setLoading(false);
+            }
+            return account;
+          });
+        const [tracksResponse, stateResponse, account] = await Promise.all([
           fetchWithRetry("/api/tracks", { cache: "no-store" }, 3),
           fetchWithRetry("/api/library/state", { cache: "no-store" }, 3),
-          fetchWithRetry("/api/me", { cache: "no-store" }, 3),
+          accountRequest,
         ]);
         await expectOk(tracksResponse);
         await expectOk(stateResponse);
-        await expectOk(accountResponse);
         const payload = (await tracksResponse.json()) as { tracks: ServerTrack[] };
-        const account = (await accountResponse.json()) as Account;
         const previousTracksById = new Map(
           usePlayerStore.getState().tracks.map((track) => [track.id, track]),
         );
-        const nextTracks: TrackRecord[] = payload.tracks.map((track) => ({
-          id: track.id,
-          title: track.title || "Unknown title",
-          artist: track.artist || "Unknown artist",
-          album: track.album || "Unknown album",
-          duration: track.duration || 0,
-          hasCover: track.has_cover,
-          coverUrl: coverUrlForTrack(track),
-          remoteCoverUrl: coverUrlForTrack(track),
-          streamUrl: track.stream_url,
-          coverSource: track.cover_source ?? "unknown",
-          favorite: false,
-          customLyrics: track.custom_lyrics ?? null,
-        }));
+        const nextTracks = recordsFromServer(payload.tracks);
         const remoteMeta = normalizeMeta((await stateResponse.json()) as LibraryState);
         const legacyMeta = await readLegacyMeta();
         let offlineRecords: OfflineTrackRecord[] = [];
@@ -2347,14 +2410,40 @@ export default function LibraryApp() {
             customLyrics: record.customLyrics,
           });
         }
+        const latestMeta = dirtyRef.current || baselineRef.current !== baselineAtStart ? getMetaFromStore() : null;
+        if (accountAtStart === account.id) {
+          const liveById = new Map(usePlayerStore.getState().tracks.map((track) => [track.id, track]));
+          // A refresh started before an edit must not undo that edit or resurrect a removed track.
+          for (let index = nextTracks.length - 1; index >= 0; index--) {
+            const track = nextTracks[index];
+            const before = tracksAtStart.get(track.id);
+            const live = liveById.get(track.id);
+            if (before && !live) { nextTracks.splice(index, 1); continue; }
+            if (!before || !live) continue;
+            const preserve = <K extends keyof TrackRecord>(field: K) => {
+              if (live[field] !== before[field]) track[field] = live[field];
+            };
+            for (const field of ["title", "artist", "album", "customLyrics", "coverUrl", "remoteCoverUrl", "coverSource", "hasCover", "offline", "offlineUrl"] as const) preserve(field);
+          }
+          const nextIds = new Set(nextTracks.map((track) => track.id));
+          for (const live of liveById.values()) {
+            if (!tracksAtStart.has(live.id) && !nextIds.has(live.id)) nextTracks.push(live);
+          }
+        }
         setProfile(account);
         setTracks(nextTracks);
+        loadedAccountRef.current = account.id;
+        librarySnapshot = { account, tracks: payload.tracks, meta: remoteMeta, etag: stateResponse.headers.get("ETag"), savedAt: Date.now() };
         trackCoverPollAttemptsRef.current = 0;
         if (trackCoverPollRef.current) clearTimeout(trackCoverPollRef.current);
         void refreshTrackCoversRef.current();
-        baselineRef.current = remoteMeta;
-        etagRef.current = stateResponse.headers.get("ETag");
-        if (
+        if (!latestMeta) {
+          baselineRef.current = remoteMeta;
+          etagRef.current = stateResponse.headers.get("ETag");
+        }
+        if (latestMeta) {
+          applyMeta(latestMeta);
+        } else if (
           remoteMeta.favorites.length === 0 &&
           remoteMeta.playlists.length === 0 &&
           legacyMeta &&
@@ -2367,9 +2456,11 @@ export default function LibraryApp() {
         }
       } catch (error) {
         if (!cancelled) {
-          setLoadError(translateError(error instanceof Error ? error.message : "", "Could not load your library."));
+          if (loadedAccountRef.current) notify(t("Could not refresh. Showing your saved library."));
+          else setLoadError(translateError(error instanceof Error ? error.message : "", "Could not load your library."));
         }
       } finally {
+        inFlight = false;
         if (!cancelled) {
           setLoading(false);
           setPullRefreshing(false);
@@ -2380,13 +2471,22 @@ export default function LibraryApp() {
     const handleRefresh = () => {
       void loadLibrary();
     };
+    const backgroundRefresh = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRefresh > 30_000) void loadLibrary();
+    };
     window.addEventListener("vervfy:refresh", handleRefresh);
+    window.addEventListener("focus", backgroundRefresh);
+    window.addEventListener("online", handleRefresh);
+    document.addEventListener("visibilitychange", backgroundRefresh);
     void loadLibrary();
     return () => {
       cancelled = true;
       window.removeEventListener("vervfy:refresh", handleRefresh);
+      window.removeEventListener("focus", backgroundRefresh);
+      window.removeEventListener("online", handleRefresh);
+      document.removeEventListener("visibilitychange", backgroundRefresh);
     };
-  }, [applyMeta, notify, saveMeta, setTracks, t, translateError]);
+  }, [applyMeta, notify, saveMeta, setLibraryMeta, setQueue, setTracks, t, translateError]);
 
   useEffect(() => {
     if (!audioElement) return;
@@ -2549,16 +2649,18 @@ export default function LibraryApp() {
     }
   }
 
-  async function removeTrack(track: TrackRecord) {
-    if (!window.confirm(t("Remove “{name}” from your library? This deletes the file.").replace("{name}", track.title))) {
-      return;
-    }
+  function removeTrack(track: TrackRecord) {
+    setTrackMenu(null);
+    removals.stage(`track:${track.id}`, track.title, () => commitRemoveTrack(track));
+  }
+
+  async function commitRemoveTrack(track: TrackRecord) {
     setTrackMenu(null);
     try {
       await expectOk(
         await apiFetch(
           `/api/tracks/${encodeURIComponent(track.id)}`,
-          { method: "DELETE" },
+          { method: "DELETE", keepalive: true },
           { csrf: true, retryCsrfOnForbidden: true },
         ),
       );
@@ -2567,6 +2669,7 @@ export default function LibraryApp() {
       return;
     }
 
+    librarySnapshot = null;
     const state = usePlayerStore.getState();
     const activeId = state.queue[state.queueIndex] ?? null;
     const nextTracks = state.tracks.filter((item) => item.id !== track.id);
@@ -2800,6 +2903,7 @@ export default function LibraryApp() {
     index: number,
     playList: TrackRecord[] = visibleTracks,
   ) => {
+    if (pendingTrackIds.has(track.id)) return null;
     const playing = activeTrackId === track.id;
     if (listMode === "grid") {
       return (
@@ -3055,7 +3159,7 @@ export default function LibraryApp() {
             style={{ backgroundImage: `url("${currentTrack.coverUrl}")` }}
             aria-hidden="true"
           />
-          <header className="mobile-player-head">
+          <header className="mobile-player-head sheet-drag-handle" {...playerSwipe}>
             <button
               className="mobile-player-icon"
               type="button"
@@ -3253,6 +3357,7 @@ export default function LibraryApp() {
 
         <div className="main">
           <div className="topbar">
+            <CommandMenu onPlay={(id) => playFromList(usePlayerStore.getState().tracks, id)} onUpload={() => fileInputRef.current?.click()} onShortcuts={() => setShortcutsOpen(true)} />
             <button className="home-profile-avatar" type="button" title={t("Account")} aria-label={t("Open account")} onClick={() => setView("account")}>
               {profile?.photo_url
                 ? <img src={profile.photo_url} alt="" onError={() => setProfile((current) => current ? { ...current, photo_url: null } : null)} />
@@ -3270,7 +3375,7 @@ export default function LibraryApp() {
             ) : null}
             {view !== "account" && view !== "recap" ? <label className="search-wrap">
               <Icon name="search" />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("Search")} autoComplete="off" aria-label={t(view === "playlists" ? "Search playlists" : "Search library")} />
+              <input aria-keyshortcuts="/" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("Search")} autoComplete="off" aria-label={t(view === "playlists" ? "Search playlists" : "Search library")} />
               <span className="kbd">/</span>
             </label> : null}
             {view === "playlists" ? (
@@ -3286,6 +3391,7 @@ export default function LibraryApp() {
 
           <div
             className="content"
+            data-loaded={!loading && !loadError ? "true" : undefined}
             onTouchStart={handleContentTouchStart}
             onTouchMove={handleContentTouchMove}
             onTouchEnd={handleContentTouchEnd}
@@ -3632,10 +3738,12 @@ export default function LibraryApp() {
                           <button className="btn" type="button" onClick={() => openPlaylistAdd(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
                           <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
                           <button className="btn btn-danger" type="button" onClick={() => {
-                            if (!window.confirm(t("Delete “{name}”?").replace("{name}", playlistForView.name))) return;
-                            setPlaylists(playlists.filter((item) => item.id !== playlistForView.id));
+                            const playlist = playlistForView;
+                            removals.stage(`playlist:${playlist.id}`, playlist.name, async () => {
+                              setPlaylists(usePlayerStore.getState().playlists.filter((item) => item.id !== playlist.id));
+                              await saveMeta();
+                            });
                             setView("playlists");
-                            void saveMeta();
                           }}>{t("Delete")}</button>
                         </div>
                       </div>
@@ -3783,7 +3891,7 @@ export default function LibraryApp() {
                       aria-label={t("Sleep timer")}
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <div className="sleep-timer-heading">
+                      <div className="sleep-timer-heading sheet-drag-handle" {...timerSwipe}>
                         <h3>{t("Sleep timer")}</h3>
                         <button
                           className="icon-btn"
@@ -4048,13 +4156,13 @@ export default function LibraryApp() {
         : null}
       {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
         <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
-          <div className="queue-picker-head"><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
-          <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
+          <div className="queue-picker-head sheet-drag-handle" {...shortcutsSwipe}><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
+          <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>⌘ / Ctrl K</kbd><span>{t("Command menu")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
       </div> : null}
 
       <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
-        <div className="side-head"><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
+        <div className="side-head sheet-drag-handle" {...queueSwipe}><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
         <div className="side-body">
           {queue.length === 0 ? <div className="side-empty"><p>{t("Your queue is empty.")}</p><button className="btn" type="button" onClick={() => setQueuePickerOpen(true)}>{t("Add from library")}</button></div> : queue.map((trackId, index) => {
             const track = tracks.find((item) => item.id === trackId);
@@ -4109,7 +4217,7 @@ export default function LibraryApp() {
 
       <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
+          <div className="queue-picker-head sheet-drag-handle" {...queuePickerSwipe}><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
           <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t("Search library")} aria-label={t("Search library")} /></label>
           <div className="queue-picker-list">{filteredQueueTracks.length ? filteredQueueTracks.map((track) => <button className="qp-row" type="button" key={track.id} onClick={(event) => {
             event.stopPropagation();
@@ -4130,7 +4238,7 @@ export default function LibraryApp() {
 
       <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
+          <div className="queue-picker-head sheet-drag-handle" {...playlistPickerSwipe}><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">{playlists.length ? playlists.map((playlist) => {
             const trackId = playlistPicker;
             const inPlaylist = trackId ? playlist.trackIds.includes(trackId) : false;
@@ -4146,7 +4254,7 @@ export default function LibraryApp() {
 
       <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
         <div className="queue-picker-card">
-          <div className="queue-picker-head"><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
+          <div className="queue-picker-head sheet-drag-handle" {...playlistAddSwipe}><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
           <label className="queue-picker-search">
             <Icon name="search" />
             <input
@@ -4338,6 +4446,13 @@ export default function LibraryApp() {
       {uploadStatus && typeof document !== "undefined"
         ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{uploadStatus}</div></div>, document.body)
         : null}
+      {removals.items.length > 0 && typeof document !== "undefined" ? createPortal(
+        <div className="undo-toasts" aria-label={t("Pending removals")}>
+          {removals.items.map((item) => <div className="toast undo-toast" key={item.id} onPointerEnter={() => removals.pause(item.id)} onPointerLeave={() => removals.resume(item.id)} onFocus={() => removals.pause(item.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) removals.resume(item.id); }}>
+            <span role="status">{t(item.busy ? "Removing {name}…" : "Removal pending: {name}").replace("{name}", item.label)}</span>
+            <button type="button" disabled={item.busy} onClick={() => removals.undo(item.id)}>{t("Undo")}</button>
+          </div>)}
+        </div>, document.body) : null}
       {toast && typeof document !== "undefined"
         ? createPortal(<div className="toasts" role="status" aria-live="polite" aria-atomic="true"><div className="toast">{t(toast)}</div></div>, document.body)
         : null}

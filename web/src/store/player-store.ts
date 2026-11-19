@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { changeView } from "@/lib/ui/view-navigation";
 
 export type RepeatMode = "off" | "all" | "one";
 export type PlaybackStatus = "playing" | "buffering" | "paused" | "failed";
@@ -117,7 +118,7 @@ export const usePlayerStore = create<PlayerStore>((set) => ({
   },
   setQueue: (queue, queueIndex) => set({ queue, queueIndex }),
   setQueueIndex: (queueIndex) => set({ queueIndex }),
-  setView: (view) => set({ view }),
+  setView: (view) => changeView(() => set({ view })),
   setListMode: (listMode) => {
     set({ listMode });
     if (typeof window !== "undefined") {

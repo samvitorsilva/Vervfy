@@ -273,10 +273,15 @@
       trackedSurfaces.delete(element);
     }
 
+    // Keep the mobile navigation dock in the glass budget when panels open.
+    const mobileDock = matchMedia("(max-width: 640px)").matches;
+    const priorityOf = (element) => mobileDock && element.matches(".rail")
+      ? -1
+      : Number(element.dataset.glassPriority);
     const active = surfaces
       .filter(isVisible)
       .sort(
-        (a, b) => Number(a.dataset.glassPriority) - Number(b.dataset.glassPriority),
+        (a, b) => priorityOf(a) - priorityOf(b),
       )
       .slice(0, MAX_ACTIVE_SURFACES);
     const activeSet = new Set(active);

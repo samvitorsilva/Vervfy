@@ -7,6 +7,17 @@ import { languageFromLocale, type Language } from "@/lib/language";
 export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
+  "Could not refresh. Showing your saved library.": "Não foi possível atualizar. Exibindo sua biblioteca salva.",
+  "Undo": "Desfazer",
+  "Removing {name}…": "Removendo {name}…",
+  "Removal pending: {name}": "Remoção pendente: {name}",
+  "Pending removals": "Remoções pendentes",
+  "Select": "Selecionar",
+  "Navigate": "Navegar",
+  "Search commands and songs": "Buscar comandos e músicas",
+  "Commands": "Comandos",
+  "Open command menu": "Abrir menu de comandos",
+  "Command menu": "Menu de comandos",
   "Playback stopped while buffering. Check your connection and try again.": "A reprodução parou durante o carregamento. Verifique sua conexão e tente novamente.",
   "Press play to start.": "Toque em reproduzir para começar.",
   "The track could not start. Please try again.": "Não foi possível iniciar a faixa. Tente novamente.",
@@ -688,6 +699,17 @@ const translations: Record<string, string> = {
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
+  "Could not refresh. Showing your saved library.": ["Actualisation impossible. Votre bibliothèque enregistrée reste affichée.", "No se pudo actualizar. Se muestra tu biblioteca guardada."],
+  "Undo": ["Annuler", "Deshacer"],
+  "Removing {name}…": ["Suppression de {name}…", "Eliminando {name}…"],
+  "Removal pending: {name}": ["Suppression en attente : {name}", "Eliminación pendiente: {name}"],
+  "Pending removals": ["Suppressions en attente", "Eliminaciones pendientes"],
+  "Select": ["Sélectionner", "Seleccionar"],
+  "Navigate": ["Naviguer", "Navegar"],
+  "Search commands and songs": ["Rechercher des commandes et des chansons", "Buscar comandos y canciones"],
+  "Commands": ["Commandes", "Comandos"],
+  "Open command menu": ["Ouvrir le menu de commandes", "Abrir menú de comandos"],
+  "Command menu": ["Menu de commandes", "Menú de comandos"],
   "Playback stopped while buffering. Check your connection and try again.": ["La lecture s'est arrêtée pendant le chargement. Vérifiez votre connexion et réessayez.", "La reproducción se detuvo durante la carga. Comprueba tu conexión e inténtalo de nuevo."],
   "Press play to start.": ["Appuyez sur Lecture pour commencer.", "Pulsa Reproducir para comenzar."],
   "The track could not start. Please try again.": ["Impossible de démarrer la lecture du morceau. Réessayez.", "No se pudo iniciar la canción. Inténtalo de nuevo."],

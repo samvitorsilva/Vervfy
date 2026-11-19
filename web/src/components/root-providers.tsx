@@ -1,11 +1,15 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import * as React from "react";
+import { useEffect, useRef, type ComponentType, type ReactNode } from "react";
 import { usePlayerStore } from "@/store/player-store";
 import { installPlaybackController } from "@/lib/playback-controller";
 import LiquidGlass from "@/components/liquid-glass";
 import ServiceWorkerRegistration from "@/components/service-worker-registration";
 import { LanguageProvider, type Language } from "@/lib/i18n";
+
+// React 19.3 ships this stable component; the installed React 19 type package lags it.
+const PageTransition = (React as typeof React & { ViewTransition: ComponentType<{ children: ReactNode; name: string }> }).ViewTransition;
 
 export default function RootProviders({
   children,
@@ -58,7 +62,7 @@ export default function RootProviders({
     <LanguageProvider initialLanguage={initialLanguage}>
       <ServiceWorkerRegistration />
       <LiquidGlass />
-      {children}
+      <PageTransition name="page">{children}</PageTransition>
       <audio ref={audioRef} crossOrigin="anonymous" preload="metadata" playsInline hidden />
     </LanguageProvider>
   );

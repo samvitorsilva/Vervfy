@@ -2657,3 +2657,95 @@ button:focus-visible{
 .rail-btn[data-tip]:is(:hover,:focus-visible)::after{ opacity:0; animation:railTipShow 0s 300ms forwards; }
 .tooltip-warm .rail-btn[data-tip]:is(:hover,:focus-visible)::after{ animation-delay:0s; }
 @keyframes railTipShow{ to{ opacity:1; } }
+
+/* Loaded content enters only after the skeleton is replaced. Keep long lists snappy. */
+@keyframes loadedContentEnter {
+  from { opacity:0; translate:0 10px; }
+  to { opacity:1; translate:0 0; }
+}
+@media (prefers-reduced-motion:no-preference) {
+.content[data-loaded="true"] :is(
+  .grid > .card,
+  .list > .row,
+  .pl-grid:not(.app-skeleton-playlists) > .pl-card,
+  .artist-grid:not(.app-skeleton-artists) > .artist-card,
+  .account-view:not(.app-skeleton-account) > section,
+  .recap-page:not(.app-skeleton-recap) > .recap-overview,
+  .recap-periods > .recap-period:not(.app-skeleton-recap-card),
+  .artist-page > .artist-hero,
+  .artist-page > .artist-library-info,
+  .artist-page > .artist-info:not([aria-busy="true"]),
+  .playlist-hero,
+  .empty
+) {
+  animation:loadedContentEnter 360ms var(--ease) backwards;
+  animation-delay:var(--entrance-delay, 420ms);
+}
+  .content[data-loaded="true"] * { --entrance-delay:420ms; }
+  .content[data-loaded="true"] :nth-child(1) { --entrance-delay:0ms; }
+  .content[data-loaded="true"] :nth-child(2) { --entrance-delay:60ms; }
+  .content[data-loaded="true"] :nth-child(3) { --entrance-delay:120ms; }
+  .content[data-loaded="true"] :nth-child(4) { --entrance-delay:180ms; }
+  .content[data-loaded="true"] :nth-child(5) { --entrance-delay:240ms; }
+  .content[data-loaded="true"] :nth-child(6) { --entrance-delay:300ms; }
+  .content[data-loaded="true"] :nth-child(7) { --entrance-delay:360ms; }
+}
+
+/* Small details shared by the library and public pages. */
+:where(h1, h2, h3, .auth-title, .landing-copy h1){ text-wrap:balance; }
+:where(.view-count, .row-dur, .time, .seek-time, .mobile-player-time, .acct-count, .upload-status, .sleep-timer-countdown, time, .recap-play-count){ font-variant-numeric:tabular-nums; }
+.command-trigger{ order:2; gap:8px; white-space:nowrap; }
+.command-trigger kbd, .command-hint kbd{ font:10px var(--font-mono); color:var(--text-dim); }
+.command-menu{
+  position:fixed; margin:12dvh auto auto; padding:0; width:min(580px, calc(100% - 32px));
+  max-height:70dvh; overflow:hidden; border:1px solid var(--border); border-radius:22px;
+  background:var(--bg-2); color:var(--text); box-shadow:0 24px 80px rgba(0,0,0,.5);
+}
+.command-menu::backdrop{ background:rgba(8,10,16,.62); backdrop-filter:blur(8px); }
+.command-search{ display:flex; align-items:center; gap:8px; padding:14px; border-bottom:1px solid var(--border); }
+.command-search input{ width:100%; min-width:0; padding:10px; background:transparent; color:var(--text); border:0; font:16px var(--font-body); }
+.command-results{ max-height:48dvh; overflow:auto; padding:8px; }
+.command-results [role=option]{ border-radius:10px; }
+.command-results [aria-selected=true]{ background:var(--surface-control); }
+.command-results button{ width:100%; min-height:44px; padding:10px 12px; text-align:left; color:inherit; font:14px var(--font-body); }
+.command-results p, .command-hint{ padding:12px 16px; color:var(--text-mid); font-size:12px; }
+.command-hint{ border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+.undo-toasts{ position:fixed; z-index:300; right:max(20px, env(safe-area-inset-right)); bottom:calc(110px + env(safe-area-inset-bottom, 0px)); display:grid; gap:8px; max-width:calc(100vw - 32px); }
+.undo-toast{ display:flex; align-items:center; gap:16px; }
+.undo-toast span{ overflow-wrap:anywhere; }
+.undo-toast button{ flex-shrink:0; min-width:60px; min-height:44px; color:var(--cyan); font-weight:700; }
+@supports (corner-shape:squircle){
+  :where(.card, .pl-card, .acct-card, .acct-panel, .queue-picker-card, .command-menu, .auth-card){ corner-shape:squircle; }
+}
+@media (max-width:768px){
+  .sheet-drag-handle{ touch-action:none; cursor:grab; }
+  .command-trigger{ padding:8px; }
+  .command-trigger kbd{ display:none; }
+  .command-menu{ margin-top:calc(20px + env(safe-area-inset-top, 0px)); max-height:75dvh; }
+  .queue-picker-card{ padding-bottom:max(12px, env(safe-area-inset-bottom, 0px)); }
+  .auth-page, .credits-page, .homepage-page{ padding-top:max(20px, env(safe-area-inset-top, 0px)); padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); }
+  .undo-toasts{ right:16px; left:16px; bottom:calc(170px + env(safe-area-inset-bottom, 0px)); }
+}
+@view-transition{ navigation:auto; }
+@media (prefers-reduced-motion:no-preference){
+  .content{ view-transition-name:library-content; }
+  ::view-transition-old(library-content){ animation:contentLeave 140ms ease both; }
+  ::view-transition-new(library-content){ animation:loadedContentEnter 220ms ease both; }
+  ::view-transition-group(page){ animation-duration:220ms; }
+  @keyframes contentLeave{ to{ opacity:0; translate:0 -6px; } }
+}
+@media (prefers-reduced-motion:reduce){
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*){ animation:none !important; }
+}
+.route-skeleton{ width:min(960px, calc(100% - 40px)); margin:8vh auto; padding-top:env(safe-area-inset-top, 0px); }
+.route-skeleton-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:20px; margin-top:28px; }
+.route-skeleton-card{ display:grid; gap:10px; }
+.route-skeleton-image{ aspect-ratio:1; width:100%; border-radius:16px; }
+:where(.count, .view-count, .row-idx, .row-dur, .seek-row, .time-current, .time-total, .vol-val, .sleep-timer-time, .recap-play-count, .command-results time){ font-variant-numeric:tabular-nums; }
+
+body{ font-variant-numeric:tabular-nums; }
+@media (max-width:768px){
+  .queue-picker-head.sheet-drag-handle{ position:relative; padding-top:28px; }
+  .queue-picker-head.sheet-drag-handle::before{ content:""; position:absolute; top:10px; left:calc(50% - 16px); width:32px; height:4px; background:var(--text-dim); border-radius:99px; opacity:.5; }
+}
+:where(.homepage-description, .auth-sub, .legal-document p){ text-wrap:pretty; }

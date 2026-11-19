@@ -238,6 +238,7 @@ private struct NativeWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         controller.attach(webView)
         webView.navigationDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = true
         webView.isOpaque = false
         webView.backgroundColor = .systemBackground
         webView.scrollView.backgroundColor = .systemBackground
@@ -285,6 +286,7 @@ private struct NativeWebView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         controller.attach(webView)
         webView.navigationDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = true
         webView.load(URLRequest(url: url))
         return webView
     }

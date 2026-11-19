@@ -70,3 +70,23 @@ a:focus-visible,button:focus-visible,input:focus-visible,[tabindex]:focus-visibl
   border-color:rgba(238,244,244,.45);
   box-shadow:0 8px 25px rgba(143,211,232,.19);
 }
+
+/* Preserve the mobile dock's glass instead of the desktop rail's opaque gradient. */
+@media (max-width:640px){
+  .rail, .rail.glass{
+    background:rgba(15,24,29,.30);
+    border:1px solid rgba(255,255,255,.22);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.42), inset 0 -1px 0 rgba(255,255,255,.08), 0 12px 36px rgba(0,0,0,.28);
+  }
+  .rail:not(.glass){
+    -webkit-backdrop-filter:blur(18px) saturate(180%);
+    backdrop-filter:blur(18px) saturate(180%);
+  }
+  @media (prefers-reduced-transparency:reduce){
+    .rail, .rail.glass, .rail.glass.refract{
+      background:#182229;
+      -webkit-backdrop-filter:none;
+      backdrop-filter:none;
+    }
+  }
+}
