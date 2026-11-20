@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 import { usePlayerStore, type LibraryView } from "@/store/player-store";
 
-function validView(value: unknown): value is LibraryView {
+export function validView(value: unknown): value is LibraryView {
   if (typeof value !== "string" || value.length > 1000) return false;
   if (["library", "offline", "favorites", "playlists", "recap", "artists", "account"].includes(value)) return true;
   if (/^playlist:[a-zA-Z0-9_-]{1,200}$/.test(value)) return true;
@@ -16,7 +16,7 @@ function validView(value: unknown): value is LibraryView {
 
 /** Real browser entries let native back/forward and supported edge gestures work. */
 export function useViewHistory() {
-  useEffect(() => {
+  useLayoutEffect(() => {
     let restoring = false;
     const initial = new URL(window.location.href).searchParams.get("view");
     if (validView(initial)) usePlayerStore.setState({ view: initial });

@@ -3428,17 +3428,46 @@ def _listening_summary(user_id: str) -> dict:
             .where(TrackListen.user_id == user_id)
             .group_by(TrackListen.track_id)
         ).all()
+        previous_month = _listening_period_summary(
+            session, user_id, previous_month_start.timestamp(), month_start.timestamp()
+        )
+        played_date = (
+            func.to_timestamp(TrackListen.played_at).op("AT TIME ZONE")("UTC")
+            if session.get_bind().dialect.name == "postgresql"
+            else func.datetime(TrackListen.played_at, "unixepoch")
+        )
+        earlier_months = (
+            select(func.count(TrackListen.id).label("plays"))
+            .join(
+                TrackRecord,
+                (TrackRecord.id == TrackListen.track_id)
+                & (TrackRecord.user_id == TrackListen.user_id),
+            )
+            .where(
+                TrackListen.user_id == user_id,
+                TrackListen.played_at < previous_month_start.timestamp(),
+            )
+            .group_by(func.extract("year", played_date), func.extract("month", played_date))
+            .subquery()
+        )
+        previous_record = session.scalar(select(func.max(earlier_months.c.plays))) or 0
+        monthly_record = (
+            {
+                "monthStart": previous_month_start.timestamp(),
+                "playCount": previous_month["playCount"],
+                "previousRecordCount": previous_record,
+            }
+            if previous_record > 0 and previous_month["playCount"] > previous_record
+            else None
+        )
         return {
+            "accountId": user_id,
+            "monthlyRecord": monthly_record,
             "lastPlayedAt": {track_id: played_at for track_id, played_at in last_played},
             "month": _listening_period_summary(
                 session, user_id, month_start.timestamp(), as_of, end_inclusive=True
             ),
-            "previousMonth": _listening_period_summary(
-                session,
-                user_id,
-                previous_month_start.timestamp(),
-                month_start.timestamp(),
-            ),
+            "previousMonth": previous_month,
             "year": _listening_period_summary(
                 session, user_id, year_start.timestamp(), as_of, end_inclusive=True
             ),

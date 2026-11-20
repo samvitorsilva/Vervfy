@@ -921,3 +921,4 @@ class GoogleOAuthService:
             self.identity_engine.dispose()
         if self._owns_transaction_store:
             self.transactions.close()
+

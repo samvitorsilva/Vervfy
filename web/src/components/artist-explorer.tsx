@@ -1,5 +1,7 @@
 "use client";
 
+import Modal from "@/components/modal";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { apiFetch } from "@/lib/api/client";
@@ -695,7 +697,7 @@ export default function ArtistExplorer({
         </div>
       )}
       {photoEditorOpen ? (
-        <div
+        <Modal open onDismiss={() => { if (!photoPending) closePhotoEditor(); }}
           className="queue-picker-overlay open"
           role="dialog"
           aria-modal="true"
@@ -774,7 +776,7 @@ export default function ArtistExplorer({
               </button>
             </div>
           </section>
-        </div>
+        </Modal>
       ) : null}
     </div>
   );

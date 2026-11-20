@@ -106,6 +106,10 @@
   --home-accent:var(--cyan);
   --home-accent-ink:#0e2e33;
   --home-error:#ff9aa4;
+  --home-text-small:.875rem;
+  --home-text-body:1rem;
+  --home-text-lead:1.125rem;
+  --home-section-gap:clamp(48px,5vw,64px);
   position:relative;
   z-index:1;
   width:100%;
@@ -131,10 +135,16 @@
   padding:clamp(20px,4vw,40px) clamp(20px,6vw,64px) 24px;
 }
 .homepage-header{
+  position:sticky;
+  top:0;
+  z-index:10;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:20px;
+  padding-block:8px;
+  background:var(--home-bg);
+  border-bottom:1px solid var(--home-line);
 }
 .homepage-brand{
   display:inline-flex;
@@ -164,7 +174,9 @@
   color:var(--home-secondary);
   text-decoration:none;
   text-underline-offset:4px;
+  transition:color var(--dur-fast) var(--ease);
 }
+.homepage-login{ display:inline-flex; align-items:center; min-height:44px; }
 .homepage-login:hover,
 .homepage-secondary-cta:hover{
   color:var(--home-text);
@@ -192,6 +204,8 @@
   filter:brightness(1.08);
   transform:translateY(-1px);
 }
+.homepage-signup:active,
+.homepage-cta:active{ transform:translateY(0) scale(.98); }
 .homepage-main{
   display:flex;
   flex:1;
@@ -205,36 +219,36 @@
   display:grid;
   grid-template-columns:minmax(0,1.3fr) minmax(250px,.7fr);
   align-items:center;
-  gap:clamp(40px,8vw,112px);
+  gap:clamp(32px,5vw,64px);
 }
 .landing-copy{
   max-width:660px;
 }
 .landing-copy h1{
-  max-width:10ch;
+  max-width:18ch;
   margin:0;
   font-family:var(--font-display);
-  font-size:clamp(2.8rem,5vw,4.5rem);
+  font-size:clamp(2.25rem,4.5vw,3.75rem);
   font-weight:650;
   letter-spacing:-.035em;
-  line-height:1.02;
+  line-height:1.12;
   text-wrap:balance;
 }
 .homepage-tagline{
   margin:14px 0 0;
   color:var(--home-accent);
   font-family:var(--font-display);
-  font-size:0.75rem;
+  font-size:var(--home-text-small);
   font-weight:600;
   letter-spacing:0.16em;
   text-transform:uppercase;
 }
 .homepage-description{
-  max-width:58ch;
+  max-width:65ch;
   margin-top:18px;
   color:var(--home-secondary);
   font-family:var(--home-ui-font);
-  font-size:1.125rem;
+  font-size:var(--home-text-lead);
   line-height:1.65;
   text-wrap:pretty;
 }
@@ -264,7 +278,8 @@
   margin:0;
   color:var(--home-text);
   font-family:var(--home-ui-font);
-  font-size:1.05rem;
+  font-size:var(--home-text-lead);
+  line-height:1.35;
   font-weight:650;
   letter-spacing:-.01em;
 }
@@ -272,7 +287,7 @@
   margin-top:7px;
   color:var(--home-secondary);
   font-family:var(--home-ui-font);
-  font-size:.95rem;
+  font-size:var(--home-text-body);
   line-height:1.6;
 }
 .homepage-privacy{
@@ -280,7 +295,7 @@
   flex-wrap:wrap;
   align-items:baseline;
   gap:6px;
-  margin-top:clamp(28px,5vh,48px);
+  margin-top:var(--home-section-gap);
   padding-top:16px;
   border-top:1px solid var(--home-line);
   color:var(--home-secondary);
@@ -350,10 +365,10 @@
   }
   .landing-hero{
     grid-template-columns:minmax(0,1fr);
-    gap:48px;
+    gap:var(--home-section-gap);
   }
   .landing-copy h1{
-    max-width:12ch;
+    max-width:20ch;
   }
   .homepage-details{
     max-width:620px;
@@ -376,7 +391,7 @@
     padding-inline:14px;
   }
   .landing-copy h1{
-    font-size:clamp(2.4rem,10vw,3.2rem);
+    font-size:clamp(2rem,8.5vw,2.5rem);
   }
   .homepage-description{
     margin-top:20px;

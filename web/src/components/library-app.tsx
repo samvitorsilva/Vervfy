@@ -18,6 +18,10 @@ import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
 import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
 import ResilientImage from "@/components/resilient-image";
+import { moveQueueEntry } from "@/lib/ui/reorder-queue";
+import Modal from "@/components/modal";
+import MonthlyRecordPopup, { type MonthlyRecord } from "@/components/monthly-record-popup";
+import AppLoadingSkeleton from "@/components/app-loading-skeleton";
 import CommandMenu from "@/components/command-menu";
 import { useSheetSwipe } from "@/lib/ui/use-sheet-swipe";
 import { useUndoableRemovals } from "@/lib/ui/use-undoable-removals";
@@ -28,7 +32,6 @@ import { getPlaybackController } from "@/lib/playback-controller";
 import {
   usePlayerStore,
   type CachedLyrics,
-  type ListMode,
   type LibraryView,
   type PlaylistRecord,
   type TrackRecord,
@@ -116,6 +119,8 @@ interface ListeningPeriodSummary {
 }
 
 interface ListeningSummary {
+  accountId?: string;
+  monthlyRecord?: MonthlyRecord | null;
   lastPlayedAt: Record<string, number>;
   month: ListeningPeriodSummary;
   previousMonth?: ListeningPeriodSummary;
@@ -735,178 +740,6 @@ function viewName(view: LibraryView, playlists: PlaylistRecord[]): string {
   return playlists.find((playlist) => `playlist:${playlist.id}` === view)?.name ?? "Playlist";
 }
 
-function AppLoadingSkeleton({
-  view,
-  listMode,
-  label,
-}: {
-  view: LibraryView;
-  listMode: ListMode;
-  label: string;
-}) {
-  const trackRows = Array.from({ length: 8 }, (_, index) => (
-    <div className="app-skeleton-list-row" key={index} aria-hidden="true">
-      <span className="app-skeleton-block app-skeleton-index" />
-      <span className="app-skeleton-track-copy">
-        <span className="app-skeleton-block app-skeleton-cover" />
-        <span className="app-skeleton-track-lines">
-          <span className="app-skeleton-block app-skeleton-line" />
-          <span className="app-skeleton-block app-skeleton-line short" />
-        </span>
-      </span>
-      <span className="app-skeleton-block app-skeleton-line album" />
-      <span className="app-skeleton-block app-skeleton-line time" />
-      <span className="app-skeleton-actions">
-        <span className="app-skeleton-block app-skeleton-action" />
-        <span className="app-skeleton-block app-skeleton-action" />
-      </span>
-    </div>
-  ));
-  const trackGrid = (
-    <div className="grid app-skeleton-track-grid" aria-hidden="true">
-      {Array.from({ length: 12 }, (_, index) => (
-        <div className="app-skeleton-track-card" key={index}>
-          <span className="app-skeleton-block app-skeleton-square" />
-          <span className="app-skeleton-block app-skeleton-line" />
-          <span className="app-skeleton-block app-skeleton-line short" />
-        </div>
-      ))}
-    </div>
-  );
-  const trackList = (
-    <div className="list app-skeleton-track-list" aria-hidden="true">
-      <div className="list-head"><div /><div /><div /><div /><div /></div>
-      {trackRows}
-    </div>
-  );
-  const playlistCards = (
-    <div className={`pl-grid app-skeleton-playlists${listMode === "list" ? " list-mode" : ""}`} aria-hidden="true">
-      {Array.from({ length: 6 }, (_, index) => (
-        <div className="pl-card app-skeleton-playlist-card" key={index}>
-          <span className="app-skeleton-block app-skeleton-playlist-cover" />
-          <span className="app-skeleton-playlist-copy">
-            <span className="app-skeleton-block app-skeleton-line" />
-            <span className="app-skeleton-block app-skeleton-line short" />
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-  const artistCards = (
-    <div className={`artist-grid app-skeleton-artists${listMode === "list" ? " list-mode" : ""}`} aria-hidden="true">
-      {Array.from({ length: 8 }, (_, index) => (
-        <div className={`artist-card app-skeleton-artist-card${listMode === "list" ? " list-mode" : ""}`} key={index}>
-          <span className="app-skeleton-block app-skeleton-artist-avatar" />
-          <span className="app-skeleton-block app-skeleton-line" />
-          <span className="app-skeleton-block app-skeleton-line short" />
-        </div>
-      ))}
-    </div>
-  );
-  const recap = (
-    <div className="recap-page app-skeleton-recap" aria-hidden="true">
-      <div className="recap-overview">
-        <div className="app-skeleton-recap-intro">
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <span className="app-skeleton-block app-skeleton-line" />
-        </div>
-      </div>
-      <div className="recap-periods">
-        <section className="recap-period app-skeleton-recap-card">
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <span className="app-skeleton-block app-skeleton-line short" />
-          <div className="app-skeleton-recap-chart">
-            {Array.from({ length: 12 }, (_, index) => (
-              <span className="app-skeleton-block app-skeleton-chart-bar" key={index} />
-            ))}
-          </div>
-          {Array.from({ length: 4 }, (_, index) => (
-            <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
-          ))}
-        </section>
-        <section className="recap-period app-skeleton-recap-card">
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <span className="app-skeleton-block app-skeleton-line short" />
-          {Array.from({ length: 5 }, (_, index) => (
-            <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
-          ))}
-        </section>
-      </div>
-    </div>
-  );
-  const account = (
-    <div className="account-view app-skeleton-account" aria-hidden="true">
-      <section className="acct-card">
-        <span className="app-skeleton-block app-skeleton-account-avatar" />
-        <div className="app-skeleton-account-profile">
-          <span className="app-skeleton-block app-skeleton-line short" />
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <span className="app-skeleton-block app-skeleton-line" />
-        </div>
-      </section>
-      <section className="acct-library-section">
-        <span className="app-skeleton-block app-skeleton-line heading" />
-        <div className="acct-grid">
-          {Array.from({ length: 4 }, (_, index) => (
-            <div className="acct-panel" key={index}>
-              <span className="app-skeleton-block app-skeleton-line" />
-              <span className="app-skeleton-block app-skeleton-line short" />
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-  const artistProfile = (
-    <div className="artist-page app-skeleton-artist-profile" aria-hidden="true">
-      <header className="artist-hero">
-        <span className="app-skeleton-block app-skeleton-profile-avatar" />
-        <div className="app-skeleton-profile-copy">
-          <span className="app-skeleton-block app-skeleton-line short" />
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <span className="app-skeleton-block app-skeleton-line" />
-          <span className="app-skeleton-block app-skeleton-profile-button" />
-        </div>
-      </header>
-      <section className="artist-info">
-        <span className="app-skeleton-block app-skeleton-line heading" />
-        <span className="app-skeleton-block app-skeleton-line" />
-        <span className="app-skeleton-block app-skeleton-line" />
-        <span className="app-skeleton-block app-skeleton-line short" />
-      </section>
-      {listMode === "grid" ? trackGrid : trackList}
-    </div>
-  );
-  const isPlaylistDetail = view.startsWith("playlist:");
-
-  return (
-    <div className="app-loading-skeleton" aria-label={label} aria-busy="true">
-      {view === "recap" ? recap
-        : view === "account" ? account
-          : view === "playlists" ? playlistCards
-            : view === "artists" ? artistCards
-              : view.startsWith("artist:") ? artistProfile
-                : (
-                  <>
-                    {isPlaylistDetail ? (
-                      <div className="app-skeleton-playlist-detail" aria-hidden="true">
-                        <div className="playlist-hero">
-                          <span className="app-skeleton-block app-skeleton-detail-cover" />
-                          <div className="app-skeleton-detail-copy">
-                            <span className="app-skeleton-block app-skeleton-line short" />
-                            <span className="app-skeleton-block app-skeleton-line heading" />
-                            <span className="app-skeleton-block app-skeleton-line" />
-                            <span className="app-skeleton-block app-skeleton-profile-button" />
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                    {listMode === "grid" ? trackGrid : trackList}
-                  </>
-                )}
-    </div>
-  );
-}
 
 function getMetaFromStore(): LibraryMeta {
   const state = usePlayerStore.getState();
@@ -971,6 +804,7 @@ function Icon({ name }: { name: IconName }) {
 }
 
 interface TrackMenuPortalProps {
+  onClose: () => void;
   track: TrackRecord;
   anchor: HTMLButtonElement;
   view: LibraryView;
@@ -994,6 +828,7 @@ interface TrackMenuPortalProps {
 }
 
 function TrackMenuPortal({
+  onClose,
   track,
   anchor,
   view,
@@ -1046,9 +881,14 @@ function TrackMenuPortal({
       );
       menu.style.top = `${top}px`;
       menu.style.left = `${left}px`;
+      menu.style.setProperty("--menu-origin", `${Math.max(0, Math.min(menuWidth, anchorRect.left + anchorRect.width / 2 - left))}px ${top >= anchorRect.bottom ? "top" : "bottom"}`);
       menu.style.maxHeight = `${Math.max(120, viewportHeight - 16)}px`;
     };
     reposition();
+    const items = [...menu.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]')];
+    items.forEach((item) => { item.tabIndex = -1; });
+    const first = items.find((item) => !item.disabled);
+    if (first) { first.tabIndex = 0; first.focus(); }
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
     return () => {
@@ -1061,10 +901,34 @@ function TrackMenuPortal({
     <div
       ref={menuRef}
       className="menu track-context-menu"
+      onClickCapture={() => anchor.focus()}
+      onFocusCapture={(event) => {
+        const target = event.target as EventTarget;
+        menuRef.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]').forEach((item) => { item.tabIndex = item === target ? 0 : -1; });
+      }}
       role="menu"
       aria-label={`${t("Options for")} ${track.title}`}
       style={{ top: 8, left: 8 }}
       onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)')];
+        const index = items.indexOf(document.activeElement as HTMLButtonElement);
+        event.stopPropagation();
+        if (event.key === "Escape" || event.key === "Tab") {
+          if (event.key === "Escape") event.preventDefault();
+          anchor.focus();
+          onClose();
+          return;
+        }
+        let next: number;
+        if (event.key === "ArrowDown") next = (index + 1) % items.length;
+        else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = items.length - 1;
+        else return;
+        event.preventDefault();
+        items[next]?.focus();
+      }}
     >
       <button className="menu-item" role="menuitem" type="button" onClick={onPlayNext}>{t("Play next")}</button>
       <button className="menu-item" role="menuitem" type="button" onClick={onAddToQueue}>{t("Add to queue")}</button>
@@ -1142,7 +1006,7 @@ function TrackMenuPortal({
         {t("Remove from library")}
       </button>
     </div>,
-    document.body,
+    document.querySelector("dialog:modal") ?? document.body,
     `track-menu-${track.id}`,
   );
 }
@@ -1231,6 +1095,7 @@ export default function LibraryApp() {
     trackId?: string;
   } | null>(null);
   const [playlistName, setPlaylistName] = useState("");
+  const [playlistNameError, setPlaylistNameError] = useState(false);
   const [playlistPicker, setPlaylistPicker] = useState<string | null>(null);
   const [coverEditorTrack, setCoverEditorTrack] = useState<TrackRecord | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
@@ -1338,13 +1203,17 @@ export default function LibraryApp() {
     if (listeningMonthStart === undefined) return;
     const nextMonthStart = new Date(listeningMonthStart * 1000);
     nextMonthStart.setUTCMonth(nextMonthStart.getUTCMonth() + 1);
-    const timeout = window.setTimeout(() => {
+    const refresh = () => {
       void loadListeningSummary().catch((error: unknown) => {
         console.error("Could not refresh the monthly recap.", error);
         setListeningError("Listening history could not be loaded.");
       });
-    }, Math.max(1000, nextMonthStart.getTime() - Date.now() + 1000));
-    return () => window.clearTimeout(timeout);
+    };
+    const onVisible = () => { if (!document.hidden && Date.now() >= nextMonthStart.getTime()) refresh(); };
+    const interval = window.setInterval(onVisible, 60_000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", onVisible); };
   }, [listeningMonthStart, loadListeningSummary]);
 
   useEffect(() => {
@@ -1356,7 +1225,7 @@ export default function LibraryApp() {
     };
   }, [expandedPlayerOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     try {
       const savedMode = window.localStorage.getItem("vervfy:list-mode");
       if (savedMode === "grid" || savedMode === "list") setListMode(savedMode);
@@ -2181,9 +2050,6 @@ export default function LibraryApp() {
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [trackMenu]);
 
-  useEffect(() => {
-    if (playlistModal) playlistNameInputRef.current?.focus();
-  }, [playlistModal]);
 
   const playPrevious = useCallback(() => {
     getPlaybackController()?.playPrevious();
@@ -2223,6 +2089,7 @@ export default function LibraryApp() {
         if (event.key === "Escape") target.blur();
         return;
       }
+      if (event.key !== "Escape" && target instanceof Element && target.closest('button, a, summary, [role="button"], [role="slider"], [role="menu"], [role="dialog"], dialog, [contenteditable]:not([contenteditable="false"])')) return;
       if (
         event.key === "/" &&
         !event.shiftKey &&
@@ -2282,7 +2149,9 @@ export default function LibraryApp() {
           break;
         case "l":
         case "L":
-          setLyricsOpen((current) => !current);
+          if (!window.matchMedia("(max-width: 900px)").matches) {
+            setLyricsOpen((current) => !current);
+          }
           break;
         case "v":
         case "V":
@@ -2536,7 +2405,12 @@ export default function LibraryApp() {
   function createOrRenamePlaylist(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = playlistName.trim();
-    if (!name) return;
+    if (!name) {
+      setPlaylistNameError(true);
+      playlistNameInputRef.current?.focus();
+      return;
+    }
+    setPlaylistNameError(false);
     const state = usePlayerStore.getState();
     let nextPlaylists: PlaylistRecord[];
     if (playlistModal?.playlist) {
@@ -2817,26 +2691,8 @@ export default function LibraryApp() {
 
   function reorderQueue(fromIndex: number, targetIndex: number) {
     const state = usePlayerStore.getState();
-    if (
-      fromIndex < 0 ||
-      fromIndex >= state.queue.length ||
-      targetIndex < 0 ||
-      targetIndex >= state.queue.length ||
-      fromIndex === targetIndex
-    ) return;
-
-    const nextQueue = [...state.queue];
-    const [moved] = nextQueue.splice(fromIndex, 1);
-    const insertAt = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    nextQueue.splice(insertAt, 0, moved);
-
-    let activeIndex = state.queueIndex;
-    if (activeIndex === fromIndex) activeIndex = insertAt;
-    else {
-      if (fromIndex < activeIndex) activeIndex -= 1;
-      if (insertAt <= activeIndex) activeIndex += 1;
-    }
-    setQueue(nextQueue, activeIndex);
+    const next = moveQueueEntry(state.queue, state.queueIndex, fromIndex, targetIndex);
+    if (next.queue !== state.queue) setQueue(next.queue, next.queueIndex);
   }
 
   function removeFromQueue(index: number) {
@@ -3141,7 +2997,7 @@ export default function LibraryApp() {
 
   const expandedPlayer = expandedPlayerOpen && currentTrack && typeof document !== "undefined"
     ? createPortal(
-        <div
+        <Modal open onDismiss={() => setExpandedPlayerOpen(false)}
           className="mobile-player open"
           data-playback-status={playbackStatus}
           role="dialog"
@@ -3318,13 +3174,14 @@ export default function LibraryApp() {
               </div>
             </section>
           </main>
-        </div>,
+        </Modal>,
         document.body,
       )
     : null;
 
   return (
     <div id="app">
+      {!loading && profile && listeningSummary?.accountId === profile.id && listeningSummary.monthlyRecord ? <MonthlyRecordPopup key={`${profile.id}:${listeningSummary.monthlyRecord.monthStart}`} accountId={profile.id} record={listeningSummary.monthlyRecord} onViewRecap={() => setView("recap")} /> : null}
       <div className="shell" onDragEnter={(event) => {
         if (Array.from(event.dataTransfer.types).includes("Files")) setIsDraggingFiles(true);
       }} onDragOver={(event) => {
@@ -3379,7 +3236,7 @@ export default function LibraryApp() {
               <span className="kbd">/</span>
             </label> : null}
             {view === "playlists" ? (
-              <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}>
+              <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistNameError(false); setPlaylistModal({}); }}>
                 <Icon name="plus" /> {t("New playlist")}
               </button>
             ) : view === "account" || view === "recap" || view === "artists" || view.startsWith("artist:") || playlistForView ? null : (
@@ -3602,20 +3459,7 @@ export default function LibraryApp() {
                       listeningError ? (
                         <div className="recap-loading" role="status">{t("Your recap is unavailable right now.")}</div>
                       ) : (
-                        <div className="recap-periods app-skeleton-listening-summary" aria-label={t("Loading your listening history…")} aria-busy="true">
-                          <section className="recap-period app-skeleton-recap-card" aria-hidden="true">
-                            <span className="app-skeleton-block app-skeleton-line heading" />
-                            <span className="app-skeleton-block app-skeleton-line short" />
-                            <div className="app-skeleton-recap-chart">
-                              {Array.from({ length: 12 }, (_, index) => (
-                                <span className="app-skeleton-block app-skeleton-chart-bar" key={index} />
-                              ))}
-                            </div>
-                            {Array.from({ length: 5 }, (_, index) => (
-                              <span className="app-skeleton-block app-skeleton-recap-row" key={index} />
-                            ))}
-                          </section>
-                        </div>
+                        <AppLoadingSkeleton view="recap" compact listMode={listMode} label={t("Loading your listening history…")} />
                       )
                     )}
                   </div>
@@ -3654,7 +3498,7 @@ export default function LibraryApp() {
                   <p>{search.trim() ? t("Try a different name or clear your search.") : t("Collect songs into playlists for every mood and moment.")}</p>
                   {search.trim()
                     ? <button className="btn" type="button" onClick={() => setSearch("")}>{t("Clear search")}</button>
-                    : <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistModal({}); }}><Icon name="plus" /> {t("Create playlist")}</button>}
+                    : <button className="btn btn-primary" type="button" onClick={() => { setPlaylistName(""); setPlaylistNameError(false); setPlaylistModal({}); }}><Icon name="plus" /> {t("Create playlist")}</button>}
                 </div>
               )
             ) : (
@@ -3736,7 +3580,7 @@ export default function LibraryApp() {
                             if (firstTrack) playFromList(visibleTracks, firstTrack.id);
                           }}><Icon name="play" /> {t("Play")}</button>
                           <button className="btn" type="button" onClick={() => openPlaylistAdd(playlistForView.id)}><Icon name="plus" /> {t("Add songs")}</button>
-                          <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
+                          <button className="btn" type="button" onClick={() => { setPlaylistName(playlistForView.name); setPlaylistNameError(false); setPlaylistModal({ playlist: playlistForView }); }}>{t("Rename")}</button>
                           <button className="btn btn-danger" type="button" onClick={() => {
                             const playlist = playlistForView;
                             removals.stage(`playlist:${playlist.id}`, playlist.name, async () => {
@@ -3949,7 +3793,7 @@ export default function LibraryApp() {
                       ) : null}
                     </section>
                   </div>,
-                  document.body,
+                  document.querySelector("dialog:modal") ?? document.body,
                 )
               : null}
           </div>
@@ -4031,13 +3875,14 @@ export default function LibraryApp() {
             <Link href="/credits">{t("View all credits")} <span aria-hidden="true">→</span></Link>
           </div>
           </section>,
-          document.body,
+          document.querySelector("dialog:modal") ?? document.body,
         )
       ) : null}
 
       {expandedPlayer}
       {trackMenu && trackMenuTrack ? (
         <TrackMenuPortal
+          onClose={() => setTrackMenu(null)}
           track={trackMenuTrack}
           anchor={trackMenu.anchor}
           view={view}
@@ -4154,12 +3999,12 @@ export default function LibraryApp() {
             document.body,
           )
         : null}
-      {shortcutsOpen ? <div className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
+      {shortcutsOpen ? <Modal open={true} onDismiss={() => setShortcutsOpen(false)} className="queue-picker-overlay open" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} onClick={() => setShortcutsOpen(false)}>
         <section className="queue-picker-card shortcuts-dialog" onClick={(event) => event.stopPropagation()}>
           <div className="queue-picker-head sheet-drag-handle" {...shortcutsSwipe}><h3>{t("Keyboard shortcuts")}</h3><button className="icon-btn" type="button" aria-label={t("Close shortcuts")} onClick={() => setShortcutsOpen(false)}><Icon name="close" /></button></div>
           <div className="queue-picker-list"><p><kbd>{t("Space")}</kbd><span>{t("Play / pause")}</span></p><p><kbd>Shift + ← / →</kbd><span>{t("Previous / next track")}</span></p><p><kbd>← / →</kbd><span>{t("Seek 5 seconds")}</span></p><p><kbd>↑ / ↓</kbd><span>{t("Volume")}</span></p><p><kbd>M</kbd><span>{t("Mute")}</span></p><p><kbd>F</kbd><span>{t("Favorite current track")}</span></p><p><kbd>L</kbd><span>{t("Lyrics")}</span></p><p><kbd>V</kbd><span>{t("Visualizer")}</span></p><p><kbd>⌘ / Ctrl K</kbd><span>{t("Command menu")}</span></p><p><kbd>/</kbd><span>{t("Search")}</span></p><p><kbd>?</kbd><span>{t("Shortcuts")}</span></p><p><kbd>Esc</kbd><span>{t("Close panels")}</span></p></div>
         </section>
-      </div> : null}
+      </Modal> : null}
 
       <aside ref={queuePanelRef} className={`side-panel${queueOpen ? " open" : ""}`} aria-label={t("Up next")}>
         <div className="side-head sheet-drag-handle" {...queueSwipe}><h3>{t("Up next")}</h3><div className="side-head-actions"><button className="icon-btn" type="button" title={t("Add from library")} onClick={() => setQueuePickerOpen(true)}><Icon name="plus" /></button><button className="icon-btn" type="button" title={t("Close queue")} onClick={() => setQueueOpen(false)}><Icon name="close" /></button></div></div>
@@ -4169,7 +4014,7 @@ export default function LibraryApp() {
             if (!track) return null;
             return <div
               className={`q-row${index === queueIndex ? " playing" : ""}${queueDragIndex === index ? " dragging" : ""}${queueDragOverIndex === index ? " drag-over" : ""}`}
-              key={`${trackId}-${index}`}
+              key={`${trackId}-${queue.slice(0, index).filter((id) => id === trackId).length}`}
               data-queue-index={index}
             ><button
               className="q-drag"
@@ -4210,12 +4055,15 @@ export default function LibraryApp() {
                 setQueueDragIndex(null);
                 setQueueDragOverIndex(null);
               }}
-            ><Icon name="drag" /></button><TrackImage track={track} thumbnail /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title={t("Remove from queue")} aria-label={`${t("Remove from queue")}: ${track.title}`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
+            ><Icon name="drag" /></button><span className="q-reorder">
+              <button type="button" className="icon-btn" aria-disabled={index === 0} aria-label={`${t("Move up")}: ${track.title}`} onClick={() => { if (index === 0) return; reorderQueue(index, index - 1); notify(t("Queue position {position} of {total}").replace("{position}", String(index)).replace("{total}", String(queue.length))); }}>↑</button>
+              <button type="button" className="icon-btn" aria-disabled={index === queue.length - 1} aria-label={`${t("Move down")}: ${track.title}`} onClick={() => { if (index === queue.length - 1) return; reorderQueue(index, index + 1); notify(t("Queue position {position} of {total}").replace("{position}", String(index + 2)).replace("{total}", String(queue.length))); }}>↓</button>
+              </span><TrackImage track={track} thumbnail /><button className="q-meta" type="button" onClick={() => playQueueIndex(index)}><span className="q-title">{track.title}</span><span className="q-artist">{track.artist}</span></button><button className="icon-btn q-remove" type="button" title={t("Remove from queue")} aria-label={`${t("Remove from queue")}: ${track.title}`} onClick={() => removeFromQueue(index)}><Icon name="close" /></button></div>;
           })}
         </div>
       </aside>
 
-      <div className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
+      <Modal open={queuePickerOpen} onDismiss={() => setQueuePickerOpen(false)} className={`queue-picker-overlay${queuePickerOpen ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add from library")}>
         <div className="queue-picker-card">
           <div className="queue-picker-head sheet-drag-handle" {...queuePickerSwipe}><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setQueuePickerOpen(false)}><Icon name="close" /></button></div>
           <label className="queue-picker-search"><Icon name="search" /><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t("Search library")} aria-label={t("Search library")} /></label>
@@ -4225,18 +4073,19 @@ export default function LibraryApp() {
             setQueuePickerOpen(true);
           }}><TrackImage track={track} thumbnail /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracks.length ? t("No tracks match your search.") : t("Your library is empty")}</div>}</div>
         </div>
-      </div>
+      </Modal>
 
-      <div className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
+      <Modal open={Boolean(playlistModal)} onDismiss={() => setPlaylistModal(null)} className={`queue-picker-overlay playlist-name-overlay${playlistModal ? " open" : ""}`} role="dialog" aria-modal="true" aria-labelledby="playlistNameTitle">
         <form className="queue-picker-card playlist-name-card" onSubmit={createOrRenamePlaylist}>
           <div className="queue-picker-head"><h3 id="playlistNameTitle">{playlistModal?.playlist ? t("Rename playlist") : t("New playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistModal(null)}><Icon name="close" /></button></div>
           <label className="playlist-name-label" htmlFor="playlistNameInput">{t("Playlist name")}</label>
-          <input ref={playlistNameInputRef} className="playlist-name-input" id="playlistNameInput" maxLength={200} value={playlistName} onChange={(event) => setPlaylistName(event.target.value)} />
+          <input ref={playlistNameInputRef} className="playlist-name-input" id="playlistNameInput" maxLength={200} value={playlistName} aria-invalid={playlistNameError || undefined} aria-describedby={playlistNameError ? "playlistNameError" : undefined} onChange={(event) => { setPlaylistName(event.target.value); if (event.target.value.trim()) setPlaylistNameError(false); }} />
+          {playlistNameError ? <p className="playlist-name-error" id="playlistNameError" role="alert">{t("Enter a playlist name.")}</p> : null}
           <div className="playlist-name-actions"><button className="btn" type="button" onClick={() => setPlaylistModal(null)}>{t("Cancel")}</button><button className="btn btn-primary" type="submit">{playlistModal?.playlist ? t("Save") : t("Create")}</button></div>
         </form>
-      </div>
+      </Modal>
 
-      <div className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
+      <Modal open={Boolean(playlistPicker)} onDismiss={() => setPlaylistPicker(null)} className={`queue-picker-overlay${playlistPicker ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add track to playlist")}>
         <div className="queue-picker-card">
           <div className="queue-picker-head sheet-drag-handle" {...playlistPickerSwipe}><h3>{t("Add to playlist")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistPicker(null)}><Icon name="close" /></button></div>
           <div className="queue-picker-list">{playlists.length ? playlists.map((playlist) => {
@@ -4248,11 +4097,11 @@ export default function LibraryApp() {
               notify(t("Added to “{name}”.").replace("{name}", playlist.name));
             }}><span className="qp-meta"><span className="qp-title">{playlist.name}</span><span className="qp-artist">{playlist.trackIds.length} {t("tracks")}</span></span><span className="qp-add">{inPlaylist ? "✓" : <Icon name="plus" />}</span></button>;
           }) : <div className="queue-picker-empty">{t("Create a playlist first.")}</div>}</div>
-          <div className="playlist-name-actions"><button className="btn btn-primary" type="button" onClick={() => { setPlaylistPicker(null); setPlaylistName(""); setPlaylistModal({ trackId: playlistPicker ?? undefined }); }}>{t("New playlist")}</button></div>
+          <div className="playlist-name-actions"><button className="btn btn-primary" type="button" onClick={() => { setPlaylistPicker(null); setPlaylistName(""); setPlaylistNameError(false); setPlaylistModal({ trackId: playlistPicker ?? undefined }); }}>{t("New playlist")}</button></div>
         </div>
-      </div>
+      </Modal>
 
-      <div className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
+      <Modal open={Boolean(playlistAddTarget)} onDismiss={() => setPlaylistAddTarget(null)} className={`queue-picker-overlay${playlistAddTarget ? " open" : ""}`} role="dialog" aria-modal="true" aria-label={t("Add tracks to playlist")}>
         <div className="queue-picker-card">
           <div className="queue-picker-head sheet-drag-handle" {...playlistAddSwipe}><h3>{t("Add from library")}</h3><button className="icon-btn" type="button" title={t("Close")} onClick={() => setPlaylistAddTarget(null)}><Icon name="close" /></button></div>
           <label className="queue-picker-search">
@@ -4272,10 +4121,10 @@ export default function LibraryApp() {
             }}><TrackImage track={track} thumbnail /><span className="qp-meta"><span className="qp-title">{track.title}</span><span className="qp-artist">{track.artist}</span></span><span className="qp-add"><Icon name="plus" /></span></button>) : <div className="queue-picker-empty">{tracksAvailableToAdd.length ? t("No tracks match your search.") : tracks.length ? t("Every song in your library is already in this playlist.") : t("Your library is empty.")}</div>}
           </div>
         </div>
-      </div>
+      </Modal>
 
       {coverEditorTrack ? (
-        <div
+        <Modal open={true} onDismiss={() => { if (!coverPending) closeCoverEditor(); }}
           className="queue-picker-overlay open"
           role="dialog"
           aria-modal="true"
@@ -4373,11 +4222,11 @@ export default function LibraryApp() {
               </button>
             </div>
           </section>
-        </div>
+        </Modal>
       ) : null}
 
       {metadataEditorTrack ? (
-        <div
+        <Modal open={true} onDismiss={() => { if (!metadataPending) setMetadataEditorTrack(null); }}
           className="queue-picker-overlay open"
           role="dialog"
           aria-modal="true"
@@ -4412,7 +4261,7 @@ export default function LibraryApp() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       ) : null}
 
       <input

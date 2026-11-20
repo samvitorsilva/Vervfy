@@ -312,3 +312,4 @@ def test_link_failure_logger_silent_outside_production(caplog):
     with patch.dict("os.environ", {"VERVFY_ENVIRONMENT": "development"}):
         google_oauth.log_google_link_failure("account_session_binding")
     assert not caplog.records
+

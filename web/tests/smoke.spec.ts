@@ -143,9 +143,14 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
 });
 
 test("account settings expose privacy requests and clear cached lyrics on deletion", async ({
-  page,
+  page, baseURL,
 }) => {
-  await page.goto("/login");
+  await page.route(/^https:\/\//, route => route.abort());
+  await page.context().addCookies([
+    { name: "vervfy_playwright_session", value: "authenticated", url: baseURL! },
+    { name: "auralis_session", value: "test-ui-hint", url: baseURL! },
+  ]);
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
   await page.evaluate(() => {
     localStorage.setItem(
       "vervfy:lrclib:v4:cached-track",
@@ -190,16 +195,7 @@ test("account settings expose privacy requests and clear cached lyrics on deleti
         };
       }),
   );
-  await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
-  const accountLoaded = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/me" &&
-      response.ok(),
-  );
-  await page.getByRole("button", { name: "Log in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await accountLoaded;
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Open account" }).click();
 
   await expect(page.getByRole("heading", { name: "Privacy & data requests" })).toBeVisible();
@@ -217,9 +213,11 @@ test("account settings expose privacy requests and clear cached lyrics on deleti
     }
     await route.continue();
   });
-  await page.getByRole("button", { name: "Delete account" }).click();
+  await page.getByRole("button", { name: "Hold to delete account" }).focus();
+  await page.keyboard.down("Space");
 
   await expect(page).toHaveURL(/\/login\?account_deleted=1$/);
+  await page.keyboard.up("Space");
   await expect
     .poll(() =>
       page.evaluate(() =>

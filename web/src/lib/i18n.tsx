@@ -7,6 +7,13 @@ import { languageFromLocale, type Language } from "@/lib/language";
 export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
+  "Keep listening": "Continuar ouvindo",
+  "You beat your previous monthly best of {count} plays.": "Você superou seu recorde mensal anterior de {count} reproduções.",
+  "A new listening record": "Um novo recorde de reprodução",
+  "Your month in music": "Seu mês em música",
+  "Move up": "Mover para cima",
+  "Move down": "Mover para baixo",
+  "Queue position {position} of {total}": "Posição {position} de {total} na fila",
   "Could not refresh. Showing your saved library.": "Não foi possível atualizar. Exibindo sua biblioteca salva.",
   "Undo": "Desfazer",
   "Removing {name}…": "Removendo {name}…",
@@ -194,6 +201,9 @@ const translations: Record<string, string> = {
   Session: "Sessão",
   "Sign out of all devices": "Sair de todos os dispositivos",
   "Delete account": "Excluir conta",
+  "Account deleted": "Conta excluída",
+  "Hold to delete account": "Segure para excluir a conta",
+  "Keep holding": "Continue segurando",
   "Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.": "Seu perfil, suas músicas, playlists, favoritos e letras salvas serão excluídos de vez. Não é possível desfazer essa ação.",
   "Profile photo": "Foto do perfil",
   "Choose a photo, adjust its zoom and position, then save.": "Escolha uma foto, ajuste o zoom e o enquadramento e salve.",
@@ -277,6 +287,7 @@ const translations: Record<string, string> = {
   "All playlists": "Todas as playlists",
   "Your queue is empty.": "Sua fila está vazia.",
   "Playlist name": "Nome da playlist",
+  "Enter a playlist name.": "Digite um nome para a playlist.",
   "New playlist": "Nova playlist",
   "Save": "Salvar",
   "Create": "Criar",
@@ -699,6 +710,13 @@ const translations: Record<string, string> = {
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
+  "Keep listening": ["Continuer à écouter", "Seguir escuchando"],
+  "You beat your previous monthly best of {count} plays.": ["Vous avez dépassé votre précédent record mensuel de {count} écoutes.", "Superaste tu récord mensual anterior de {count} reproducciones."],
+  "A new listening record": ["Un nouveau record d’écoute", "Un nuevo récord de reproducciones"],
+  "Your month in music": ["Votre mois en musique", "Tu mes en música"],
+  "Move up": ["Monter", "Mover hacia arriba"],
+  "Move down": ["Descendre", "Mover hacia abajo"],
+  "Queue position {position} of {total}": ["Position {position} sur {total} dans la file", "Posición {position} de {total} en la cola"],
   "Could not refresh. Showing your saved library.": ["Actualisation impossible. Votre bibliothèque enregistrée reste affichée.", "No se pudo actualizar. Se muestra tu biblioteca guardada."],
   "Undo": ["Annuler", "Deshacer"],
   "Removing {name}…": ["Suppression de {name}…", "Eliminando {name}…"],
@@ -883,6 +901,9 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   Session: ["Session", "Sesión"],
   "Sign out of all devices": ["Déconnecter tous les appareils", "Cerrar sesión en todos los dispositivos"],
   "Delete account": ["Supprimer le compte", "Eliminar cuenta"],
+  "Account deleted": ["Compte supprimé", "Cuenta eliminada"],
+  "Hold to delete account": ["Maintenir pour supprimer le compte", "Mantén pulsado para eliminar la cuenta"],
+  "Keep holding": ["Continuez à maintenir", "Sigue pulsando"],
   "Permanently removes your profile, music files, playlists, favorites, and saved lyrics. This cannot be undone.": ["Supprime définitivement votre profil, vos fichiers musicaux, vos playlists, vos favoris et vos paroles enregistrées. Cette action est irréversible.", "Elimina permanentemente tu perfil, archivos de música, listas, favoritos y letras guardadas. Esta acción no se puede deshacer."],
   "Profile photo": ["Photo de profil", "Foto de perfil"],
   "Choose a photo, adjust its zoom and position, then save.": ["Choisissez une photo, réglez son zoom et sa position, puis enregistrez.", "Elige una foto, ajusta el zoom y la posición, y guárdala."],
@@ -966,6 +987,7 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "All playlists": ["Toutes les playlists", "Todas las listas"],
   "Your queue is empty.": ["Votre file d’attente est vide.", "La cola está vacía."],
   "Playlist name": ["Nom de la playlist", "Nombre de la lista"],
+  "Enter a playlist name.": ["Saisissez un nom de playlist.", "Introduce un nombre para la lista."],
   "New playlist": ["Nouvelle playlist", "Nueva lista"],
   Save: ["Enregistrer", "Guardar"],
   Create: ["Créer", "Crear"],

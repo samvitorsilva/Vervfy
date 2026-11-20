@@ -129,6 +129,31 @@ class TrackListenTests(unittest.TestCase):
         self.assertEqual(result["trackId"], "track-one")
         self.assertEqual(summary["month"]["playCount"], 2)
 
+    def test_monthly_record_requires_beating_every_earlier_month(self) -> None:
+        now = datetime(2027, 1, 1, 0, 0, 1, tzinfo=UTC)
+        december = datetime(2026, 12, 1, tzinfo=UTC).timestamp()
+        november = datetime(2026, 11, 1, tzinfo=UTC).timestamp()
+        october = datetime(2026, 10, 1, tzinfo=UTC).timestamp()
+        for older_count, completed_count, expected in [(5, 6, True), (6, 6, False), (9, 6, False), (0, 6, False), (5, 0, False)]:
+            with self.subTest(older=older_count, completed=completed_count):
+                with Session(self.engine) as session:
+                    for listen in session.scalars(select(TrackListen)).all():
+                        session.delete(listen)
+                    session.flush()
+                    for period, count, timestamp in [("oct", older_count, october), ("nov", older_count, november), ("dec", completed_count, december), ("jan", 20, now.timestamp())]:
+                        session.add_all([TrackListen(id=f"{period}-{i}", user_id="test-user", track_id="track-one", played_at=timestamp) for i in range(count)])
+                    session.commit()
+                with patch.object(server, "datetime") as clock, patch.object(server, "tenant_session", self.tenant_session):
+                    clock.now.return_value = now
+                    summary = server._listening_summary("test-user")
+                    other = server._listening_summary("other-user")
+                self.assertEqual(summary["accountId"], "test-user")
+                self.assertIsNone(other["monthlyRecord"])
+                if expected:
+                    self.assertEqual(summary["monthlyRecord"], {"monthStart": december, "playCount": completed_count, "previousRecordCount": older_count})
+                else:
+                    self.assertIsNone(summary["monthlyRecord"])
+
     def test_summary_separates_current_and_previous_month_at_utc_boundaries(self) -> None:
         now = datetime(2026, 11, 1, 0, 0, 1, tzinfo=UTC)
         month_start = datetime(2026, 11, 1, tzinfo=UTC).timestamp()

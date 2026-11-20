@@ -48,10 +48,7 @@ export default function CommandMenu({ onPlay, onUpload, onShortcuts }: {
   useEffect(() => {
     dialog.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
-  return <>
-    <button className="btn command-trigger" type="button" aria-label={t("Open command menu")} aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" onClick={open}>
-      <span>{t("Commands")}</span><kbd>⌘ / Ctrl K</kbd>
-    </button>
+  return (
     <dialog ref={dialog} className="command-menu" aria-label={t("Command menu")} onClose={() => returnFocus.current?.focus()} onClick={(event) => { if (event.target === event.currentTarget) close(); }} onKeyDown={(event) => {
       if (event.key === "Escape") { event.stopPropagation(); return; }
       event.stopPropagation();
@@ -77,5 +74,5 @@ export default function CommandMenu({ onPlay, onUpload, onShortcuts }: {
       </div>
       <p className="command-hint"><kbd>↑ ↓</kbd> {t("Navigate")} <kbd>Enter</kbd> {t("Select")} <kbd>Esc</kbd> {t("Close")}</p>
     </dialog>
-  </>;
+  );
 }

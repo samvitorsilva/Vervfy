@@ -15,6 +15,8 @@ import {
 } from "@/lib/passkey-client";
 import type { Account } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
+import AppLoadingSkeleton from "@/components/app-loading-skeleton";
+import HoldButton from "@/components/kokonutui/hold-button";
 import { artistNames } from "@/components/artist-explorer";
 import { usePlayerStore, type LibraryView } from "@/store/player-store";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
@@ -201,6 +203,7 @@ export default function AccountSettings({
   const [photoSaving, setPhotoSaving] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState("");
   const [deleteEditorOpen, setDeleteEditorOpen] = useState(false);
+  const deleteFormRef = useRef<HTMLFormElement>(null);
   const [pending, setPending] = useState(false);
   const [emailPasskeyBusy, setEmailPasskeyBusy] = useState(false);
   const [passwordPasskeyBusy, setPasswordPasskeyBusy] = useState(false);
@@ -715,14 +718,14 @@ export default function AccountSettings({
     }
   }
 
-  async function deleteAccount(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function deleteAccount(form: HTMLFormElement): Promise<boolean> {
+    if (pending || !form.reportValidity()) return false;
     const accountId = account?.id;
     if (!accountId) {
       setDeleteMessage(t("Could not delete account."));
-      return;
+      return false;
     }
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData(form);
     setDeleteMessage(t("Deleting account…"));
     setPending(true);
     try {
@@ -742,9 +745,11 @@ export default function AccountSettings({
         );
       }
       window.location.assign("/login?account_deleted=1");
+      return true;
     } catch (reason) {
       setPending(false);
       setDeleteMessage(translateError(reason instanceof Error ? reason.message : "", "Could not delete account."));
+      return false;
     }
   }
 
@@ -761,27 +766,7 @@ export default function AccountSettings({
   if (!account) {
     if (error) return <div className="account-view acct-loading" role="alert">{error}</div>;
     return (
-      <div className="account-view app-skeleton-account" aria-label={t("Loading account…")} aria-busy="true">
-        <section className="acct-card" aria-hidden="true">
-          <span className="app-skeleton-block app-skeleton-account-avatar" />
-          <div className="app-skeleton-account-profile">
-            <span className="app-skeleton-block app-skeleton-line short" />
-            <span className="app-skeleton-block app-skeleton-line heading" />
-            <span className="app-skeleton-block app-skeleton-line" />
-          </div>
-        </section>
-        <section className="acct-library-section" aria-hidden="true">
-          <span className="app-skeleton-block app-skeleton-line heading" />
-          <div className="acct-grid">
-            {Array.from({ length: 4 }, (_, index) => (
-              <div className="acct-panel" key={index}>
-                <span className="app-skeleton-block app-skeleton-line" />
-                <span className="app-skeleton-block app-skeleton-line short" />
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
+      <AppLoadingSkeleton view="account" listMode="grid" label={t("Loading account…")} />
     );
   }
 
@@ -1122,7 +1107,7 @@ export default function AccountSettings({
             {t(deleteEditorOpen ? "Cancel" : "Delete account")}
           </button>
           {deleteEditorOpen ? (
-            <form className="acct-form acct-delete-form" onSubmit={deleteAccount}>
+            <form ref={deleteFormRef} className="acct-form acct-delete-form" onSubmit={(event) => event.preventDefault()}>
               <label className="acct-field">
                 {account.has_password ? (
                   <>
@@ -1138,10 +1123,24 @@ export default function AccountSettings({
               ) : null}
               <label className="acct-field">
                 <span>{t("Type DELETE to confirm")}</span>
-                <input name="confirmation" type="text" autoComplete="off" required />
+                <input name="confirmation" type="text" autoComplete="off" pattern="DELETE" required />
               </label>
               <div className="acct-form-actions">
-                <button className="btn btn-danger" type="submit" disabled={pending}>{t("Delete account")}</button>
+                <HoldButton
+                  className="acct-delete-hold"
+                  variant="red"
+                  disabled={pending}
+                  holdingLabel={t("Keep holding")}
+                  pendingLabel={t("Deleting account…")}
+                  completeLabel={t("Account deleted")}
+                  resetAfter={0}
+                  onHoldComplete={() => {
+                    const form = deleteFormRef.current;
+                    return form ? deleteAccount(form) : false;
+                  }}
+                >
+                  {t("Hold to delete account")}
+                </HoldButton>
               </div>
               <div className={`acct-form-msg${deleteMessage && !deleteMessage.includes("Deleting") ? " error" : ""}`} role="status" aria-live="polite">{deleteMessage}</div>
             </form>
