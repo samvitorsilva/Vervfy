@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -755,12 +756,64 @@ def verify_api_csrf(request: Request) -> None:
 # --------------------------------------------------------------------- misc
 
 def client_ip(request: Request) -> str:
-    peer = request.client.host if request.client else "unknown"
-    trusted_hops = int(os.environ.get("VERVFY_TRUSTED_PROXY_HOPS", "0"))
-    if trusted_hops <= 0:
+    """Reuse one validated identity throughout middleware and authentication."""
+    key = "vervfy.resolved_client_ip"
+    if key not in request.scope:
+        request.scope[key] = _resolve_client_ip(request)
+    return request.scope[key]
+
+
+def _resolve_client_ip(request: Request) -> str:
+    """Use XFF only across an explicitly trusted, bounded proxy chain.
+
+    Requires the original socket peer (disable upstream ASGI IP rewriting when
+    using this resolver). Invalid forwarded data from a trusted peer is rejected;
+    untrusted headers never influence identity. Missing trust/header uses peer.
+    """
+    def address(value):
+        # Scoped IPv6 and host:port forms are not unambiguous client identities.
+        if "%" in value:
+            raise ValueError
+        parsed = ipaddress.ip_address(value)
+        return parsed.ipv4_mapped if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped else parsed
+
+    try:
+        peer_ip = address(request.client.host) if request.client else None
+    except ValueError:
+        peer_ip = None
+    peer = str(peer_ip) if peer_ip is not None else "unknown"
+    try:
+        trusted_hops = int(os.environ.get("VERVFY_TRUSTED_PROXY_HOPS", "0"))
+        if not 1 <= trusted_hops <= 32:
+            return peer
+        configured = os.environ.get("VERVFY_TRUSTED_PROXY_CIDRS", "")
+        if not configured:
+            return peer
+        networks = [ipaddress.ip_network(item.strip(), strict=True) for item in configured.split(",")]
+        if any(network.prefixlen == 0 for network in networks):
+            return peer  # Never accept universal proxy trust.
+    except ValueError:
         return peer
-    forwarded = request.headers.get("x-forwarded-for", "")
-    addresses = [item.strip() for item in forwarded.split(",") if item.strip()]
-    if len(addresses) >= trusted_hops:
-        return addresses[-trusted_hops]
-    return peer
+
+    def trusted(ip):
+        return ip is not None and any(ip in network for network in networks)
+
+    if not trusted(peer_ip):
+        return peer
+    forwarded = request.headers.getlist("x-forwarded-for")
+    if not forwarded:
+        return peer
+    try:
+        if (len(forwarded) != 1 or len(forwarded[0]) > 2048
+            or any(ord(char) < 32 or ord(char) == 127 for char in forwarded[0])):
+            raise ValueError
+        parts = forwarded[0].split(",")
+        if not trusted_hops <= len(parts) <= 32:
+            raise ValueError
+        addresses = [address(item.strip()) for item in parts]
+        # N counts the socket proxy plus N-1 proxy addresses at the XFF tail.
+        if trusted_hops > 1 and not all(trusted(ip) for ip in addresses[-(trusted_hops - 1):]):
+            raise ValueError
+        return str(addresses[-trusted_hops])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid forwarded client address") from None

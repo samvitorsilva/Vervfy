@@ -152,6 +152,9 @@ app = FastAPI(
     redoc_url="/redoc" if _enable_docs else None,
     openapi_url="/openapi.json" if _enable_docs else None,
     lifespan=lifespan,
+    # Behind TLS termination the socket scheme is HTTP. Never build automatic
+    # absolute slash redirects from it or from unverified forwarding headers.
+    redirect_slashes=False,
 )
 
 
@@ -224,6 +227,17 @@ def limit_upload_processing(handler):
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    # Resolve before any limiter/authentication call and translate errors here:
+    # FastAPI's exception handler is inside this HTTP middleware.
+    try:
+        auth.client_ip(request)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        return JSONResponse(
+            {"detail": "Invalid forwarded client address"}, status_code=400,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
     path = request.url.path
     if passkey_config is None and (
         path.startswith("/api/account/passkeys/")

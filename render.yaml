@@ -12,7 +12,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install --require-hashes -r requirements.lock
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT --no-access-log --no-proxy-headers
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
@@ -24,7 +24,8 @@ services:
       - key: VERVFY_COOKIE_SAME_SITE
         value: lax
       - key: VERVFY_TRUSTED_PROXY_HOPS
-        value: "1"
+        # Forwarding is disabled until operator verifies proxy CIDRs and topology.
+        value: "0"
       - key: VERVFY_SECRET_KEY
         generateValue: true
       - key: REDIS_URL
