@@ -8,7 +8,7 @@ keeps the object path (``tracks.storage_path``).
 Environment variables (set them on Render, never ship them to the browser):
 
     SUPABASE_URL           https://<project-ref>.supabase.co
-    SUPABASE_SERVICE_KEY   the ``service_role`` key
+    SUPABASE_SERVICE_KEY   server ``sb_secret_*`` key or legacy ``service_role`` JWT
     SUPABASE_BUCKET        bucket name, default ``songs`` (keep it private)
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ from storage_adapters import (
     LocalStorageError,
     local_storage_selected,
 )
+from storage_auth_headers import storage_auth_headers
 
 log = logging.getLogger("vervfy.audio_store")
 
@@ -139,11 +140,10 @@ def _new_client() -> httpx.Client:
     _validate_url(url)
     client = httpx.Client(
         base_url=f"{url}/storage/v1",
-        headers={"Authorization": f"Bearer {key}", "apikey": key},
+        headers=storage_auth_headers(key),
         timeout=httpx.Timeout(60.0, connect=10.0),
         transport=_transport,
     )
-    client.headers["Authorization"] = "Bearer " + key
     return client
 
 

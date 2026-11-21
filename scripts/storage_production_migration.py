@@ -17,10 +17,11 @@ from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
 START_REVISION = "0031_cleanup_retry_limits"
-TARGET_REVISION = "0033_cleanup_claims_disabled"
+TARGET_REVISION = "0034_storage_byte_reservations"
+SUPPORTED_START_REVISIONS = (START_REVISION, "0033_cleanup_claims_disabled")
 AUTHORIZATION = f"{START_REVISION}..{TARGET_REVISION}"
 AUTHORIZATION_TTL = timedelta(minutes=15)
-EXPECTED_MIGRATION_COUNT = 33
+EXPECTED_MIGRATION_COUNT = 34
 STAGING_PROJECT_REF = "xgqvwqogdtktgfuubzwk"
 PRODUCTION_PROJECT_REF = "llxmskxxchpmeavorusj"
 PRODUCTION_MIGRATION_ROLE = "vervfy_prod_migrator"
@@ -64,6 +65,7 @@ class ProductionTarget:
     database: str
     username: str
     connection_mode: str = "direct"
+    start_revision: str = START_REVISION
 
 
 def _required(env: Mapping[str, str], name: str) -> str:
@@ -103,6 +105,10 @@ def load_target(env: Mapping[str, str] | None = None) -> ProductionTarget:
         raise MigrationBlocked("Expected production database must be postgres")
     if username != PRODUCTION_MIGRATION_ROLE:
         raise MigrationBlocked("Expected production user must be the restricted migration role")
+
+    start_revision = values.get("VERVFY_PRODUCTION_START_REVISION", START_REVISION)
+    if start_revision not in SUPPORTED_START_REVISIONS:
+        raise MigrationBlocked("Production start revision is not an approved upgrade boundary")
 
     raw_url = _required(values, "VERVFY_PRODUCTION_DATABASE_URL")
     try:
@@ -147,7 +153,7 @@ def load_target(env: Mapping[str, str] | None = None) -> ProductionTarget:
         raise MigrationBlocked(
             "Production URL must set sslmode=verify-full and the configured CA bundle"
         )
-    return ProductionTarget(url, project_ref, database, username, connection_mode)
+    return ProductionTarget(url, project_ref, database, username, connection_mode, start_revision)
 
 
 def validate_authorization(expires_at: str, *, now: datetime | None = None) -> None:
@@ -521,7 +527,7 @@ def _check_storage_acl_inventory(
     executor: str,
     worker: str,
 ) -> None:
-    """Accept only the reviewed 0029-0031 storage ACLs; reject privilege drift.
+    """Accept reviewed lifecycle ACLs for the installed revision; reject drift.
 
     This is intentionally a post-install inventory, not migration 0029's
     fresh-role check. Existing grants on the lifecycle tables and functions
@@ -588,6 +594,12 @@ def _check_storage_acl_inventory(
           AND r.rolname IN (:owner, :executor, :worker)
     """), {"owner": owner, "executor": executor, "worker": worker}).all()
 
+    # Recognize only the exact reviewed quota migration, not arbitrary future
+    # schemas. This inventory is read-only and never creates or restores grants.
+    quota_aware = connection.execute(
+        text("SELECT version_num FROM public.alembic_version")
+    ).scalars().all() == ["0034_storage_byte_reservations"]
+
     actual = {
         (row.role_name, row.object_type, row.object_name,
          row.privilege_type, bool(row.is_grantable))
@@ -606,6 +618,10 @@ def _check_storage_acl_inventory(
     }.items():
         for privilege in privileges:
             allowed.add((owner, "TABLE", table, privilege, False))
+
+    if quota_aware:
+        for privilege in ("SELECT", "UPDATE"):
+            allowed.add((owner, "TABLE", "vervfy_storage.quota_policy", privilege, False))
 
     for table, column in (
         ("public.users", "id"),
@@ -631,6 +647,11 @@ def _check_storage_acl_inventory(
         "complete_cleanup(p_object uuid, p_token uuid)",
         "retry_cleanup(p_object uuid, p_token uuid, p_error_code text)",
     )
+    if quota_aware:
+        lifecycle_functions += (
+            "reserve_sized_object(p_kind text, p_extension text, p_bytes bigint, p_limit bigint)",
+            "retained_bytes()",
+        )
     for signature in lifecycle_functions:
         allowed.add((
             owner, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
@@ -690,6 +711,10 @@ def _check_storage_acl_inventory(
             "extensions.pg_stat_statements_info",
         ):
             effective_allowed.add((role, view, "SELECT"))
+
+    if quota_aware:
+        for privilege in ("SELECT", "UPDATE"):
+            effective_allowed.add((owner, "vervfy_storage.quota_policy", privilege))
 
     unexpected_effective = {
         (row.role_name, row.object_name, row.privilege_type)
@@ -962,9 +987,9 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         revision = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalars().all()
-        if revision != [START_REVISION]:
+        if target.start_revision not in SUPPORTED_START_REVISIONS or revision != [target.start_revision]:
             raise MigrationBlocked(
-                f"Expected exactly {START_REVISION}; found a different Alembic revision state"
+                f"Expected exactly {target.start_revision}; found a different Alembic revision state"
             )
         # Verify the complete restricted storage role graph before
         # exercising the lifecycle owner's read capability.
@@ -1030,15 +1055,13 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                 "Existing storage lifecycle columns are incomplete"
             )
 
-        # auth_sessions must not exist before migration 0032.
+        # Require the exact schema expected at each approved starting boundary.
         sessions_table_exists = connection.execute(text("""
             SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
         """)).scalar_one()
 
-        if sessions_table_exists:
-            raise MigrationBlocked(
-                "auth_sessions already exists before migration 0032"
-            )
+        if sessions_table_exists != (target.start_revision == "0033_cleanup_claims_disabled"):
+            raise MigrationBlocked("auth_sessions does not match the approved starting revision")
 
         # Confirm the expected pre-0033 cleanup permissions.
         cleanup_privileges = connection.execute(text("""
@@ -1061,9 +1084,11 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                 )
         """)).one()
 
-        if tuple(cleanup_privileges) != (True, True, True, False):
+        expected_claims = ((True, True, True, False) if target.start_revision == START_REVISION
+                           else (True, False, False, False))
+        if tuple(cleanup_privileges) != expected_claims:
             raise MigrationBlocked(
-                "Unexpected cleanup-claim privileges before migration 0033"
+                "Unexpected cleanup-claim privileges at the approved starting revision"
             )
 
 
@@ -1081,9 +1106,9 @@ def run_check(target: ProductionTarget) -> None:
         engine.dispose()
 
 
-def _verify_followup_result(connection: Connection) -> None:
-    """Verify revisions 0032/0033 and preserve the production namespace."""
-    with connection.begin():
+def _verify_followup_result(connection: Connection, *, installation: bool = True) -> None:
+    """Verify the quota-aware head without enabling cleanup or changing data."""
+    with (connection.begin_nested() if connection.in_transaction() else connection.begin()):
         revision = connection.execute(
             text("SELECT version_num FROM public.alembic_version")
         ).scalars().all()
@@ -1170,6 +1195,31 @@ def _verify_followup_result(connection: Connection) -> None:
             raise MigrationBlocked(
                 "Production storage namespace changed unexpectedly"
             )
+        connection.exec_driver_sql("SET LOCAL ROLE vervfy_storage_lifecycle_owner")
+        policy = connection.exec_driver_sql(
+            "SELECT tenant_limit_bytes,total_limit_bytes FROM vervfy_storage.quota_policy WHERE id=1"
+        ).one()
+        connection.exec_driver_sql("RESET ROLE")
+        if ((installation and tuple(policy) != (157286400, 10737418240))
+            or any(type(value) is not int or value <= 0 for value in policy)):
+            raise MigrationBlocked("Unexpected quota policy after 0034")
+
+        quota_access = connection.execute(text("""
+            SELECT
+              has_function_privilege('app_runtime', 'vervfy_storage.reserve_sized_object(text,text,bigint,bigint)', 'EXECUTE'),
+              has_function_privilege('app_runtime', 'vervfy_storage.retained_bytes()', 'EXECUTE'),
+              has_function_privilege('app_runtime', 'vervfy_storage.reserve_object(text,text)', 'EXECUTE'),
+              has_table_privilege('app_runtime', 'vervfy_storage.quota_policy', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),
+              (SELECT relrowsecurity AND relforcerowsecurity FROM pg_catalog.pg_class
+               WHERE oid='vervfy_storage.quota_policy'::regclass)
+        """)).one()
+        if tuple(quota_access) != (True, True, False, False, True):
+            raise MigrationBlocked("Unexpected quota RLS or runtime privileges after 0034")
+        _check_storage_acl_inventory(
+            connection, owner="vervfy_storage_lifecycle_owner",
+            executor="vervfy_storage_cleanup", worker="storage_cleanup_worker",
+        )
+
 
 
 def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
@@ -1207,14 +1257,14 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
             validate_migration_chain()
 
             stage = "alembic_upgrade"
-            with patch.dict(
-                os.environ,
-                {"DATABASE_URL": target.url.render_as_string(hide_password=False)},
+            # Postflight failures roll back the entire upgrade, including DDL.
+            with (
+                patch.dict(os.environ, {"DATABASE_URL": target.url.render_as_string(hide_password=False)}),
+                connection.begin(),
             ):
                 command.upgrade(config, TARGET_REVISION)
-
-            stage = "post_migration_verification"
-            _verify_followup_result(connection)
+                stage = "post_migration_verification"
+                _verify_followup_result(connection)
     except Exception as exc:
         exc.add_note(f"vervfy_migration_stage={stage}")
         raise
@@ -1232,7 +1282,7 @@ def _parser() -> argparse.ArgumentParser:
             subparser.add_argument(
                 "--authorize-production-migration",
                 required=True,
-                choices=(AUTHORIZATION,),
+                choices=tuple(f"{start}..{TARGET_REVISION}" for start in SUPPORTED_START_REVISIONS),
             )
             subparser.add_argument(
                 "--authorization-expires-at",
@@ -1250,13 +1300,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.confirm_project_ref != target.project_ref:
             raise MigrationBlocked("Confirmation does not match the configured production project")
         if args.operation == "upgrade":
+            if args.authorize_production_migration != f"{target.start_revision}..{TARGET_REVISION}":
+                raise MigrationBlocked("Authorization does not match the configured upgrade boundary")
             validate_authorization(args.authorization_expires_at)
             run_upgrade(target, args.authorization_expires_at)
             print(f"Production migration completed at {TARGET_REVISION}")
         else:
             run_check(target)
             print(
-                f"Read-only production preflight passed at {START_REVISION}; "
+                f"Read-only production preflight passed at {target.start_revision}; "
                 "no migration was executed"
             )
         return 0

@@ -24,6 +24,7 @@ class ProductionDiagnosticsTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
         ):
             load_target.return_value.project_ref = "test-project"
+            load_target.return_value.start_revision = runner.START_REVISION
 
             result = runner.main(
                 [
@@ -59,6 +60,7 @@ class ProductionDiagnosticsTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
         ):
             load_target.return_value.project_ref = "test-project"
+            load_target.return_value.start_revision = runner.START_REVISION
 
             result = runner.main(
                 [

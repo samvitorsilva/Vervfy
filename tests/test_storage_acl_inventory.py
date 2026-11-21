@@ -57,6 +57,7 @@ def acl(role, kind, name, privilege):
 
 def inventory_connection(
     *,
+    revision="0031_cleanup_retry_limits",
     extra_acl=(),
     extra_owner=(),
     defaults=(),
@@ -122,9 +123,11 @@ def inventory_connection(
     default_acls = MagicMock()
     default_acls.scalars.return_value.all.return_value = list(defaults)
 
+    installed_revision = MagicMock()
+    installed_revision.scalars.return_value.all.return_value = [revision]
     connection = MagicMock()
     connection.execute.side_effect = [
-        first, effective_relations, effective_columns, effective_sequences,
+        first, installed_revision, effective_relations, effective_columns, effective_sequences,
         effective_functions, schema_create, owned, default_acls,
     ]
     return connection
@@ -210,3 +213,21 @@ class StorageAclInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "sequence privileges"):
             check(inventory_connection(extra_effective_sequence=(extra,)))
 
+
+
+class QuotaAclInventoryTests(unittest.TestCase):
+    def test_quota_owner_permissions_require_exact_reviewed_revision(self):
+        entries = tuple(acl(OWNER, "TABLE", "vervfy_storage.quota_policy", p)
+                        for p in ("SELECT", "UPDATE"))
+        check(inventory_connection(revision="0034_storage_byte_reservations", extra_acl=entries))
+        for revision in ("0033_cleanup_claims_disabled", "future_revision"):
+            with self.assertRaisesRegex(RuntimeError, "Unexpected direct storage"):
+                check(inventory_connection(revision=revision, extra_acl=entries))
+
+    def test_quota_table_extra_privileges_still_fail_closed(self):
+        for role, privilege in ((OWNER, "DELETE"), (EXECUTOR, "SELECT"), (WORKER, "UPDATE")):
+            with self.assertRaisesRegex(RuntimeError, "Unexpected direct storage"):
+                check(inventory_connection(
+                    revision="0034_storage_byte_reservations",
+                    extra_acl=(acl(role, "TABLE", "vervfy_storage.quota_policy", privilege),),
+                ))

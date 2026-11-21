@@ -172,3 +172,83 @@ class StorageQuotaPostgresTests(unittest.TestCase):
             ) as c,
         ):
             self.reserve(connection=c)
+
+    def test_track_and_account_deletion_preserve_retained_ledger_and_outbox(self):
+        for delete_account in (False, True):
+            with (
+                self.subTest(delete_account=delete_account),
+                self.engine.connect() as c,
+            ):
+                transaction = c.begin()
+                c.exec_driver_sql("SET LOCAL ROLE app_runtime")
+                other = self.reserve(actor="b", size=10, connection=c)
+                obj = self.reserve(actor="a", size=15, connection=c)
+                for state in ("uploading", "ready"):
+                    c.execute(
+                        sa.text(
+                            "SELECT vervfy_storage.advance_upload(:id,:token,:state)"
+                        ),
+                        {
+                            "id": obj.object_id,
+                            "token": obj.upload_token,
+                            "state": state,
+                        },
+                    )
+                c.execute(
+                    sa.text("""INSERT INTO tracks
+                    (id,user_id,filename,title,artist,album,duration,has_cover,storage_path)
+                    VALUES ('quota-delete-track','a','synthetic.mp3','t','r','l',0,false,:path)"""),
+                    {"path": obj.object_path},
+                )
+                if delete_account:
+                    c.exec_driver_sql("DELETE FROM users WHERE id='a'")
+                else:
+                    c.exec_driver_sql(
+                        "DELETE FROM tracks WHERE id='quota-delete-track' AND user_id='a'"
+                    )
+                    self.assertEqual(
+                        c.exec_driver_sql(
+                            "SELECT vervfy_storage.retained_bytes()"
+                        ).scalar_one(),
+                        15,
+                    )
+                c.exec_driver_sql("RESET ROLE")
+                self.assertEqual(
+                    c.execute(
+                        sa.text(
+                            "SELECT reserved_bytes FROM vervfy_storage.objects WHERE id=:id"
+                        ),
+                        {"id": obj.object_id},
+                    ).scalar_one(),
+                    15,
+                )
+                self.assertEqual(
+                    c.execute(
+                        sa.text(
+                            "SELECT requested_by FROM vervfy_storage.cleanup_jobs WHERE object_id=:id"
+                        ),
+                        {"id": obj.object_id},
+                    ).scalar_one(),
+                    "a",
+                )
+                self.assertEqual(
+                    c.execute(
+                        sa.text(
+                            "SELECT tenant_id FROM vervfy_storage.objects WHERE id=:id"
+                        ),
+                        {"id": other.object_id},
+                    ).scalar_one(),
+                    "b",
+                )
+                self.assertEqual(
+                    c.exec_driver_sql(
+                        "SELECT count(*) FROM users WHERE id='b'"
+                    ).scalar_one(),
+                    1,
+                )
+                self.assertFalse(
+                    c.exec_driver_sql(
+                        "SELECT physical_cleanup_enabled FROM vervfy_storage.namespaces"
+                    ).scalar_one()
+                )
+                transaction.rollback()

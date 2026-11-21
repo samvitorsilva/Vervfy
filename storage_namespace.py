@@ -104,16 +104,16 @@ def initialize_namespace(connection, binding: NamespaceBinding) -> NamespaceBind
             .scalars()
             .all()
         )
-        # Namespace bootstrap is valid immediately after the original
-        # lifecycle migration (0027) or after the reviewed production chain
-        # that now includes 0028-0031. Never allow an intermediate revision.
+        # Preserve explicit historical baselines and the reviewed quota-aware head.
+        # Unknown and intermediate revisions still fail closed.
         supported_revisions = {
             ("0027_storage_lifecycle",),
             ("0031_cleanup_retry_limits",),
+            ("0034_storage_byte_reservations",),
         }
         if tuple(revision) not in supported_revisions:
             raise RuntimeError(
-                "Namespace initialization requires revision 0027 or 0031"
+                "Namespace initialization requires a supported lifecycle revision (0027, 0031, or 0034)"
             )
         # Serialize empty-table initializers as well as retries. No UPDATE is
         # attempted: the immutable trigger also rejects no-op UPDATE statements.

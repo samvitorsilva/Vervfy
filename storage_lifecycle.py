@@ -35,6 +35,7 @@ from storage_adapters import (
     validate_database_session,
     validate_local_source,
 )
+from storage_auth_headers import storage_auth_headers
 from storage_namespace import ManagedStorageBoundary, NamespaceBinding
 
 log = logging.getLogger(__name__)
@@ -141,8 +142,7 @@ def _client(binding):
     return httpx.AsyncClient(
         base_url=binding.endpoint + "/storage/v1",
         headers={
-            "Authorization": "Bearer " + key,
-            "apikey": key,
+            **storage_auth_headers(key),
             "Accept-Encoding": "identity",
         },
         timeout=httpx.Timeout(connect=5, read=10, write=10, pool=5),

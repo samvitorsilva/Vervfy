@@ -469,3 +469,329 @@ synthetic component probes confirmed the documented behaviors; a redacted scan o
 not HTTP/Redis/PostgreSQL integration evidence. No application or test code was
 changed by this audit. Existing production deletion guards remain enabled, and
 physical deletion remains disabled. Release sign-off remains blocked.
+
+## Restored storage readiness work — 2026-11-21
+
+This entry supersedes the earlier runner/inventory blockers for local code
+readiness. It does not approve or describe a production operation. The user
+explicitly authorized restoring storage work after the worktree was restored.
+Unrelated auth/email/server edits and CSS were left untouched.
+
+### Restored fixes and guarded migration path
+
+- Namespace initialization explicitly accepts the current 0034 head, retaining
+  administrator-only bootstrap, immutable namespace matching, savepoint rollback,
+  exact-retry behavior, and physical cleanup disabled.
+- Read-only ACL inventory recognizes only 0034's exact lifecycle-owner quota
+  privileges/functions. It grants nothing and still rejects extra capabilities.
+- `scripts/storage_production_migration.py` now pins the complete, linear
+  34-migration history through `0034_storage_byte_reservations`. The only
+  accepted starting states are `0031_cleanup_retry_limits` (the default) and
+  `0033_cleanup_claims_disabled` (explicitly selected through
+  `VERVFY_PRODUCTION_START_REVISION`). Revision 0032, arbitrary future heads,
+  and already-upgraded databases do not qualify as starting states.
+- The command's `--authorize-production-migration` must match the configured
+  start-to-target boundary exactly, and the existing 15-minute expiry is still
+  required. Existing project, CA/verify-full TLS, restricted-login ownership,
+  grantor-aware role graph, namespace, and cleanup privilege checks remain.
+- Starting-state checks distinguish the expected presence of auth_sessions and
+  cleanup-claim revocation. Postflight checks 0034, default installation quotas,
+  forced quota RLS, sized-reservation/retained-byte permissions, denial of
+  unsized reservations, and unchanged namespace/cleanup restrictions.
+- Upgrade and postflight share one outer transaction. A final verification
+  rejection rolls back the schema, version stamp, and grants together. No
+  existing migration was rewritten, stamped manually, or skipped.
+
+### Evidence-based reconciliation
+
+`storage_inventory.py` implements plan validation and atomic accounting.
+`scripts/storage_inventory_reconcile.py` exposes separate `plan` and `apply`
+operations. Neither operation writes or deletes provider objects.
+
+Prerequisites for any future authorized use:
+
+1. Verify the actual database revision and choose the corresponding approved
+   migration boundary. Use the existing production target configuration and
+   restricted migration credentials/CA; never change host or role guards to
+   make a different target pass. This work did not connect to production.
+2. Pause **all** storage writers: uploads, processing/artwork workers, retries,
+   and out-of-band provider changes. Drain active I/O before measuring. Keep
+   writers paused through evidence review and database commit. The required
+   `--confirm-uploads-paused` flag records this operator prerequisite; the tool
+   cannot establish that external writers are actually paused.
+3. After the guarded upgrade to 0034, run the separately authorized inventory
+   `plan` operation with `--plan-file`, `--confirm-project-ref`, and
+   `--confirm-uploads-paused`. It rechecks real connection TLS/identity, role
+   graph, exact head, forced RLS, positive existing quotas, immutable binding,
+   and revoked cleanup claims. It does not run any migrations.
+4. The plan transaction is explicitly read-only. Snapshot SQL closes before
+   provider I/O. For each NULL-size ledger row, the observer uses authenticated
+   GETs for two complete matching reads, measuring bytes and SHA-256 and
+   requiring a stable strong ETag. It never trusts provider size metadata as
+   byte evidence. Redirects, unsafe paths, unsupported encodings, incomplete or
+   changing reads, missing/empty objects, and active upload/deletion states
+   block the whole plan. Both reads share an absolute 60-second network deadline
+   with an additional bounded five-second client close and a 10-GiB per-object
+   read ceiling. There are no provider POST/PUT/PATCH/DELETE requests.
+5. Review the private (0600), exclusively created plan and independently record
+   its SHA-256. The plan contains object paths and tenant identifiers: keep it
+   private. Do not edit sizes or fabricate evidence. The SHA-256 is an approval
+   binding, not a provider signature or a substitute for reviewing provenance.
+6. A separately authorized `apply` requires `--approved-sha256` and
+   `--authorization-expires-at`, in addition to the same target/paused-writer
+   flags. Expiry must be active and within 15 minutes; measurement must also be
+   no older than 15 minutes from the start of collection. Apply requires no
+   provider credentials and performs no provider I/O.
+7. Apply rechecks guards on its actual transaction, validates every observation,
+   locks the quota-policy row in admission order and the object table, and
+   compares the complete ledger snapshot. It updates only `reserved_bytes IS
+   NULL`. All fields, known charges, object identities, ownership, states,
+   references, jobs, quotas, RLS policies, and grants remain unchanged. Missing
+   evidence, wrong binding, stale approval, ledger drift, or any SQL failure
+   rolls back all changes. Exact replay without ledger drift returns zero.
+
+The existing reservation function still blocks on any remaining NULL charge.
+After successful complete reconciliation, global and tenant admission checks
+continue to apply; if measured retained usage exceeds capacity, new admission
+stays blocked. Deletion, marking an object deleted, or reconciliation never
+refunds a known retained charge. Shared/legacy NULL ownership is preserved, not
+inferred or reassigned; these bytes are charged globally, while existing tenant
+accounting semantics are unchanged.
+
+### Verification and remaining limits
+
+Tests use fresh disposable PostgreSQL, isolated SQLite, generated local TLS
+certificates, and mocked/synthetic provider responses only. Both migration
+boundaries exercise real TLS, role, revision, namespace and postflight guards;
+only synthetic final rejection is injected to prove rollback. Synthetic role
+grantor topology is provisioned in the new fixture, not relaxed in the runner.
+Tests also cover concurrent/idempotent reconciliation, mid-update database
+failure rollback, caller rollback, runtime denial, snapshot drift, no known-charge
+reduction, read-only collection, absolute header/body deadlines, unsafe paths,
+and account/track deletion preserving retained charges and cleanup obligations.
+
+**No production readiness sign-off or physical deletion approval:**
+
+- No live revision, bucket, object, role, quota, or credentials were inspected.
+  The future rollout and actual measured reconciliation still require separate
+  authorization and verification.
+- Missing, empty, unstable, oversized, actively written or otherwise unmeasurable
+  unknown objects remain blocked for manual investigation. Evidence collection
+  that cannot finish within the freshness window must not bypass or extend it
+  without a separately reviewed design.
+- This tool reconciles registered ledger rows. It does not enumerate or adopt
+  provider-only orphan objects. Full bucket-to-ledger inventory and legacy/shared
+  ownership review remain separate readiness work; global ledger caps are not
+  proof of the provider's complete billable inventory.
+- Stable strong-ETag/read behavior must be rehearsed against a disposable provider
+  project before a production run. Synthetic HTTP tests do not prove provider
+  behavior. External writer quiescence is an operational prerequisite.
+- Capacity, backups/recovery and any outstanding unrelated security findings
+  still need release review. All physical deletion entrypoints and claim gates
+  remain disabled; no new deleter or cleanup grant was added.
+
+Final restored-worktree verification: **225 tests passed, 53 subtests passed,
+0 failures/skips** in the 23-file storage-readiness suite. The 37 warnings are
+existing Alembic configuration deprecations and deliberately oversized image
+fixtures. Ruff passed for every changed Python file and `git diff --check`
+passed. Additional read-only TLS connection verification is included in the
+runner fixture. No production access, physical deletion, commits, pushes, PRs,
+or deployment occurred.
+
+## Explicit disposable Supabase 0034 workflow — 2026-11-21
+
+The new entrypoint is `scripts/storage_rehearsal.py`. It is separate from both
+production CLIs. Production target loading, namespaces, reconciliation helpers,
+migration files, and Alembic environment guards were not changed for this work.
+No hosted project was contacted. Existing unrelated edits remain untouched.
+
+### Configuration and provisioning boundary
+
+The workflow intentionally starts with a **separately provisioned disposable
+project** at reviewed revision 0031 or 0033. It does not create hosted projects,
+roles, grants, namespaces or synthetic provider objects, and does not bootstrap
+an arbitrary database. Missing prerequisites block execution. Do not point the
+production provisioner at another project or bypass staging/Alembic guards to
+prepare a rehearsal; use a separately reviewed project-specific provisioning
+procedure. That hosted preparation remains required before running this workflow.
+
+Required preparation, on the disposable project only:
+
+- Restricted `vervfy_rehearsal_migrator` login with application/Alembic table
+  ownership and the reviewed lifecycle-owner SET membership. Runtime and cleanup
+  roles must match the existing grantor-aware role graph. No SUPERUSER,
+  BYPASSRLS, CREATEROLE or CREATEDB capability is accepted for the migration login.
+- A fresh, immutable namespace with environment `disposable-rehearsal`, a new
+  nonzero UUID, the disposable project's exact HTTPS storage endpoint, a bucket
+  named `vervfy-rehearsal-...`, and `physical_cleanup_enabled=false`. Bootstrap
+  must use its existing separately privileged authorization; the workflow
+  cannot grant that privilege or modify an existing binding.
+- Only synthetic application tenants `a` and `b`. Populate both with tracks,
+  covers, artist photos, playlists/favorites/listens as appropriate, staged
+  upload jobs with original artwork bytes, managed objects, shared legacy
+  references, and pending cleanup obligations. The snapshot step rejects an
+  empty ledger or missing two-tenant/legacy/outbox coverage. Load only generated
+  fixture bytes into a private bucket through a separately authorized setup
+  procedure. Verify that the bucket contains only the intended fixture inventory.
+- A project approval table owned by `vervfy_rehearsal_migrator` at
+  `vervfy_rehearsal.approval`, containing exactly one row with columns
+  `project_ref text`, `run_id uuid`, `config_sha256 text`, `disposable boolean`.
+  Pin its values to the reviewed configuration and true disposable assertion.
+  Restrict schema/table access to that migration login. This is an extra
+  project-side approval marker, not proof supplied by Supabase that a project is
+  disposable; the administrator remains responsible for project selection.
+
+Create an owner-only 0600 regular JSON configuration file, using this shape
+(replace every placeholder and review the canonical digest independently):
+
+```json
+{
+  "purpose": "vervfy-0034-disposable-rehearsal-v1",
+  "project_ref": "<new 20-character project ref>",
+  "namespace_id": "<fresh namespace UUID>",
+  "bucket": "vervfy-rehearsal-<unique fixture suffix>",
+  "start_revision": "0031_cleanup_retry_limits",
+  "run_id": "<fresh run UUID>",
+  "ca_sha256": "<SHA-256 of approved CA bundle>",
+  "history_sha256": "<reviewed migration/environment history digest>"
+}
+```
+
+The other approved start is `0033_cleanup_claims_disabled`. The workflow refuses
+production's project reference/namespace, the existing staging project, wrong
+bucket prefixes, different migration history, insecure/symlink configuration,
+and mixed target URLs. Direct Supabase PostgreSQL only is supported here;
+Session Pooler rehearsal remains outside this entrypoint's claims.
+
+Use a clean process environment containing only the required system paths and
+these reviewed settings, populated from the disposable project's secret store:
+
+- `VERVFY_ENVIRONMENT=disposable-storage-rehearsal`
+- `VERVFY_REHEARSAL_CA_FILE`: absolute path to the pinned readable CA bundle.
+- `VERVFY_REHEARSAL_DATABASE_URL`: `postgresql+psycopg` direct project host on
+  port 5432, database `postgres`, login `vervfy_rehearsal_migrator`.
+- `VERVFY_REHEARSAL_RUNTIME_URL`: the same host/database/CA, login `app_runtime`.
+- Both URLs require exactly `sslmode=verify-full` and `sslrootcert=<absolute CA
+  path>` query parameters. No hostaddr, options or alternate connection routes.
+- `VERVFY_REHEARSAL_STORAGE_KEY`: disposable-project credential for plan reads
+  only. Never reuse a production provider key.
+
+Inherited `PG*`, DATABASE_URL/MIGRATION_DATABASE_URL, generic Supabase credentials,
+production variables, staging profile, or ambiguous ENVIRONMENT selectors are
+rejected before engine construction. HTTP environment proxies and redirects are
+not used. Configuration validation itself never opens a connection.
+
+Offline helpers (no database/provider access): import `history_digest()` from
+`scripts.storage_rehearsal` to obtain the reviewed source digest; use
+`plan_digest(read_private(config_path))` for the canonical configuration digest.
+A digest binds an independently reviewed artifact; it is not a digital signature
+or a substitute for reviewing the target and evidence provenance.
+
+### Authorized operation sequence
+
+Every operation requires `--config`, `--config-sha256`,
+`--confirm-disposable-project`, `--confirm-writers-paused`, and
+`--authorization-expires-at` (fresh UTC RFC3339 expiry within 15 minutes).
+Pause and drain all application, background and external provider writers for
+the whole rehearsal. The confirmation flag does not stop external writers.
+Run with the dedicated environment above; do not run these against production.
+
+1. **snapshot**: add `--receipt-file <new-private-file>`. The operation is
+   transactionally read-only and writes an exclusive local 0600 baseline receipt.
+   Record/review the printed baseline SHA-256. It hashes every field of every
+   pre-existing public table under each tenant's RLS context, plus all namespace,
+   object and cleanup-job fields. Receipts contain digests/counts, not row values.
+2. **upgrade**: add the original `--receipt-file`, `--receipt-sha256`, and exact
+   `--authorize-upgrade 0031_cleanup_retry_limits..0034_storage_byte_reservations`
+   (use the 0033 start string if configured). A bounded transaction advisory lock
+   precedes start-state checks. TLS, restricted identity/ownership, role graph,
+   marker, forced RLS, namespace, claims and matching populated baseline are
+   checked. Migration, postflight and preservation verification share one
+   transaction. Authorization is rechecked before DDL and before commit.
+3. **recover**: after any uncertain result, reconnect with original receipt and
+   digest. Recovery is read-only. It returns `at_baseline` or `committed_0034`
+   only after matching data and guards. Other revisions, changed rows or failed
+   guards block investigation. It never automatically retries, stamps,
+   downgrades, refunds or deletes. Retain the pinned checkout, configuration,
+   CA and receipt to make recovery reproducible.
+4. **verify**: at 0034, runtime probes use a separate verified-TLS `app_runtime`
+   connection. They check populated two-tenant reads, cross-tenant UPDATE/INSERT
+   denial, storage RLS, accounting-write denial, and blocked unknown-size or
+   oversized reservations. Probe transactions always roll back.
+5. **plan**: add `--plan-file <new-private-file>`. SQL is read-only and closes
+   before provider I/O. The disposable bucket must report the exact ID and
+   `public=false`. Only bounded GETs are sent. The existing observer performs
+   two complete matching versioned reads for every unknown-size ledger object.
+   Review the exclusive private plan and independently approve its printed SHA.
+6. **apply**: add original `--plan-file` and `--plan-sha256`. Recheck head and all
+   guards, then use existing atomic NULL-only reconciliation. Freshness, snapshot
+   drift, quota locking, known-charge preservation and replay protection remain.
+   Missing/empty/changing objects remain blocked. No provider credential or
+   provider I/O is needed for apply.
+7. Repeat **verify** and read-only **recover**. Confirm retained bytes include all
+   intended ledger objects, tenant isolation holds, original artwork and other
+   row fields are preserved, and physical cleanup remains false. Logical
+   deletion and shared/global quota behavior must not release retained charges.
+
+There is no cleanup or reset operation. Project disposal, if later desired,
+requires its own explicit authorization outside this workflow. Neither worker
+claims nor provider deletion are enabled at any stage.
+
+### Local proof and hosted blockers
+
+`tests/test_storage_rehearsal.py` runs the full CLI against fresh local PostgreSQL
+with generated verify-full TLS and mocked provider reads. Only the network
+engine destination is substituted; all configuration and SQL/TLS guards execute.
+Both start revisions use a populated two-tenant fixture with nine pre-existing
+managed/legacy objects, staged cover bytes, live references and cleanup jobs.
+Tests prove full-field preservation, unknown-size admission blocking, measured
+reconciliation and replay, forbidden runtime mutations, shared global quota,
+marker/RLS drift denial, bounded advisory locking, and false cleanup state.
+
+The test injects a rejecting postflight to prove DDL/version/data rollback. It
+also commits successfully and then raises a simulated lost acknowledgement;
+reconnecting recovery must identify the committed head without another upgrade.
+Changed-row recovery is rejected. Configuration tests refuse unsafe targets,
+credentials/routes, CA/history/digest mismatches, public/wrong buckets and
+inherited overrides before network execution.
+
+Remaining hosted requirements: separately reviewed disposable project baseline,
+roles/marker/namespace and fixture provisioning; dedicated credentials and CA;
+actual Supabase grantor/extension behavior, private bucket and ETag/streaming
+behavior; complete bucket-to-ledger orphan/shared-ownership inventory; maintenance
+window and capacity review. Local commit-state recovery is not a backup/PITR
+restore drill: restoration into a fresh disposable project and production
+operational recovery planning remain separate requirements. No hosted rehearsal,
+production access, physical deletion, commit or push occurred during this work.
+
+Focused verification for this addition: **80 tests passed and 10 subtests passed**
+across the new workflow/target guards and existing quota, reconciliation,
+production-runner and disabled-cleanup tests, in about 17 seconds. Ruff and
+`git diff --check` passed. After adding the explicit PostgreSQL >=16 gate, both
+populated paths were rechecked. Warnings are existing Alembic `path_separator`
+deprecations. Hash comparisons confirmed the production runner, production
+reconciliation CLI, shared reconciliation code, Alembic environment, unrelated
+user auth/email/server edits, and CSS are byte-for-byte unchanged from the start
+of this task. All changes remain local and uncommitted.
+
+## Local review and storage commit checkpoint — 2026-11-21
+
+Reviewed the uncommitted storage changes as a unit before the requested local
+commit. Shared Storage headers now send modern `sb_secret_*` credentials only as
+`apikey`, retaining both headers for legacy credentials across synchronous,
+lifecycle, inventory, and disposable-rehearsal clients. Mocked request tests
+verify key rotation, redirects/rejections, namespace mismatch, and redaction.
+No RLS, namespace, quota, deletion, or production target guard was weakened.
+
+Checkpoint verification: **226 tests passed, 25 subtests passed** in the scoped
+21-file storage/deletion/isolation suite, in about 35 seconds. Ruff and diff
+checks passed. Warnings were existing Alembic configuration deprecations and an
+intentional oversized-image fixture. Local PostgreSQL used fresh disposable
+clusters with generated test TLS; provider traffic was mocked. No hosted or
+production connection occurred.
+
+The requested commit contains storage implementation, storage-focused tests and
+this report only. Existing auth/email/password-reset/server edits and CSS are
+excluded. Hosted baseline provisioning and backup/restore readiness remain
+separate follow-up work; physical deletion stays disabled. No push or deployment
+is authorized or performed.

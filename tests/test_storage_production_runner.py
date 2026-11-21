@@ -26,18 +26,14 @@ def test_missing_production_environment_is_blocked():
 
 
 def test_expired_authorization_is_blocked():
-    expiry = (
-        datetime.now(UTC) - timedelta(minutes=1)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expiry = (datetime.now(UTC) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with pytest.raises(runner.MigrationBlocked):
         runner.validate_authorization(expiry)
 
 
 def test_authorization_more_than_15_minutes_is_blocked():
-    expiry = (
-        datetime.now(UTC) + timedelta(minutes=30)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expiry = (datetime.now(UTC) + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with pytest.raises(runner.MigrationBlocked):
         runner.validate_authorization(expiry)
@@ -58,9 +54,7 @@ def test_runner_restores_database_environment_after_upgrade():
         "postgresql+psycopg://synthetic:synthetic@localhost/synthetic"
     )
 
-    expiry = (
-        datetime.now(UTC) + timedelta(minutes=5)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expiry = (datetime.now(UTC) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     original_database_url = os.environ.get("DATABASE_URL")
     original_migration_url = os.environ.get("MIGRATION_DATABASE_URL")
@@ -93,9 +87,7 @@ def test_preflight_failure_prevents_upgrade():
 
     target = MagicMock()
 
-    expiry = (
-        datetime.now(UTC) + timedelta(minutes=5)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expiry = (datetime.now(UTC) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with (
         patch.object(runner, "_engine", return_value=engine),
@@ -111,3 +103,33 @@ def test_preflight_failure_prevents_upgrade():
 
     upgrade.assert_not_called()
     engine.dispose.assert_called_once()
+
+
+def test_current_reviewed_migration_chain_reaches_quota_head():
+    runner.validate_migration_chain()
+    assert runner.TARGET_REVISION == "0034_storage_byte_reservations"
+    assert runner.EXPECTED_MIGRATION_COUNT == 34
+
+
+def test_boundary_authorization_must_match_configured_start(capsys):
+    target = MagicMock(
+        project_ref="synthetic", start_revision="0033_cleanup_claims_disabled"
+    )
+    with (
+        patch.object(runner, "load_target", return_value=target),
+        patch.object(runner, "run_upgrade") as upgrade,
+    ):
+        result = runner.main(
+            [
+                "upgrade",
+                "--confirm-project-ref",
+                "synthetic",
+                "--authorize-production-migration",
+                runner.AUTHORIZATION,
+                "--authorization-expires-at",
+                "2099-01-01T00:00:00Z",
+            ]
+        )
+    assert result == 1
+    upgrade.assert_not_called()
+    assert "Authorization does not match" in capsys.readouterr().err
