@@ -2748,8 +2748,8 @@ button:focus-visible{
   &:nth-child(9){ animation-delay:480ms; }
   &:nth-child(10){ animation-delay:540ms; }
   &:nth-child(n+11){ animation-delay:600ms; }
-  /* Keyboard users should never land on a fading or delayed form control. */
-  &:focus-within{ animation:none; }
+  /* Keep focused controls visible without resetting the animation on blur. */
+  &:focus-within{ opacity:1 !important; translate:0 0 !important; }
 }
 }
 
