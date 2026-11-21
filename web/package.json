@@ -12,6 +12,8 @@
     "test:i18n": "node --test tests/toast-translations.test.mjs"
   },
   "dependencies": {
+    "@zxcvbn-ts/core": "^4.3.0",
+    "@zxcvbn-ts/language-common": "^4.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.76.0",

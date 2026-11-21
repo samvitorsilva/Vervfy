@@ -7,7 +7,7 @@ for (const path of ["/register", "/reset-password#token=mobile-test"]) {
     await page.goto(path);
     await page.locator(".auth-language-select select").selectOption("fr");
     const password = page.locator("#password");
-    await password.fill("Birch!27");
+    await password.fill("r7!Kp2$vQ9#nL4@x");
     const meter = page.getByRole("meter");
     await expect(meter).toHaveAttribute("aria-valuetext", "Forte");
     await expect(meter).toBeInViewport();

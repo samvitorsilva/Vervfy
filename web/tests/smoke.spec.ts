@@ -622,7 +622,7 @@ test("registration gives live password strength and byte-limit guidance", async 
   await expect(lengthRule).toContainText("not met");
   await expect(password).toHaveAttribute("aria-invalid", "true");
 
-  await password.fill("Birch!27");
+  await password.fill("r7!Kp2$vQ9#nL4@x");
   await expect(page.getByRole("meter")).toHaveAttribute("aria-valuetext", "Strong");
   await expect(lengthRule).not.toContainText("not met");
   await expect(password).toHaveAttribute("aria-invalid", "false");

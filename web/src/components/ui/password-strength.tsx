@@ -1,15 +1,22 @@
 "use client";
 
+// Adapted from Password Strength by Özer (@ddoemonn) on 21st.dev:
+// https://21st.dev/community/components/ddoemonn/password-strength/default
+// Original component attribution and estimator notices: /third-party-notices.txt.
+
 import { useEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
+import { ZxcvbnFactory } from "@zxcvbn-ts/core";
+import { adjacencyGraphs, dictionary } from "@zxcvbn-ts/language-common";
 import { useLanguage } from "@/lib/i18n";
 
 const CELL = { type: "spring", stiffness: 520, damping: 34, mass: 0.45 } as const;
 const CROSSFADE = { type: "spring", stiffness: 260, damping: 34, mass: 0.8 } as const;
 const INSTANT = { duration: 0 } as const;
-const COMMON = /^(?:password|passw0rd|qwerty|letmein|welcome|admin|iloveyou|monkey|dragon|abc123|111111|123123|123456)/i;
-const RUN = /(.)\1{3,}/;
-const RUN_UP = /(?:0123|1234|2345|3456|4567|5678|6789|abcd|bcde|cdef|defg|qwer|wert|erty|asdf)/i;
+// Local, bounded estimation only; no remote dictionaries or password telemetry.
+// Common data keeps the bundle smaller than including per-language dictionaries.
+// Attribution: /third-party-notices.txt.
+const estimator = new ZxcvbnFactory({ dictionary, graphs: adjacencyGraphs, maxLength: 72 });
 const SYMBOL = /[!-/:-@[-`{-~]/;
 
 export type PasswordRule = { id: string; label: string; test: (value: string) => boolean };
@@ -40,11 +47,12 @@ export function usePasswordStrength(
   { rules = defaultPasswordRules, labels = defaultLabels, announceDelay = 700 }: UsePasswordStrengthOptions = {},
 ): PasswordStrengthState {
   const { t } = useLanguage();
+  const estimate = useMemo(() => value === "" ? null : estimator.check(value).score, [value]);
   const state = useMemo(() => {
     const evaluated = rules.map((rule) => ({ ...rule, label: t(rule.label), met: rule.test(value) }));
-    const passed = evaluated.reduce((n, r) => n + (r.met ? 1 : 0), 0);
-    const guessable = value.length > 0 && (COMMON.test(value) || RUN.test(value) || RUN_UP.test(value));
-    const score = value.length === 0 ? 0 : guessable ? 1 : Math.min(rules.length, Math.max(1, passed));
+    const guessable = estimate !== null && estimate <= 1;
+    // Reserve zero/Empty for an empty input; requirements do not determine strength.
+    const score = estimate === null ? 0 : Math.max(1, estimate);
     const label = t(labels[Math.min(score, labels.length - 1)] ?? "");
     const unmet = evaluated.filter((r) => !r.met);
     const announcement = value.length === 0 ? "" : [
@@ -52,14 +60,15 @@ export function usePasswordStrength(
       guessable ? t("This is a commonly guessed pattern.") : "",
       unmet.length === 0 ? t("All requirements met.") : t("Still needed: {rules}.").replace("{rules}", unmet.map((r) => r.label.toLowerCase()).join(", ")),
     ].filter(Boolean).join(" ");
-    return { score, max: rules.length, label, rules: evaluated, guessable, announcement };
-  }, [value, rules, labels, t]);
-  const [settled, setSettled] = useState("");
+    return { score, max: 4, label, rules: evaluated, guessable, announcement };
+  }, [value, estimate, rules, labels, t]);
+  const [settled, setSettled] = useState<typeof state | null>(null);
   useEffect(() => {
-    const id = setTimeout(() => setSettled(state.announcement), state.announcement === "" ? 0 : announceDelay);
+    const id = setTimeout(() => setSettled(state), announceDelay);
     return () => clearTimeout(id);
-  }, [state.announcement, announceDelay]);
-  return { ...state, announcement: state.announcement === "" ? "" : settled };
+  }, [state, announceDelay]);
+  // Invalidate immediately, including edits with identical feedback and language changes.
+  return { ...state, announcement: settled === state ? state.announcement : "" };
 }
 
 export type PasswordStrengthProps = {

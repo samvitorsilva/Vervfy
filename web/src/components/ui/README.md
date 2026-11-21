@@ -34,5 +34,9 @@ For an existing controlled password input, render
 The default rules are strength guidance, not server password validation.
 Existing authentication forms retain their current validation policy.
 
+The UI is adapted from [Password Strength by Özer (@ddoemonn) on 21st.dev](https://21st.dev/community/components/ddoemonn/password-strength/default).
+Original component attribution and estimator dependency notices are retained in
+`public/third-party-notices.txt`.
+
 The announcement timer clears empty input immediately in the returned state,
 with internal state updates deferred to avoid synchronous effect updates.

@@ -239,7 +239,6 @@ export default function ResetPasswordForm() {
                 type="password"
                 autoComplete="new-password"
                 minLength={8}
-                maxLength={72}
                 required
                 autoFocus
                 value={password}
