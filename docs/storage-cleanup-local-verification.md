@@ -795,3 +795,136 @@ this report only. Existing auth/email/password-reset/server edits and CSS are
 excluded. Hosted baseline provisioning and backup/restore readiness remain
 separate follow-up work; physical deletion stays disabled. No push or deployment
 is authorized or performed.
+
+## Disposable 0031/0033 baseline preparation bundle — 2026-11-21
+
+The reviewed storage changes were committed locally as `9f81dd7`; nothing was
+pushed. Unrelated auth/email/password-reset/server edits and CSS were excluded.
+Baseline preparation is a subsequent, uncommitted review artifact.
+
+`scripts/prepare_storage_rehearsal_baseline.py` creates a private **offline**
+provisioning review bundle. It has no database/client construction or execution
+mode and never creates hosted resources, roles or provider objects. It reuses the
+existing disposable target, configuration digest, CA pin and 34-migration history
+checks with internal validation-only dummy URLs. It does not read inherited
+production credentials. No dummy URL/password is written into the bundle.
+
+After obtaining an independently verified new disposable project reference,
+approved CA file and private 0600 rehearsal configuration, prepare with:
+
+```bash
+.venv/bin/python scripts/prepare_storage_rehearsal_baseline.py \
+  --config /private/rehearsal.json \
+  --config-sha256 "$APPROVED_CONFIG_SHA256" \
+  --ca-file /private/approved-ca.pem \
+  --confirm-disposable-project "$DISPOSABLE_PROJECT_REF" \
+  --output-dir /private/new-baseline-review
+```
+
+All command variables above are public target/digest metadata, not credentials.
+No database password or provider key is needed for preparation. The output path
+must not exist; reruns cannot overwrite an approved artifact. Review and record
+the printed manifest SHA-256 independently.
+
+The 0700 bundle directory contains exclusively created 0600 files:
+
+- `manifest.json`: target/config binding, file sizes and SHA-256 digests,
+  baseline, run identity, explicit remaining blockers, and
+  `ready_for_hosted_execution=false`.
+- `config.json`: reviewed public configuration only; no connection URLs or keys.
+- `01-preflight.sql`: a transactionally read-only DBA check for the fresh
+  disposable application schema, PostgreSQL >=16, TLS, exact restricted role
+  attributes, fresh-public ownership and pre-existing bootstrap capability. It
+  requires exactly one independently DBA-owned approval row at
+  `vervfy_rehearsal.provisioning_approval(project_ref text, run_id uuid,
+  config_sha256 text, disposable boolean)`, bound to this exact profile.
+  Missing or mismatched identity, existing application/storage/auth schema,
+  wrong principal or missing capability blocks. It grants and repairs nothing.
+- `02-role-requirements.json`: exact restricted login/capability attributes and
+  required migration/worker/login membership options, plus only the optional
+  postgres ADMIN-only owner/executor memberships accepted by the migrations.
+  Passwords are left to the dedicated secret-management process.
+  Provider-managed grants must satisfy the existing reviewed exceptions; no
+  catalog edits, blind revokes or privilege workarounds are proposed.
+- `03-baseline-phases.json`: reviewed execution order and immutable namespace.
+- `04-fixtures.json` and `fixtures/`: nine tiny valid WAV/JPEG synthetic assets,
+  ownership/reference intent, sizes and SHA-256 checksums. Managed paths are
+  allocator-issued UUID patterns, not preselected object IDs. There is no
+  `upload_verified=true` assignment or fabricated provider evidence.
+
+The SQL file alone cannot authenticate a Supabase project by network identity.
+Any future execution still requires a separately reviewed direct-host,
+verify-full, configuration-bound disposable connection before SQL is submitted.
+The private approval marker must be created only after that independent target
+check. Do not run this SQL through a production console or treat the marker as
+an alternative to TLS/project validation.
+
+Provisioning phases are deliberately explicit:
+
+1. Independently approve the new project, prepare restricted roles/memberships,
+   fresh public-schema ownership, DBA approval marker and migration capabilities.
+   Check the read-only preflight through a reviewed disposable connection.
+2. A target-bound baseline executor applies unchanged migrations through 0028.
+   Seed synthetic tenants and shared legacy references under their tenant
+   contexts before lifecycle reference triggers are installed.
+3. Apply unchanged 0029-0031 with every role/ACL guard intact. Stop rather than
+   modifying provider-managed grantors if the graph does not satisfy the guards.
+4. At **exactly 0031**, a separately authorized privileged DBA invokes existing
+   `initialize_namespace` with the new disposable binding and cleanup false.
+   The existing helper intentionally does not accept 0033 initialization.
+5. At exactly 0031, `scripts/upload_storage_rehearsal_fixtures.py` can reserve and
+   upload the eight managed assets using the restricted `app_runtime` role,
+   create-only requests and full matching readbacks. It validates the migrator
+   guard, runtime identity, immutable namespace, private bucket and exact fixture
+   hashes. It refuses pre-existing managed rows, never retries, attaches
+   references, or deletes objects, and marks uncertain reservations held. The
+   shared legacy identity and tenant-scoped attachment rows still require a
+   separately reviewed seeder. Do not set verification flags directly or enable
+   cleanup to make the setup pass.
+6. For the 0033 variant only, apply unchanged 0032/0033 after namespace bootstrap.
+   Create the separate runtime `vervfy_rehearsal.approval` marker owned by the
+   restricted migrator, then use the existing snapshot/upgrade/recover/verify/
+   plan/apply rehearsal workflow.
+
+For upload execution, provide only the explicit rehearsal variables
+`VERVFY_REHEARSAL_DATABASE_URL`, `VERVFY_REHEARSAL_RUNTIME_URL`, and
+`VERVFY_REHEARSAL_STORAGE_KEY` through an approved secret manager, plus
+`VERVFY_ENVIRONMENT=disposable-storage-rehearsal`; do not set generic database or
+Supabase variables. The command also requires the independently recorded bundle
+digest:
+
+```bash
+.venv/bin/python scripts/upload_storage_rehearsal_fixtures.py \
+  --config /private/rehearsal.json \
+  --config-sha256 "$APPROVED_CONFIG_SHA256" \
+  --ca-file /private/approved-ca.pem \
+  --confirm-disposable-project "$DISPOSABLE_PROJECT_REF" \
+  --bundle-dir /private/new-baseline-review \
+  --bundle-sha256 "$APPROVED_BUNDLE_SHA256"
+```
+
+**Remaining hosted rehearsal blockers:** there is no hosted DBA/role bootstrap
+executor, guarded empty-schema baseline executor, legacy registration/attachment
+seeder, or confirmed Free project/credentials/CA connectivity/provider response.
+The uploader is covered by local mock-provider tests only and must be reviewed
+and exercised on a separately approved disposable Free project before it is
+considered hosted-verified. Cross-project restore/immutable-namespace policy
+and backup restoration also remain separate readiness requirements. Do not use
+bare Alembic, change a production target constant, stamp revisions or grant
+BYPASSRLS to bypass any gap.
+
+The preparation tests validate both baselines, deterministic private artifacts,
+no engine construction or ambient-secret copying, refusal of unsafe targets and
+configuration drift, valid fixture hashes and sizes, and no output overwrites.
+Generated SQL is exercised only in fresh local PostgreSQL with test TLS. It
+accepts an attested empty candidate and rejects wrong identity, existing data,
+non-DBA marker ownership and missing bootstrap capability without modifying
+existing data or restoring privileges. No hosted provisioning, push, deployment,
+provider deletion or production access occurred.
+
+Baseline preparation and uploader verification: the preparation/preflight tests
+and local mock-provider tests passed; generated SQL ran only on fresh local
+PostgreSQL with test TLS. Hosted project, credentials, provider operations and
+physical deletion were not accessed. Existing Alembic configuration warnings
+remain. Only verified preparation files are eligible for the local commit;
+unrelated auth/email/server changes remain untouched.
