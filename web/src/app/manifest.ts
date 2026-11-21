@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Your personal music library.",
     start_url: "/",
     display: "standalone",
-    background_color: "#0c0e14",
-    theme_color: "#0c0e14",
+    background_color: "#050B12",
+    theme_color: "#050B12",
     icons: [
       {
         src: "/gemini-svg.svg",

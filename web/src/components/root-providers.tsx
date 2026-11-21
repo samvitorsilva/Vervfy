@@ -6,6 +6,7 @@ import { usePlayerStore } from "@/store/player-store";
 import { installPlaybackController } from "@/lib/playback-controller";
 import LiquidGlass from "@/components/liquid-glass";
 import ServiceWorkerRegistration from "@/components/service-worker-registration";
+import LaunchScreen from "@/components/launch-screen";
 import { LanguageProvider, type Language } from "@/lib/i18n";
 
 // React 19.3 ships this stable component; the installed React 19 type package lags it.
@@ -61,6 +62,7 @@ export default function RootProviders({
   return (
     <LanguageProvider initialLanguage={initialLanguage}>
       <ServiceWorkerRegistration />
+      <LaunchScreen />
       <LiquidGlass />
       <PageTransition name="page">{children}</PageTransition>
       <audio ref={audioRef} crossOrigin="anonymous" preload="metadata" playsInline hidden />

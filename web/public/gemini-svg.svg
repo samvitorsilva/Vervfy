@@ -1,1 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc"><title id="title">Vervfy</title><desc id="desc">Mint ribbon forming a V on a dark background.</desc><rect width="512" height="512" fill="#0D1519"/><path d="M126 158 L227 352 Q254 396 281 352 L386 158" fill="none" stroke="#55E8D7" stroke-width="60" stroke-linecap="round" stroke-linejoin="round"/><path d="M310 215 L386 158" fill="none" stroke="#A4FFF1" stroke-width="60" stroke-linecap="round"/><path d="M126 158 L181 255" fill="none" stroke="#39C9BA" stroke-width="60" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">Vervfy</title><desc id="desc">Dark flowing V cut into a mint square</desc>
+<defs><linearGradient id="mint" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08E7B9"/><stop offset="1" stop-color="#00CFAF"/></linearGradient></defs>
+<rect width="512" height="512" rx="112" fill="url(#mint)"/>
+<path fill="#071018" d="M96 146c-5-10 2-18 14-18h50c25 0 40 10 52 34l66 134 28-102c5-17 13-22 26-20 31 5 58 23 72 51 8 15 12 34 7 47-3 8-10 9-15 1-15-23-31-36-50-42l-30 117c-10 39-32 60-69 60-31 0-52-17-66-46L96 146Z"/>
+</svg>
