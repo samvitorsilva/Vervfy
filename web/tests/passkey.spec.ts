@@ -23,7 +23,7 @@ async function signInAndOpenAccount(page: Page) {
   localUrl.pathname = "/login";
   await page.goto(localUrl.href);
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   const accountLoaded = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/me" && response.ok(),

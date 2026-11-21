@@ -1,6 +1,7 @@
 "use client";
 
 import { PasswordStrength } from "@/components/ui/password-strength";
+import { PasswordInput } from "@/components/auth/password-input";
 import { useId, useState } from "react";
 import { useLanguage } from "@/lib/i18n";
 
@@ -11,9 +12,8 @@ export function PasswordStrengthDemo() {
   return (
     <div className="mx-auto w-full max-w-[320px]">
       <label htmlFor={id} className="block text-[13px] font-medium text-stone-700 dark:text-stone-200">{t("New password")}</label>
-      <input
+      <PasswordInput
         id={id}
-        type="password"
         value={value}
         autoComplete="new-password"
         spellCheck={false}

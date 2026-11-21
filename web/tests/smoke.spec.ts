@@ -302,7 +302,7 @@ async function loadMockPlaybackTrack(
 async function logInToMockLibrary(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 }
@@ -370,7 +370,7 @@ test("playlist add-songs dialog searches and filters the library", async ({ page
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await loadMockPlaybackTrack(page, "Miles & Miles", 57, "AJ Vitanza");
@@ -407,7 +407,7 @@ test("track three-dots menu stays within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 640 });
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "menu-position", 58);
@@ -440,7 +440,7 @@ test("sleep timer can be scheduled and cancelled from the player", async ({ page
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "sleep-timer", 59);
@@ -474,7 +474,7 @@ test("sleep timer is available from the mobile and tablet player menu", async ({
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "mobile-sleep-timer", 60);
@@ -512,7 +512,7 @@ test("login page loads its CSRF token from the JSON API", async ({ page }) => {
   expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
-  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Log in" })).toBeEnabled({
     timeout: 30_000,
   });
@@ -598,13 +598,13 @@ test("Spanish language selection persists across page loads", async ({ page }) =
 test("login displays JSON authentication errors", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("invalid-user");
-  await page.getByLabel("Password").fill("invalid-password");
+  await page.getByLabel("Password", { exact: true }).fill("invalid-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.locator(".auth-error[role='alert']")).toHaveText(
     "Incorrect username or password",
   );
-  await expect(page.getByLabel("Password")).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByLabel("Password")).toBeFocused();
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Password", { exact: true })).toBeFocused();
 });
 
 test("registration gives live password strength and byte-limit guidance", async ({ page }) => {
@@ -642,7 +642,7 @@ test("tablet and mobile can open the full now-playing screen", async ({ page }) 
   await page.goto("/login");
   await page.evaluate(() => localStorage.removeItem("vervfy:list-mode"));
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
@@ -851,7 +851,7 @@ test("library loading skeleton matches the desktop and mobile layouts", async ({
   await page.route("**/api/me", delayLibraryRequest);
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 
@@ -882,7 +882,7 @@ test("disabled LRCLIB lookup makes no external lyrics request", async ({ page })
   });
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
@@ -911,7 +911,7 @@ test("lyrics appear before a slow embedded-audio lookup finishes", async ({ page
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "Fast lyrics", 59, "AJ Vitanza");
@@ -982,7 +982,7 @@ test("French lyrics screen can retry a temporary LRCLIB failure", async ({ page 
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await page.evaluate(() => localStorage.setItem("vervfy:language", "fr"));
@@ -1023,7 +1023,7 @@ test("cached plain lyrics upgrade to an automatically synced copy", async ({ pag
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const title = "Miles & Miles";
@@ -1073,7 +1073,7 @@ test("lyrics lookup rejects timestamps from a different-duration recording", asy
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const title = "Duration mismatch";
@@ -1107,7 +1107,7 @@ test("lyrics lookup rejects a synced match from a different album", async ({ pag
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const title = "Album mismatch";
@@ -1142,7 +1142,7 @@ test("lyrics lookup rejects timestamps past the end of the track", async ({ page
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const title = "Out of range timestamp";
@@ -1177,7 +1177,7 @@ test("known early LRCLIB lyrics are delayed by 1.8 seconds", async ({ page }) =>
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 
@@ -1224,7 +1224,7 @@ test("known early LRCLIB lyrics are delayed by 1.8 seconds", async ({ page }) =>
 test("track cover can be changed and reverted in the library", async ({ page }) => {
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
@@ -1265,7 +1265,7 @@ test("artist image editor previews and saves an uploaded photo", async ({
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Your library is empty" })).toBeVisible();
@@ -1362,7 +1362,7 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = page.locator(".card").filter({ hasText: track.title });
@@ -1503,7 +1503,7 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator(".card").filter({ hasText: "Most played" })).toBeVisible();
@@ -1621,7 +1621,7 @@ test("mobile player menu opens MusicBrainz cover art information", async ({ page
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 
@@ -1704,7 +1704,7 @@ test("mobile navigation and keyboard shortcuts remain usable", async ({ page }) 
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await page.setViewportSize({ width: 360, height: 812 });
@@ -1794,7 +1794,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
   await expect(page.locator(".rail.glass")).toBeVisible();
@@ -2138,7 +2138,7 @@ test("playback refreshes an expired signed Storage URL once", async ({ page }) =
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
 
@@ -2197,7 +2197,7 @@ test("playback recovers from a transient media request failure without changing 
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "transient-network", 52);
@@ -2253,7 +2253,7 @@ test("playback stops after bounded retries on a permanent media error", async ({
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "unsupported-audio", 53);
@@ -2291,7 +2291,7 @@ test("playback gives up after its bounded network retries", async ({ page }) => 
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   const trackCard = await loadMockPlaybackTrack(page, "unavailable-network", 54);
@@ -2329,7 +2329,7 @@ test("artist About section stops loading after profile lookup failures", async (
   );
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/$/);
   await loadMockPlaybackTrack(page, "artist-bio-unavailable", 55);
@@ -2444,7 +2444,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
 
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   const accountLoaded = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/me" &&
@@ -2697,7 +2697,7 @@ test("real-backend login, upload, playback, seek, playlist, and Range flow", asy
 
   await page.goto("/login");
   await page.getByLabel("Username").fill(username!);
-  await page.getByLabel("Password").fill(password!);
+  await page.getByLabel("Password", { exact: true }).fill(password!);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page)
     .toHaveURL(/\/$/, { timeout: 15_000 })

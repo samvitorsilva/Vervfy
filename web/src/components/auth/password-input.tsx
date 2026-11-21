@@ -1,18 +1,18 @@
 "use client";
 
-import { useState, type ComponentProps } from "react";
+import { useId, useState, type ComponentProps } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
 
 type PasswordInputProps = Omit<ComponentProps<"input">, "type"> & {
-  allowReveal?: boolean;
   confirmation?: boolean;
 };
 
-export function PasswordInput({ allowReveal = true, confirmation = false, ...props }: PasswordInputProps) {
+export function PasswordInput({ confirmation = false, ...props }: PasswordInputProps) {
   const [visible, setVisible] = useState(false);
+  const generatedId = useId();
+  const inputId = props.id ?? generatedId;
   const { t } = useLanguage();
-  if (!allowReveal) return <input {...props} type="password" />;
 
   const label = confirmation
     ? visible ? "Hide confirmation password" : "Show confirmation password"
@@ -20,17 +20,18 @@ export function PasswordInput({ allowReveal = true, confirmation = false, ...pro
   const Icon = visible ? EyeOff : Eye;
 
   return (
-    <div className="auth-password-input">
-      <input {...props} type={visible ? "text" : "password"} spellCheck={false} autoCapitalize="none" autoCorrect="off" />
+    <span className="auth-password-input">
+      <input {...props} id={inputId} type={visible ? "text" : "password"} spellCheck={false} autoCapitalize="none" autoCorrect="off" />
       <button
         type="button"
         className="auth-password-toggle"
         aria-label={t(label)}
-        aria-controls={props.id}
+        aria-controls={inputId}
+        disabled={props.disabled}
         onClick={() => setVisible((current) => !current)}
       >
         <Icon size={18} aria-hidden="true" />
       </button>
-    </div>
+    </span>
   );
 }

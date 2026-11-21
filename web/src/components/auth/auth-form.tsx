@@ -300,7 +300,6 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
               id="password"
               name="password"
               className={passwordIncorrect ? "password-incorrect" : undefined}
-              allowReveal={!isLogin}
               autoComplete={isLogin ? "current-password" : "new-password"}
               minLength={isLogin ? undefined : 8}
               required

@@ -27,7 +27,7 @@ test("Google sign-in and sign-up appear only when the server enables OAuth", asy
     "href",
     "/api/auth/google/start?purpose=signup",
   );
-  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
 });
 
 test("Google onboarding asks only for a unique username", async ({ page }) => {
@@ -42,7 +42,7 @@ test("Google onboarding asks only for a unique username", async ({ page }) => {
     page.getByRole("heading", { name: "Choose your username" }),
   ).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
-  await expect(page.getByLabel("Password")).toHaveCount(0);
+  await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Email (optional, not used to sign in)")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create account" })).toBeVisible();
 });
@@ -67,7 +67,7 @@ test("account settings expose explicit Google unlinking with password proof", as
   });
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
-  await page.getByLabel("Password").fill("playwright-test-password");
+  await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
   const accountLoaded = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/api/me" &&

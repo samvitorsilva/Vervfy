@@ -15,6 +15,7 @@ import {
 } from "@/lib/passkey-client";
 import type { Account } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
+import { PasswordInput } from "@/components/auth/password-input";
 import AppLoadingSkeleton from "@/components/app-loading-skeleton";
 import HoldButton from "@/components/kokonutui/hold-button";
 import { artistNames } from "@/components/artist-explorer";
@@ -859,7 +860,7 @@ export default function AccountSettings({
                   {account.has_password ? (
                     <>
                       <span>{t("Current password")}</span>
-                      <input type="password" autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
+                      <PasswordInput aria-label={t("Current password")} autoComplete="current-password" required value={emailPassword} onChange={(event) => setEmailPassword(event.target.value)} />
                     </>
                   ) : (
                     <span>{t("Verify your Google account before saving.")}</span>
@@ -906,7 +907,7 @@ export default function AccountSettings({
                 {account.has_password ? (
                   <label className="acct-field">
                     <span>{t("Current password")}</span>
-                    <input name="current_password" type="password" autoComplete="current-password" required />
+                    <PasswordInput name="current_password" aria-label={t("Current password")} autoComplete="current-password" required />
                   </label>
                 ) : account.google_oauth_enabled ? (
                   <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("password_add")}>
@@ -915,7 +916,7 @@ export default function AccountSettings({
                 ) : <p className="acct-form-msg">{t("Google sign-in is currently unavailable.")}</p>}
                 <label className="acct-field">
                   <span>{t(account.has_password ? "New password (min 8 characters)" : "Create password (min 8 characters)")}</span>
-                  <input name="new_password" type="password" autoComplete="new-password" minLength={8} required />
+                  <PasswordInput name="new_password" aria-label={t(account.has_password ? "New password (min 8 characters)" : "Create password (min 8 characters)")} autoComplete="new-password" minLength={8} required />
                 </label>
                 {!account.has_password && passkeyFeatureState === "enabled" && passkeyBrowserSupported && passkeyMethods?.passkey_count ? (
                   <button className="btn" type="button" disabled={passwordPasskeyBusy || pending} onClick={() => void createPasswordWithPasskey()}>
@@ -958,7 +959,7 @@ export default function AccountSettings({
                 <form className="acct-form acct-inline-editor" onSubmit={linkGoogle}>
                   <label className="acct-field">
                     <span>{t("Current password")}</span>
-                    <input type="password" autoComplete="current-password" required value={googleLinkPassword} onChange={(event) => setGoogleLinkPassword(event.target.value)} />
+                    <PasswordInput aria-label={t("Current password")} autoComplete="current-password" required value={googleLinkPassword} onChange={(event) => setGoogleLinkPassword(event.target.value)} />
                   </label>
                   <p className="acct-form-msg">{t("Google will ask you to verify your account before linking.")}</p>
                   <button className="btn btn-primary" type="submit" disabled={pending}>{t("Continue with Google")}</button>
@@ -968,7 +969,7 @@ export default function AccountSettings({
                 <form className="acct-form acct-inline-editor" onSubmit={unlinkGoogle}>
                   <label className="acct-field">
                     <span>{t("Current password")}</span>
-                    <input type="password" autoComplete="current-password" required value={googleUnlinkPassword} onChange={(event) => setGoogleUnlinkPassword(event.target.value)} />
+                    <PasswordInput aria-label={t("Current password")} autoComplete="current-password" required value={googleUnlinkPassword} onChange={(event) => setGoogleUnlinkPassword(event.target.value)} />
                   </label>
                   <p className="acct-form-msg">{t("You must keep at least one sign-in method.")}</p>
                   <button className="btn btn-danger" type="submit">{t("Unlink Google")}</button>
@@ -1006,8 +1007,8 @@ export default function AccountSettings({
               <>
                 <label className="acct-field">
                   <span>{t("Current password")}</span>
-                  <input
-                    type="password"
+                  <PasswordInput
+                    aria-label={t("Current password")}
                     autoComplete="current-password"
                     value={passkeyPassword}
                     onChange={(event) => setPasskeyPassword(event.target.value)}
@@ -1075,7 +1076,7 @@ export default function AccountSettings({
             {account.has_password ? (
               <label className="acct-field">
                 <span>{t("Current password")}</span>
-                <input type="password" autoComplete="current-password" required value={logoutPassword} onChange={(event) => setLogoutPassword(event.target.value)} />
+                <PasswordInput aria-label={t("Current password")} autoComplete="current-password" required value={logoutPassword} onChange={(event) => setLogoutPassword(event.target.value)} />
               </label>
             ) : account.google_oauth_enabled ? (
               <button className="btn" type="button" disabled={pending} onClick={() => void startGoogleReauthentication("logout_all")}>{t("Verify with Google")}</button>
@@ -1112,7 +1113,7 @@ export default function AccountSettings({
                 {account.has_password ? (
                   <>
                     <span>{t("Current password")}</span>
-                    <input name="current_password" type="password" autoComplete="current-password" required />
+                    <PasswordInput name="current_password" aria-label={t("Current password")} autoComplete="current-password" required />
                   </>
                 ) : (
                   <span>{t("Google reauthentication is required before deletion.")}</span>
