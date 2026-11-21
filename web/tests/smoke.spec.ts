@@ -848,7 +848,6 @@ test("library loading skeleton matches the desktop and mobile layouts", async ({
   };
   await page.route("**/api/tracks", delayLibraryRequest);
   await page.route("**/api/library/state", delayLibraryRequest);
-  await page.route("**/api/me", delayLibraryRequest);
   await page.goto("/login");
   await page.getByLabel("Username").fill("playwright");
   await page.getByLabel("Password", { exact: true }).fill("playwright-test-password");
@@ -857,6 +856,8 @@ test("library loading skeleton matches the desktop and mobile layouts", async ({
 
   const loadingSkeleton = page.locator(".app-loading-skeleton");
   await expect(loadingSkeleton).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
+  await expect(page.locator('.rail[aria-hidden="true"]')).toHaveCount(0);
   await expect(loadingSkeleton).toHaveAttribute("aria-busy", "true");
   await expect(loadingSkeleton.locator(".app-skeleton-track-card")).toHaveCount(12);
 

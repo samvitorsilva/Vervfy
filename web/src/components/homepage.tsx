@@ -6,7 +6,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 // Keep the large private player out of the public landing-page bundle.
 const LibraryApp = lazy(() => import("@/components/library-app"));
-import { LibraryLoadingShell } from "@/components/page-loading";
+import { LibraryLoadingScreen } from "@/components/page-loading";
 import SiteFooter from "@/components/site-footer";
 import { useLanguage } from "@/lib/i18n";
 
@@ -41,11 +41,11 @@ export default function Homepage({ hasSessionCookie = false }: { hasSessionCooki
     };
   }, [sessionAttempt]);
 
-  if (sessionStatus === "checking") return <LibraryLoadingShell />;
+  if (sessionStatus === "checking") return <LibraryLoadingScreen />;
 
   if (sessionStatus === "authenticated") {
     return (
-      <Suspense fallback={<LibraryLoadingShell />}>
+      <Suspense fallback={<LibraryLoadingScreen />}>
         <LibraryApp />
       </Suspense>
     );
