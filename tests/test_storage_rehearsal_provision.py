@@ -1,15 +1,19 @@
 import hashlib
+import json
 import os
 import shutil
 import socket
 import subprocess
 import uuid
 
+import httpx
 import pytest
 import sqlalchemy as sa
 
+from scripts import prepare_storage_rehearsal_baseline as preparation
 from scripts import storage_rehearsal as rehearsal
 from scripts import storage_rehearsal_provision as provision
+from scripts import upload_storage_rehearsal_fixtures as uploader
 from storage_inventory import plan_digest
 
 
@@ -135,6 +139,82 @@ def make_profile(cert, configured_revision):
     return rehearsal.Profile(config, digest, migration_url, runtime_url)
 
 
+def make_bundle(profile, path):
+    files, entries = preparation.fixture_files(profile)
+    path.mkdir(mode=0o700)
+    (path / "fixtures").mkdir(mode=0o700)
+    records = {}
+    for relative, data in files.items():
+        artifact = path / relative
+        artifact.write_bytes(data)
+        artifact.chmod(0o600)
+        records[relative] = {
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    inventory = {
+        "entries": entries,
+        "total_bytes": sum(entry["bytes"] for entry in entries),
+        "physical_cleanup_enabled": False,
+    }
+    inventory_data = json.dumps(inventory, sort_keys=True, indent=2).encode()
+    inventory_path = path / "04-fixtures.json"
+    inventory_path.write_bytes(inventory_data)
+    inventory_path.chmod(0o600)
+    records["04-fixtures.json"] = {
+        "bytes": len(inventory_data),
+        "sha256": hashlib.sha256(inventory_data).hexdigest(),
+    }
+    manifest = {
+        "purpose": "vervfy-disposable-baseline-review-bundle-v1",
+        "project_ref": profile.config["project_ref"],
+        "config_sha256": profile.digest,
+        "run_id": profile.config["run_id"],
+        "baseline": profile.config["start_revision"],
+        "ready_for_hosted_execution": False,
+        "files": records,
+    }
+    manifest_path = path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
+    manifest_path.chmod(0o600)
+    return plan_digest(manifest), entries
+
+
+def make_provider_client_factory(
+    requests, *, fail_legacy_upload=False, bad_legacy_readback=False
+):
+    uploads = {}
+
+    def create_client(profile, key):
+        def handle(request):
+            requests.append(request)
+            if request.url.path == f"/storage/v1/bucket/{profile.binding.bucket}":
+                return httpx.Response(200, json={"public": False})
+            relative = request.url.path.split(f"/{profile.binding.bucket}/", 1)[1]
+            if request.method == "POST":
+                assert request.headers["x-upsert"] == "false"
+                if fail_legacy_upload and relative.endswith("/shared.wav"):
+                    return httpx.Response(503)
+                uploads[relative] = request.content
+                return httpx.Response(201)
+            if request.method == "GET":
+                if bad_legacy_readback and relative.endswith("/shared.wav"):
+                    return httpx.Response(200, content=b"mismatched fixture")
+                content = uploads.get(relative)
+                return httpx.Response(
+                    200 if content is not None else 404,
+                    content=content or b"",
+                )
+            return httpx.Response(405)
+
+        return httpx.Client(
+            base_url=profile.binding.endpoint + "/storage/v1",
+            transport=httpx.MockTransport(handle),
+        )
+
+    return create_client
+
+
 def test_dba_url_is_project_bound_and_ca_pinned(tmp_path, monkeypatch):
     ca = tmp_path / "ca.pem"
     ca.write_bytes(b"synthetic pinned CA")
@@ -214,6 +294,23 @@ def test_local_tls_provisioning_baseline_and_legacy_seed(
 
     migration = sa.create_engine(admin_url.set(username=rehearsal.LOGIN))
     try:
+        if configured_revision == provision.BASELINE_0031:
+            with (
+                pytest.raises(RuntimeError, match="rollback probe"),
+                migration.begin() as connection,
+            ):
+                provision.baseline_0031(connection, profile)
+                raise RuntimeError("rollback probe")
+            with admin.connect() as connection:
+                assert connection.exec_driver_sql(
+                    "SELECT to_regclass('public.alembic_version') IS NULL"
+                ).scalar_one()
+                assert connection.exec_driver_sql(
+                    "SELECT to_regclass('public.users') IS NULL"
+                ).scalar_one()
+                assert connection.exec_driver_sql(
+                    "SELECT to_regnamespace('vervfy_storage') IS NULL"
+                ).scalar_one()
         with migration.begin() as connection:
             provision.baseline_0031(connection, profile)
         with admin.begin() as connection:
@@ -259,6 +356,99 @@ def test_local_tls_provisioning_baseline_and_legacy_seed(
                 "SELECT version_num FROM public.alembic_version"
             ).scalar_one()
             assert revision == configured_revision
+        if configured_revision == provision.BASELINE_0031:
+            bundle_digest, fixture_entries = make_bundle(profile, _root / "bundle")
+            requests = []
+            failing_client = make_provider_client_factory(
+                requests, fail_legacy_upload=True
+            )
+
+            def engine_factory(url):
+                return sa.create_engine(admin_url.set(username=url.username))
+
+            with pytest.raises(rehearsal.RehearsalBlocked):
+                uploader.upload_bundle(
+                    profile,
+                    _root / "bundle",
+                    bundle_digest,
+                    "synthetic-provider-key",
+                    engine_factory=engine_factory,
+                    client_factory=failing_client,
+                )
+            assert [request.method for request in requests] == ["GET", "POST"]
+            assert all(request.method != "DELETE" for request in requests)
+            with admin.connect() as connection:
+                assert tuple(
+                    connection.execute(
+                        sa.text(
+                            """SELECT o.state,o.upload_verified,j.state
+                        FROM vervfy_storage.objects AS o
+                        JOIN vervfy_storage.cleanup_jobs AS j ON j.object_id=o.id
+                        WHERE o.path=:path"""
+                        ),
+                        {"path": fixture_entries[0]["legacy_path"]},
+                    ).one()
+                ) == ("hold", False, "held")
+
+            requests.clear()
+            with pytest.raises(rehearsal.RehearsalBlocked):
+                uploader.upload_bundle(
+                    profile,
+                    _root / "bundle",
+                    bundle_digest,
+                    "synthetic-provider-key",
+                    engine_factory=engine_factory,
+                    client_factory=make_provider_client_factory(
+                        requests, bad_legacy_readback=True
+                    ),
+                )
+            assert [request.method for request in requests] == [
+                "GET",
+                "POST",
+                "GET",
+            ]
+            assert all(request.method != "DELETE" for request in requests)
+            with admin.connect() as connection:
+                assert tuple(
+                    connection.execute(
+                        sa.text(
+                            """SELECT o.state,o.upload_verified,j.state
+                            FROM vervfy_storage.objects AS o
+                            JOIN vervfy_storage.cleanup_jobs AS j ON j.object_id=o.id
+                            WHERE o.path=:path"""
+                        ),
+                        {"path": fixture_entries[0]["legacy_path"]},
+                    ).one()
+                ) == ("hold", False, "held")
+
+            requests.clear()
+            results = uploader.upload_bundle(
+                profile,
+                _root / "bundle",
+                bundle_digest,
+                "synthetic-provider-key",
+                engine_factory=engine_factory,
+                client_factory=make_provider_client_factory(requests),
+            )
+            assert len(results) == 9
+            assert results[0]["asset"] == "shared-legacy"
+            assert results[0]["references"] == ["a", "b"]
+            assert results[0]["ledger_upload_verified"] is False
+            assert [request.method for request in requests].count("POST") == 9
+            assert [request.method for request in requests].count("GET") == 10
+            assert all(request.method != "DELETE" for request in requests)
+            with admin.connect() as connection:
+                assert tuple(
+                    connection.execute(
+                        sa.text(
+                            """SELECT o.state,o.upload_verified,j.state
+                        FROM vervfy_storage.objects AS o
+                        JOIN vervfy_storage.cleanup_jobs AS j ON j.object_id=o.id
+                        WHERE o.path=:path"""
+                        ),
+                        {"path": fixture_entries[0]["legacy_path"]},
+                    ).one()
+                ) == ("hold", False, "held")
     finally:
         migration.dispose()
 

@@ -59,7 +59,7 @@ def test_bundle_is_private_pinned_deterministic_and_never_connects(
     assert manifest["baseline"] == baseline
     assert manifest["ready_for_hosted_execution"] is False
     assert not any("no hosted" in blocker for blocker in manifest["blockers"])
-    assert any("legacy WAV" in blocker for blocker in manifest["blockers"])
+    assert any("tenant-RLS" in blocker for blocker in manifest["blockers"])
     phases = prep.rehearsal.read_private(output / "03-baseline-phases.json")
     assert "storage_rehearsal_provision.py baseline-0031" in next(
         phase["required"]

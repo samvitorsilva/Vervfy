@@ -876,10 +876,13 @@ production/provider/PostgreSQL settings, and never downgrades or deletes:
    `seed-legacy` creates the exact runtime approval marker and registers the
    shared path as one unowned, held, upload-unverified legacy obligation.
    `approve-0031` verifies that state for the 0031 rehearsal.
-4. The existing uploader still handles only the eight managed assets using the
-   restricted `app_runtime` role, create-only requests and matching readbacks.
-   It does not attach references or upload the shared legacy WAV. Never set
-   verification flags directly or enable cleanup to make setup pass.
+4. `scripts/upload_storage_rehearsal_fixtures.py` create-only uploads and reads
+   back the shared legacy WAV plus eight managed assets. Before and after the
+   provider operation, it verifies the two pre-trigger seeded track references
+   independently under `app_runtime` tenant RLS. It does not rewrite legacy
+   references after lifecycle triggers are installed; the shared ledger entry
+   remains unowned, held and `upload_verified=false`. Never set verification
+   flags directly or enable cleanup to make setup pass.
 5. For a 0033 profile only, `baseline-0033` applies unchanged 0032/0033 after
    namespace initialization and held legacy registration, then verifies claim
    permissions are disabled. The existing snapshot/upgrade/recover/verify/
@@ -912,15 +915,13 @@ digest:
 ```
 
 **Remaining hosted rehearsal blockers:** the bootstrap/baseline/legacy-ledger
-executor has not had an independent hosted review or run against an approved
-disposable Free-tier project. Project ownership/tier, DBA and migrator secrets,
-CA/connectivity and provider behavior remain unverified. Shared legacy WAV
-upload/readback and tenant-scoped fixture attachment are not implemented; the
-existing uploader covers only the eight managed assets and has local
-mock-provider evidence. Cross-project restore/immutable-namespace policy and
-backup restoration also remain separate readiness requirements. Do not use bare
-Alembic, change a production target constant, stamp revisions or grant BYPASSRLS
-to bypass any gap.
+executor and uploader have not had an independent hosted review or run against
+an approved disposable Free-tier project. Project ownership/tier, DBA and
+migrator/provider secrets, CA/connectivity and provider behavior remain
+unverified; upload/readback and tenant-RLS results are local-only. Cross-project
+restore/immutable-namespace policy and backup restoration also remain separate
+readiness requirements. Do not use bare Alembic, change a production target
+constant, stamp revisions or grant BYPASSRLS to bypass any gap.
 
 The preparation tests validate both baselines, deterministic private artifacts,
 no engine construction or ambient-secret copying, refusal of unsafe targets and

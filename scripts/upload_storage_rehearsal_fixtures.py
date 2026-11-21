@@ -181,6 +181,64 @@ def verify_migration_guard(profile, engine_factory):
         engine.dispose()
 
 
+def _verify_legacy_ledger(profile, entry, engine_factory):
+    engine = engine_factory(profile.migration_url)
+    try:
+        with engine.begin() as connection:
+            rehearsal.guard(connection, profile, head=BASELINE)
+            connection.exec_driver_sql("SET LOCAL ROLE vervfy_storage_lifecycle_owner")
+            row = connection.execute(
+                text("""SELECT n.namespace_id::text,o.path,o.kind,o.classification,
+                    o.state,o.tenant_id,o.reservation_token,o.upload_verified,
+                    j.requested_by,j.state,j.attempts,j.claim_token,j.lease_until
+                    FROM vervfy_storage.objects AS o
+                    JOIN vervfy_storage.namespaces AS n ON n.id=o.namespace_id
+                    JOIN vervfy_storage.cleanup_jobs AS j ON j.object_id=o.id
+                    WHERE o.path=:path"""),
+                {"path": entry["legacy_path"]},
+            ).one_or_none()
+            expected = (
+                str(profile.binding.namespace_id),
+                entry["legacy_path"],
+                "legacy",
+                "legacy",
+                "hold",
+                None,
+                None,
+                False,
+                None,
+                "held",
+                0,
+                None,
+                None,
+            )
+            if row is None or tuple(row) != expected:
+                raise rehearsal.RehearsalBlocked(
+                    "Shared legacy object must remain unowned and held"
+                )
+    finally:
+        engine.dispose()
+
+
+def _verify_legacy_references(connection, entry):
+    for actor in entry["references"]:
+        connection.execute(
+            text("SELECT set_config('app.current_user_id',:actor,true)"),
+            {"actor": actor},
+        )
+        rows = connection.execute(
+            text("""SELECT id,user_id,storage_path FROM public.tracks
+                WHERE storage_path=:path ORDER BY id"""),
+            {"path": entry["legacy_path"]},
+        ).all()
+        if [tuple(row) for row in rows] != [
+            (f"legacy-{actor}", actor, entry["legacy_path"])
+        ]:
+            raise rehearsal.RehearsalBlocked(
+                "Shared legacy track reference failed tenant RLS verification"
+            )
+
+
 def _assert_disposable_profile(profile):
     config = profile.config
     reference = config.get("project_ref")
@@ -350,13 +408,6 @@ def _runtime_preflight(connection, profile):
         raise rehearsal.RehearsalBlocked(
             "Fixture uploader runtime role is not restricted"
         )
-    revision = (
-        connection.exec_driver_sql("SELECT version_num FROM public.alembic_version")
-        .scalars()
-        .all()
-    )
-    if revision != [BASELINE]:
-        raise rehearsal.RehearsalBlocked("Fixture upload requires exact 0031 baseline")
     connection.execute(
         text(
             "SELECT vervfy_storage.validate_namespace(:id,:environment,:endpoint,:bucket)"
@@ -391,7 +442,7 @@ def _reserve(connection, profile, actor, kind, extension):
         raise rehearsal.RehearsalBlocked(
             "Database returned an unexpected fixture identity"
         )
-    return row.object_id, row.reservation_token, path
+    return row.object_id, row.upload_token, path
 
 
 def _advance(engine, actor, object_id, token, state):
@@ -407,17 +458,35 @@ def _advance(engine, actor, object_id, token, state):
 
 
 def upload_bundle(
-    profile, bundle, bundle_digest, key, *, engine_factory=rehearsal.engine_for
+    profile,
+    bundle,
+    bundle_digest,
+    key,
+    *,
+    engine_factory=rehearsal.engine_for,
+    client_factory=_provider_client,
 ):
     _assert_disposable_profile(profile)
     entries, files = load_bundle(bundle, profile, bundle_digest)
-    verify_migration_guard(profile, engine_factory)
+    _, expected_entries = preparation.fixture_files(profile)
+    legacy_entries = [
+        entry for entry in expected_entries if entry["classification"] == "legacy"
+    ]
+    if len(legacy_entries) != 1:
+        raise rehearsal.RehearsalBlocked("Expected exactly one shared legacy fixture")
+    legacy_entry = legacy_entries[0]
+    legacy_data = files.get(legacy_entry["file"])
+    if legacy_data is None:
+        raise rehearsal.RehearsalBlocked("Shared legacy fixture bytes are missing")
+    _verify_legacy_ledger(profile, legacy_entry, engine_factory)
     runtime = engine_factory(profile.runtime_url)
-    client = _provider_client(profile, key)
+    client = None
     results = []
     try:
+        client = client_factory(profile, key)
         with runtime.begin() as connection:
             _runtime_preflight(connection, profile)
+            _verify_legacy_references(connection, legacy_entry)
             for actor in rehearsal.TENANTS:
                 connection.execute(
                     text("SELECT set_config('app.current_user_id',:actor,true)"),
@@ -435,6 +504,25 @@ def upload_bundle(
                         "Managed fixture identities already exist; do not retry uploads"
                     )
         verify_private_bucket(client, profile.binding.bucket)
+        upload_verified(
+            client,
+            profile.binding.bucket,
+            legacy_entry["legacy_path"],
+            legacy_data,
+            "audio/wav",
+        )
+        results.append(
+            {
+                "asset": legacy_entry["asset"],
+                "classification": "legacy",
+                "path": legacy_entry["legacy_path"],
+                "bytes": len(legacy_data),
+                "sha256": hashlib.sha256(legacy_data).hexdigest(),
+                "references": legacy_entry["references"],
+                "ledger_state": "hold",
+                "ledger_upload_verified": False,
+            }
+        )
         for entry in entries:
             actor = entry["tenant"]
             data = files[entry["file"]]
@@ -470,9 +558,13 @@ def upload_bundle(
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
             )
+        with runtime.begin() as connection:
+            _runtime_preflight(connection, profile)
+            _verify_legacy_references(connection, legacy_entry)
         return results
     finally:
-        client.close()
+        if client is not None:
+            client.close()
         runtime.dispose()
 
 

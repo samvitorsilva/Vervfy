@@ -218,7 +218,7 @@ def prepare(config_path, approved_digest, ca_file, confirm_project, output):
         },
         {
             "phase": "3-provider-fixtures",
-            "required": "Use the existing uploader only for its eight managed assets; legacy WAV upload/readback and tenant-scoped fixture attachment remain separate, unimplemented hosted work. Never fabricate upload_verified values or run cleanup",
+            "required": "Use the create-only uploader for the shared legacy WAV and eight managed assets; it verifies the pre-trigger shared track references independently under each tenant's RLS context. Keep the legacy ledger held and upload-unverified; never fabricate verification values or run cleanup",
         },
         {
             "phase": "4-optional-0033",
@@ -272,7 +272,7 @@ def prepare(config_path, approved_digest, ca_file, confirm_project, output):
         "blockers": [
             "independent review and hosted acceptance of disposable-only bootstrap/baseline/legacy-ledger executor",
             "approved disposable Free-tier project, target credentials, verified CA and provider connectivity",
-            "legacy WAV provider upload/readback and tenant-scoped fixture attachment",
+            "hosted legacy/managed provider upload-readback and tenant-RLS validation",
             "hosted 0031/0033 rehearsal plus backup/restore readiness",
         ],
         "files": {
