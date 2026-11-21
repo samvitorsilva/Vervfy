@@ -58,6 +58,17 @@ def test_bundle_is_private_pinned_deterministic_and_never_connects(
     assert plan_digest(manifest) == digest
     assert manifest["baseline"] == baseline
     assert manifest["ready_for_hosted_execution"] is False
+    assert not any("no hosted" in blocker for blocker in manifest["blockers"])
+    assert any("legacy WAV" in blocker for blocker in manifest["blockers"])
+    phases = prep.rehearsal.read_private(output / "03-baseline-phases.json")
+    assert "storage_rehearsal_provision.py baseline-0031" in next(
+        phase["required"]
+        for phase in phases["phases"]
+        if phase["phase"] == "1-through-0031"
+    )
+    assert any(
+        phase["phase"] == "2-namespace-and-legacy-ledger" for phase in phases["phases"]
+    )
     assert stat.S_IMODE(output.stat().st_mode) == 0o700
     for name, entry in manifest["files"].items():
         artifact = output / name

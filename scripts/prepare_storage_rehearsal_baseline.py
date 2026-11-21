@@ -206,35 +206,27 @@ def prepare(config_path, approved_digest, ca_file, confirm_project, output):
     phases = [
         {
             "phase": "0-project-and-roles",
-            "required": "Independently validate the new Free project's direct host/TLS/CA; DBA-provision restricted roles and grantor graph, fresh public ownership and CONNECT/CREATE prerequisites; private provisioning approval marker; then read-only preflight",
+            "required": "Independently validate the disposable project's direct host/TLS/CA, then use storage_rehearsal_provision.py bootstrap to create only the reviewed roles, memberships, fresh-schema prerequisites and private approval marker; run the read-only preflight",
         },
         {
-            "phase": "1-through-0028",
-            "required": "A separately reviewed target-bound baseline executor must apply unchanged migrations through 0028 in one transaction; do not use a production/staging runner, stamp or skip guards",
+            "phase": "1-through-0031",
+            "required": "Use storage_rehearsal_provision.py baseline-0031 to apply unchanged migrations through 0028, seed only synthetic tenants a/b and their shared legacy references under tenant contexts, then apply unchanged 0029-0031 in one transaction; stop on any guard failure and never stamp",
         },
         {
-            "phase": "2-legacy-fixture",
-            "required": "Create only synthetic tenants a/b and legacy shared references with tenant contexts before lifecycle triggers are installed; retain credentials/artwork fixtures privately",
+            "phase": "2-namespace-and-legacy-ledger",
+            "required": "At exactly 0031, use storage_rehearsal_provision.py initialize-namespace with the DBA, then seed-legacy with the restricted migrator; the legacy object remains unowned, held and upload-unverified",
         },
         {
-            "phase": "3-through-0031",
-            "required": "Apply unchanged 0029-0031 with their role/ACL guards; stop on any unsupported managed grantor; commit only after preservation checks",
+            "phase": "3-provider-fixtures",
+            "required": "Use the existing uploader only for its eight managed assets; legacy WAV upload/readback and tenant-scoped fixture attachment remain separate, unimplemented hosted work. Never fabricate upload_verified values or run cleanup",
         },
         {
-            "phase": "4-namespace",
-            "required": "At exactly 0031, independently guarded privileged DBA calls existing initialize_namespace with this immutable disposable binding and false cleanup flag; do not grant BYPASSRLS to make it pass",
+            "phase": "4-optional-0033",
+            "required": "For a 0033 profile only, use storage_rehearsal_provision.py baseline-0033 after namespace initialization and held legacy registration; this applies unchanged 0032/0033 and verifies the disabled claim permissions",
         },
         {
-            "phase": "5-provider-fixtures",
-            "required": "Register legacy identity as held without ownership adoption; reserve fresh managed identities through existing 0031 allocator, create-only upload fixture bytes, verify matching reads, advance via existing lifecycle functions, then attach tenant-scoped references and pending obligations; no fabricated upload_verified values",
-        },
-        {
-            "phase": "6-optional-0033",
-            "required": "If configured baseline is 0033, apply unchanged 0032/0033 only after 0031 namespace bootstrap; never initialize namespace at unsupported 0033 or jump to 0034",
-        },
-        {
-            "phase": "7-approval-and-snapshot",
-            "required": "Create exact runtime vervfy_rehearsal.approval marker owned by restricted migrator, verify no other users/fixtures exist, and use existing storage_rehearsal snapshot/recover/upgrade/verify/plan/apply workflow",
+            "phase": "5-approval-and-snapshot",
+            "required": "For a 0031 profile, use storage_rehearsal_provision.py approve-0031 after held legacy registration; then verify the exact baseline and use the existing storage_rehearsal snapshot/recover/upgrade/verify/plan/apply workflow",
         },
     ]
     binding = {
@@ -278,10 +270,10 @@ def prepare(config_path, approved_digest, ca_file, confirm_project, output):
         "baseline": profile.config["start_revision"],
         "ready_for_hosted_execution": False,
         "blockers": [
-            "reviewed target-bound DBA/role bootstrap executor",
-            "guarded fresh-schema baseline executor",
-            "legacy registration and tenant-scoped fixture attachment seeder",
-            "dedicated project/credentials/CA and provider rehearsal",
+            "independent review and hosted acceptance of disposable-only bootstrap/baseline/legacy-ledger executor",
+            "approved disposable Free-tier project, target credentials, verified CA and provider connectivity",
+            "legacy WAV provider upload/readback and tenant-scoped fixture attachment",
+            "hosted 0031/0033 rehearsal plus backup/restore readiness",
         ],
         "files": {
             name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}

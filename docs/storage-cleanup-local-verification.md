@@ -859,32 +859,40 @@ The private approval marker must be created only after that independent target
 check. Do not run this SQL through a production console or treat the marker as
 an alternative to TLS/project validation.
 
-Provisioning phases are deliberately explicit:
+Provisioning is implemented in `scripts/storage_rehearsal_provision.py` as
+separate guarded operations. It accepts only the pinned disposable target,
+requires explicit DBA and migrator URLs as appropriate, rejects ambient
+production/provider/PostgreSQL settings, and never downgrades or deletes:
 
-1. Independently approve the new project, prepare restricted roles/memberships,
-   fresh public-schema ownership, DBA approval marker and migration capabilities.
-   Check the read-only preflight through a reviewed disposable connection.
-2. A target-bound baseline executor applies unchanged migrations through 0028.
-   Seed synthetic tenants and shared legacy references under their tenant
-   contexts before lifecycle reference triggers are installed.
-3. Apply unchanged 0029-0031 with every role/ACL guard intact. Stop rather than
-   modifying provider-managed grantors if the graph does not satisfy the guards.
-4. At **exactly 0031**, a separately authorized privileged DBA invokes existing
-   `initialize_namespace` with the new disposable binding and cleanup false.
-   The existing helper intentionally does not accept 0033 initialization.
-5. At exactly 0031, `scripts/upload_storage_rehearsal_fixtures.py` can reserve and
-   upload the eight managed assets using the restricted `app_runtime` role,
-   create-only requests and full matching readbacks. It validates the migrator
-   guard, runtime identity, immutable namespace, private bucket and exact fixture
-   hashes. It refuses pre-existing managed rows, never retries, attaches
-   references, or deletes objects, and marks uncertain reservations held. The
-   shared legacy identity and tenant-scoped attachment rows still require a
-   separately reviewed seeder. Do not set verification flags directly or enable
-   cleanup to make the setup pass.
-6. For the 0033 variant only, apply unchanged 0032/0033 after namespace bootstrap.
-   Create the separate runtime `vervfy_rehearsal.approval` marker owned by the
-   restricted migrator, then use the existing snapshot/upgrade/recover/verify/
-   plan/apply rehearsal workflow.
+1. `bootstrap` creates only the reviewed restricted roles, exact membership
+   edges, fresh-schema prerequisites and DBA-owned provisioning marker. It
+   leaves LOGIN passwords unset for the separate secret-management process.
+2. `baseline-0031` applies unchanged migrations through 0028, seeds only users
+   `a`/`b` and their shared legacy path under tenant contexts, then applies
+   unchanged 0029-0031 inside one transaction. It refuses populated schemas,
+   never stamps, and verifies forced RLS and the 0031 cleanup-claim grants.
+3. At exactly 0031, `initialize-namespace` invokes the existing helper with the
+   immutable disposable binding and `physical_cleanup_enabled=false`.
+   `seed-legacy` creates the exact runtime approval marker and registers the
+   shared path as one unowned, held, upload-unverified legacy obligation.
+   `approve-0031` verifies that state for the 0031 rehearsal.
+4. The existing uploader still handles only the eight managed assets using the
+   restricted `app_runtime` role, create-only requests and matching readbacks.
+   It does not attach references or upload the shared legacy WAV. Never set
+   verification flags directly or enable cleanup to make setup pass.
+5. For a 0033 profile only, `baseline-0033` applies unchanged 0032/0033 after
+   namespace initialization and held legacy registration, then verifies claim
+   permissions are disabled. The existing snapshot/upgrade/recover/verify/
+   plan/apply workflow remains separate.
+
+The local TLS PostgreSQL integration test now exercises both complete 0031 and
+0033 paths, repeat-safe namespace/legacy registration, unset role passwords,
+forced RLS, held legacy state, disabled physical cleanup and refusal to bootstrap
+over populated migration history. This verifies the executor against a fresh
+local PostgreSQL cluster only; it is not hosted project validation.
+The focused provisioning/preparation/uploader/rehearsal suite passed **58 tests**;
+Ruff and whitespace checks passed. Alembic emitted its existing
+`path_separator` deprecation warning.
 
 For upload execution, provide only the explicit rehearsal variables
 `VERVFY_REHEARSAL_DATABASE_URL`, `VERVFY_REHEARSAL_RUNTIME_URL`, and
@@ -903,15 +911,16 @@ digest:
   --bundle-sha256 "$APPROVED_BUNDLE_SHA256"
 ```
 
-**Remaining hosted rehearsal blockers:** there is no hosted DBA/role bootstrap
-executor, guarded empty-schema baseline executor, legacy registration/attachment
-seeder, or confirmed Free project/credentials/CA connectivity/provider response.
-The uploader is covered by local mock-provider tests only and must be reviewed
-and exercised on a separately approved disposable Free project before it is
-considered hosted-verified. Cross-project restore/immutable-namespace policy
-and backup restoration also remain separate readiness requirements. Do not use
-bare Alembic, change a production target constant, stamp revisions or grant
-BYPASSRLS to bypass any gap.
+**Remaining hosted rehearsal blockers:** the bootstrap/baseline/legacy-ledger
+executor has not had an independent hosted review or run against an approved
+disposable Free-tier project. Project ownership/tier, DBA and migrator secrets,
+CA/connectivity and provider behavior remain unverified. Shared legacy WAV
+upload/readback and tenant-scoped fixture attachment are not implemented; the
+existing uploader covers only the eight managed assets and has local
+mock-provider evidence. Cross-project restore/immutable-namespace policy and
+backup restoration also remain separate readiness requirements. Do not use bare
+Alembic, change a production target constant, stamp revisions or grant BYPASSRLS
+to bypass any gap.
 
 The preparation tests validate both baselines, deterministic private artifacts,
 no engine construction or ambient-secret copying, refusal of unsafe targets and
