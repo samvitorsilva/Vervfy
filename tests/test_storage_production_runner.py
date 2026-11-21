@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy.engine import URL
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -111,6 +112,32 @@ def test_current_reviewed_migration_chain_reaches_quota_head():
     assert runner.EXPECTED_MIGRATION_COUNT == 34
 
 
+def test_production_target_accepts_exact_0032_start_revision(tmp_path):
+    ca_file = tmp_path / "ca.pem"
+    ca_file.write_text("synthetic CA bundle")
+    url = URL.create(
+        "postgresql+psycopg",
+        username=runner.PRODUCTION_MIGRATION_ROLE,
+        password="synthetic-only",
+        host=f"db.{runner.PRODUCTION_PROJECT_REF}.supabase.co",
+        port=5432,
+        database="postgres",
+        query={"sslmode": "verify-full", "sslrootcert": str(ca_file)},
+    )
+    target = runner.load_target(
+        {
+            "VERVFY_ENVIRONMENT": "production",
+            "VERVFY_PRODUCTION_PROJECT_REF": runner.PRODUCTION_PROJECT_REF,
+            "VERVFY_PRODUCTION_EXPECTED_DATABASE": "postgres",
+            "VERVFY_PRODUCTION_EXPECTED_USER": runner.PRODUCTION_MIGRATION_ROLE,
+            "VERVFY_PRODUCTION_START_REVISION": runner.AUTH_SESSIONS_REVISION,
+            "VERVFY_PRODUCTION_DATABASE_URL": url.render_as_string(hide_password=False),
+            "VERVFY_PRODUCTION_CA_FILE": str(ca_file),
+        }
+    )
+    assert target.start_revision == runner.AUTH_SESSIONS_REVISION
+
+
 def test_boundary_authorization_must_match_configured_start(capsys):
     target = MagicMock(
         project_ref="synthetic", start_revision="0033_cleanup_claims_disabled"
@@ -133,3 +160,28 @@ def test_boundary_authorization_must_match_configured_start(capsys):
     assert result == 1
     upgrade.assert_not_called()
     assert "Authorization does not match" in capsys.readouterr().err
+
+
+def test_0032_boundary_authorization_reaches_guarded_upgrade():
+    target = MagicMock(
+        project_ref="synthetic", start_revision=runner.AUTH_SESSIONS_REVISION
+    )
+    authorization = f"{runner.AUTH_SESSIONS_REVISION}..{runner.TARGET_REVISION}"
+    expiry = (datetime.now(UTC) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with (
+        patch.object(runner, "load_target", return_value=target),
+        patch.object(runner, "run_upgrade") as upgrade,
+    ):
+        result = runner.main(
+            [
+                "upgrade",
+                "--confirm-project-ref",
+                "synthetic",
+                "--authorize-production-migration",
+                authorization,
+                "--authorization-expires-at",
+                expiry,
+            ]
+        )
+    assert result == 0
+    upgrade.assert_called_once_with(target, expiry)

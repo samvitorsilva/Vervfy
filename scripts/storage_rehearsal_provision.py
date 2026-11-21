@@ -722,10 +722,7 @@ def _verify_0031(connection, profile):
 def baseline_0031(connection, profile):
     """Migrate empty schema to 0028, seed only tenants/refs, then migrate through 0031."""
     fixture_uploader._assert_disposable_profile(profile)
-    if (
-        profile.config["start_revision"]
-        not in rehearsal.production.SUPPORTED_START_REVISIONS
-    ):
+    if profile.config["start_revision"] not in rehearsal.SUPPORTED_START_REVISIONS:
         raise rehearsal.RehearsalBlocked("Unsupported rehearsal baseline")
     _transaction_limits(connection)
     connection.execute(

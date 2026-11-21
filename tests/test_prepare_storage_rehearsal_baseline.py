@@ -37,9 +37,7 @@ def inputs(tmp_path):
     return path, config, ca
 
 
-@pytest.mark.parametrize(
-    "baseline", prep.rehearsal.production.SUPPORTED_START_REVISIONS
-)
+@pytest.mark.parametrize("baseline", prep.rehearsal.SUPPORTED_START_REVISIONS)
 def test_bundle_is_private_pinned_deterministic_and_never_connects(
     inputs, tmp_path, monkeypatch, baseline
 ):

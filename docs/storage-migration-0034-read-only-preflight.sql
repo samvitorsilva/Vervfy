@@ -23,13 +23,14 @@ SELECT
     current_setting('server_version_num')::integer >= 160000
         AS postgres_16_or_newer;
 
--- 2. Exactly one approved starting revision is required: 0031 or 0033.
+-- 2. Exactly one approved starting revision is required: 0031, 0032, or 0033.
 SELECT
     count(*) AS revision_rows,
     array_agg(version_num ORDER BY version_num) AS revisions,
     count(*) = 1
         AND bool_and(version_num IN (
             '0031_cleanup_retry_limits',
+            '0032_auth_sessions',
             '0033_cleanup_claims_disabled'
         )) AS supported_start_revision
 FROM public.alembic_version;
@@ -148,8 +149,47 @@ WHERE schemaname = 'public'
   AND tablename IN ('tracks', 'favorites', 'playlists', 'playlist_tracks')
 ORDER BY tablename, policyname;
 
+-- 5a. auth_sessions is absent at 0031 and present at 0032/0033/0034. When present,
+-- it should be migration-owned, have RLS disabled (session IDs are capabilities),
+-- and have only app_runtime SELECT/INSERT/DELETE grants.
+SELECT
+    v.version_num,
+    c.oid IS NOT NULL AS session_table_exists,
+    pg_catalog.pg_get_userbyid(c.relowner) AS table_owner,
+    c.relrowsecurity AS rls_enabled,
+    c.relforcerowsecurity AS rls_forced
+FROM public.alembic_version v
+LEFT JOIN pg_catalog.pg_class c
+    ON c.oid = pg_catalog.to_regclass('public.auth_sessions');
+
+SELECT
+    COALESCE(r.rolname, 'PUBLIC') AS grantee,
+    a.privilege_type,
+    a.is_grantable
+FROM pg_catalog.pg_class c
+CROSS JOIN LATERAL pg_catalog.aclexplode(
+    COALESCE(c.relacl, pg_catalog.acldefault('r'::"char", c.relowner))
+) a
+LEFT JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+WHERE c.oid = pg_catalog.to_regclass('public.auth_sessions')
+  AND a.grantee <> c.relowner
+ORDER BY grantee, a.privilege_type;
+-- Expected direct grants when present: app_runtime SELECT, INSERT, DELETE;
+-- no UPDATE, no PUBLIC/other-role grants. Confirm effective privileges too.
+
 -- 6. Storage lifecycle ownership, forced RLS, and policies. Inspect every
 -- lifecycle table; do not accept unexpected owners or missing forced RLS.
+SELECT
+    pg_catalog.pg_get_userbyid(n.nspowner) AS schema_owner,
+    has_schema_privilege(
+        'vervfy_prod_migrator', 'vervfy_storage', 'USAGE'
+    ) AS migrator_schema_usage,
+    has_schema_privilege(
+        'vervfy_prod_migrator', 'vervfy_storage', 'CREATE'
+    ) AS migrator_schema_create
+FROM pg_catalog.pg_namespace n
+WHERE n.nspname = 'vervfy_storage';
+
 SELECT
     c.relname AS table_name,
     pg_catalog.pg_get_userbyid(c.relowner) AS table_owner,
@@ -234,7 +274,7 @@ WHERE n.nspname = 'vervfy_storage'
   )
 ORDER BY 1, 2, 3, 4;
 
--- 7. Immutable production namespace and 0031/0033 cleanup-claim permissions.
+-- 7. Immutable production namespace and revision-appropriate cleanup permissions.
 -- Namespace values must match the approved production binding exactly and
 -- physical_cleanup_enabled must remain false.
 SELECT namespace_id::text, environment, endpoint, bucket,
@@ -266,7 +306,7 @@ SELECT
         'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
     ) AS app_runtime_can_claim
 FROM public.alembic_version;
--- Expected claim privileges: at 0031 (true,true,true,false);
+-- Expected claim privileges: at 0031/0032 (true,true,true,false);
 -- at 0033 (true,false,false,false).
 
 -- 8. 0034 must not already be partially installed. Before migration, the

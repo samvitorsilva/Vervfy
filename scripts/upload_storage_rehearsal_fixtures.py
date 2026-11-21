@@ -108,8 +108,7 @@ def load_bundle(bundle_dir, profile, approved_bundle_digest):
         or manifest.get("project_ref") != profile.config["project_ref"]
         or manifest.get("config_sha256") != profile.digest
         or manifest.get("run_id") != profile.config["run_id"]
-        or manifest.get("baseline")
-        not in rehearsal.production.SUPPORTED_START_REVISIONS
+        or manifest.get("baseline") not in rehearsal.SUPPORTED_START_REVISIONS
         or manifest.get("ready_for_hosted_execution") is not False
     ):
         raise rehearsal.RehearsalBlocked("Prepared bundle identity or digest mismatch")
@@ -263,8 +262,7 @@ def _assert_disposable_profile(profile):
     if (
         config.get("purpose") != rehearsal.PURPOSE
         or plan_digest(config) != profile.digest
-        or config.get("start_revision")
-        not in rehearsal.production.SUPPORTED_START_REVISIONS
+        or config.get("start_revision") not in rehearsal.SUPPORTED_START_REVISIONS
         or profile.binding.environment != "disposable-rehearsal"
         or profile.binding.endpoint != f"https://{reference}.supabase.co"
         or profile.binding.bucket != config.get("bucket")

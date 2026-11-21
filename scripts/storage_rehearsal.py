@@ -33,6 +33,10 @@ from storage_inventory import apply_inventory, measure_inventory, plan_digest, s
 from storage_namespace import NamespaceBinding
 
 PURPOSE = "vervfy-0034-disposable-rehearsal-v1"
+SUPPORTED_START_REVISIONS = (
+    production.START_REVISION,
+    production.CLAIMS_DISABLED_REVISION,
+)
 LOGIN = "vervfy_rehearsal_migrator"
 TENANTS = ("a", "b")
 PRODUCTION_NAMESPACE = "31daf7cc-8563-411f-94c7-944d607d1ef1"
@@ -149,7 +153,7 @@ def load_profile(path, approved_digest, env=None):
     uuid.UUID(config["run_id"])
     if (
         re.fullmatch(r"vervfy-rehearsal-[a-z0-9-]{1,50}", config["bucket"]) is None
-        or config["start_revision"] not in production.SUPPORTED_START_REVISIONS
+        or config["start_revision"] not in SUPPORTED_START_REVISIONS
         or config["history_sha256"] != history_digest()
     ):
         raise RehearsalBlocked("Bucket, starting revision or reviewed history mismatch")
@@ -283,7 +287,7 @@ def guard(connection, profile, *, head):
         has_function_privilege('app_runtime','vervfy_storage.claim_next_cleanup()','EXECUTE')""").one()
     expected_claims = (
         (True, True, True, False)
-        if head == production.START_REVISION
+        if head in production.PRE_CLAIMS_DISABLED_REVISIONS
         else (True, False, False, False)
     )
     if tuple(claims) != expected_claims:
@@ -291,7 +295,7 @@ def guard(connection, profile, *, head):
     sessions = connection.exec_driver_sql(
         "SELECT to_regclass('public.auth_sessions') IS NOT NULL"
     ).scalar_one()
-    if sessions != (head != production.START_REVISION):
+    if sessions != (head in production.AUTH_SESSIONS_PRESENT_REVISIONS):
         raise RehearsalBlocked("Session schema does not match the approved boundary")
     if sessions:
         session_access = connection.exec_driver_sql("""SELECT

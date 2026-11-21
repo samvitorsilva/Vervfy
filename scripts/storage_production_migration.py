@@ -17,8 +17,20 @@ from sqlalchemy.pool import NullPool
 
 ROOT = Path(__file__).resolve().parents[1]
 START_REVISION = "0031_cleanup_retry_limits"
+AUTH_SESSIONS_REVISION = "0032_auth_sessions"
+CLAIMS_DISABLED_REVISION = "0033_cleanup_claims_disabled"
 TARGET_REVISION = "0034_storage_byte_reservations"
-SUPPORTED_START_REVISIONS = (START_REVISION, "0033_cleanup_claims_disabled")
+SUPPORTED_START_REVISIONS = (
+    START_REVISION,
+    AUTH_SESSIONS_REVISION,
+    CLAIMS_DISABLED_REVISION,
+)
+PRE_CLAIMS_DISABLED_REVISIONS = (START_REVISION, AUTH_SESSIONS_REVISION)
+AUTH_SESSIONS_PRESENT_REVISIONS = (
+    AUTH_SESSIONS_REVISION,
+    CLAIMS_DISABLED_REVISION,
+    TARGET_REVISION,
+)
 AUTHORIZATION = f"{START_REVISION}..{TARGET_REVISION}"
 AUTHORIZATION_TTL = timedelta(minutes=15)
 EXPECTED_MIGRATION_COUNT = 34
@@ -301,6 +313,77 @@ def _check_storage_membership_options(
             "executor membership options must allow only worker INHERIT; "
             "postgres may hold ADMIN only",
         )
+
+
+def _check_auth_sessions(
+    connection: Connection, *, expected_exists: bool
+) -> None:
+    """Require the reviewed auth-session owner, RLS state, and exact grants."""
+    exists = connection.execute(text("""
+        SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
+    """)).scalar_one()
+    if exists != expected_exists:
+        raise MigrationBlocked("auth_sessions does not match the approved starting revision")
+    if not exists:
+        return
+
+    relation = connection.execute(text("""
+        SELECT pg_catalog.pg_get_userbyid(c.relowner),
+               c.relrowsecurity, c.relforcerowsecurity
+        FROM pg_catalog.pg_class c
+        WHERE c.oid = pg_catalog.to_regclass('public.auth_sessions')
+    """)).one_or_none()
+    current_user = connection.exec_driver_sql(
+        "SELECT current_user"
+    ).scalar_one()
+    if (
+        relation is None
+        or relation[0] != current_user
+        or relation[1]
+        or relation[2]
+    ):
+        raise MigrationBlocked(
+            "auth_sessions must be migration-owned with RLS disabled"
+        )
+
+    acl = connection.execute(text("""
+        SELECT COALESCE(r.rolname, 'PUBLIC'),
+               a.privilege_type,
+               a.is_grantable
+        FROM pg_catalog.pg_class c
+        CROSS JOIN LATERAL pg_catalog.aclexplode(
+            COALESCE(c.relacl, pg_catalog.acldefault('r'::"char", c.relowner))
+        ) a
+        LEFT JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+        WHERE c.oid = pg_catalog.to_regclass('public.auth_sessions')
+          AND a.grantee <> c.relowner
+    """)).all()
+    actual_acl = {
+        (row[0], row[1], bool(row[2]))
+        for row in acl
+    }
+    expected_acl = {
+        ("app_runtime", "SELECT", False),
+        ("app_runtime", "INSERT", False),
+        ("app_runtime", "DELETE", False),
+    }
+    if actual_acl != expected_acl:
+        raise MigrationBlocked("Unexpected direct auth_sessions privileges")
+
+    runtime_privileges = connection.execute(text("""
+        SELECT
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'SELECT'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'INSERT'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'UPDATE'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'DELETE'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'TRUNCATE'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'REFERENCES'),
+            has_table_privilege('app_runtime', 'public.auth_sessions', 'TRIGGER')
+    """)).one()
+    if tuple(runtime_privileges) != (
+        True, True, False, True, False, False, False
+    ):
+        raise MigrationBlocked("Unexpected effective auth_sessions privileges")
 
 
 def _check_effective_privilege_inheritance(
@@ -1003,6 +1086,33 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         if not schema_exists:
             raise MigrationBlocked("Existing storage lifecycle schema is missing")
 
+        storage_schema = connection.execute(text("""
+            SELECT pg_catalog.pg_get_userbyid(nspowner),
+                   has_schema_privilege(current_user, 'vervfy_storage', 'USAGE'),
+                   has_schema_privilege(current_user, 'vervfy_storage', 'CREATE')
+            FROM pg_catalog.pg_namespace
+            WHERE nspname = 'vervfy_storage'
+        """)).one_or_none()
+        storage_table_owners = set(connection.execute(text("""
+            SELECT c.relname
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'vervfy_storage'
+              AND c.relname IN ('namespaces', 'objects', 'cleanup_jobs')
+              AND c.relkind IN ('r', 'p')
+              AND pg_catalog.pg_get_userbyid(c.relowner) = current_user
+        """)).scalars())
+        if (
+            storage_schema is None
+            or storage_schema[0] != current_user
+            or not storage_schema[1]
+            or not storage_schema[2]
+            or storage_table_owners != {"namespaces", "objects", "cleanup_jobs"}
+        ):
+            raise MigrationBlocked(
+                "Migration login must own the storage lifecycle schema and tables"
+            )
+
         # Read the namespace using its restricted lifecycle-owner capability.
         connection.exec_driver_sql(
             "SET LOCAL ROLE vervfy_storage_lifecycle_owner"
@@ -1055,13 +1165,11 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                 "Existing storage lifecycle columns are incomplete"
             )
 
-        # Require the exact schema expected at each approved starting boundary.
-        sessions_table_exists = connection.execute(text("""
-            SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
-        """)).scalar_one()
-
-        if sessions_table_exists != (target.start_revision == "0033_cleanup_claims_disabled"):
-            raise MigrationBlocked("auth_sessions does not match the approved starting revision")
+        # 0032 creates auth_sessions; 0033 preserves its reviewed grants.
+        _check_auth_sessions(
+            connection,
+            expected_exists=target.start_revision in AUTH_SESSIONS_PRESENT_REVISIONS,
+        )
 
         # Confirm the expected pre-0033 cleanup permissions.
         cleanup_privileges = connection.execute(text("""
@@ -1084,8 +1192,11 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                 )
         """)).one()
 
-        expected_claims = ((True, True, True, False) if target.start_revision == START_REVISION
-                           else (True, False, False, False))
+        expected_claims = (
+            (True, True, True, False)
+            if target.start_revision in PRE_CLAIMS_DISABLED_REVISIONS
+            else (True, False, False, False)
+        )
         if tuple(cleanup_privileges) != expected_claims:
             raise MigrationBlocked(
                 "Unexpected cleanup-claim privileges at the approved starting revision"
@@ -1116,33 +1227,7 @@ def _verify_followup_result(connection: Connection, *, installation: bool = True
         if revision != [TARGET_REVISION]:
             raise MigrationBlocked("Post-migration revision verification failed")
 
-        sessions_exists = connection.execute(text("""
-            SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
-        """)).scalar_one()
-
-        if not sessions_exists:
-            raise MigrationBlocked("Migration 0032 did not create auth_sessions")
-
-        session_privileges = connection.execute(text("""
-            SELECT
-                has_table_privilege(
-                    'app_runtime', 'public.auth_sessions', 'SELECT'
-                ),
-                has_table_privilege(
-                    'app_runtime', 'public.auth_sessions', 'INSERT'
-                ),
-                has_table_privilege(
-                    'app_runtime', 'public.auth_sessions', 'DELETE'
-                ),
-                has_table_privilege(
-                    'app_runtime', 'public.auth_sessions', 'UPDATE'
-                )
-        """)).one()
-
-        if tuple(session_privileges) != (True, True, True, False):
-            raise MigrationBlocked(
-                "Unexpected effective auth_sessions privileges"
-            )
+        _check_auth_sessions(connection, expected_exists=True)
 
         cleanup_privileges = connection.execute(text("""
             SELECT
