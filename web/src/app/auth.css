@@ -426,7 +426,7 @@
   display:grid;
   place-items:center;
   overflow:hidden;
-  background:radial-gradient(ellipse 55% 45% at 50% 45%, rgba(143,211,232,.065), transparent 75%),var(--home-bg);
+  background:var(--home-bg);
   color:var(--home-text);
 }
 .homepage-transition-inner{
@@ -434,57 +434,56 @@
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:13px;
-  width:min(320px,calc(100% - 48px));
+  gap:40px;
+  width:min(320px,calc(100% - 64px));
+  margin-block-end:32px;
   text-align:center;
-  animation:vervfy-transition-enter .35s ease-out both;
 }
-.homepage-transition-mark{
-  display:grid;
-  place-items:center;
-  width:76px;
-  height:76px;
-  margin-bottom:5px;
-  border-radius:24px;
-  border:1px solid rgba(143,211,232,.23);
-  background:linear-gradient(145deg,rgba(143,211,232,.12),rgba(143,211,232,.09));
-  box-shadow:0 16px 48px rgba(0,0,0,.18),0 0 42px rgba(143,211,232,.08);
+.homepage-transition-brand{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:18px;
 }
+.homepage-transition-mark,.homepage-transition-mark img{ display:block; width:72px; height:72px; }
 .homepage-transition-name{
-  font:700 1.5rem/1.2 var(--font-display);
+  font:500 1.875rem/1.2 var(--font-display);
   letter-spacing:-.035em;
 }
+.homepage-transition-status{ display:flex; flex-direction:column; align-items:center; gap:16px; width:100%; }
 .homepage-transition-caption{
-  color:var(--home-secondary);
-  font:.88rem/1.5 var(--home-ui-font);
+  max-width:28ch;
+  min-height:3em;
+  color:var(--text-dim);
+  font:400 .8125rem/1.5 var(--home-ui-font);
+  text-wrap:balance;
 }
 .homepage-transition-progress{
-  width:132px;
-  height:2px;
-  margin-top:12px;
+  position:relative;
+  width:112px;
+  height:3px;
   overflow:hidden;
   border-radius:999px;
-  background:var(--home-line);
+  background:color-mix(in srgb,var(--home-text) 12%,transparent);
 }
 .homepage-transition-progress span{
+  position:absolute;
+  inset-block:0;
+  inset-inline-start:0;
   display:block;
-  width:38%;
+  width:32%;
   height:100%;
   border-radius:inherit;
   background:var(--home-accent);
-  animation:vervfy-transition-progress 1.3s ease-in-out infinite alternate;
-}
-@keyframes vervfy-transition-enter{
-  from{opacity:0;transform:translateY(7px)}
-  to{opacity:1;transform:translateY(0)}
+  animation:vervfy-transition-progress 1.8s cubic-bezier(.4,0,.2,1) infinite;
 }
 @keyframes vervfy-transition-progress{
-  from{transform:translateX(-100%)}
-  to{transform:translateX(270%)}
+  0%{transform:translateX(-100%);opacity:0}
+  12%,88%{opacity:1}
+  100%{transform:translateX(315%);opacity:0}
 }
 @media (prefers-reduced-motion:reduce){
-  .homepage-transition-inner,.homepage-transition-progress span{animation:none}
-  .homepage-transition-progress span{width:100%;opacity:.7}
+  .homepage-transition-progress span{animation:none;inset-inline-start:34%;transform:none;opacity:.7}
 }
 
 @keyframes authPasswordShake{
