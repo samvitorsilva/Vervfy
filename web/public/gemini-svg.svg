@@ -1,11 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-<title id="title">Vervfy</title><desc id="desc">Cyan flowing V on a dark navy rounded-square background</desc>
-<defs>
-<linearGradient id="navy" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#09283A"/><stop offset=".48" stop-color="#06152D"/><stop offset="1" stop-color="#062B42"/></linearGradient>
-<linearGradient id="cyan" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#00E6DB"/><stop offset="1" stop-color="#00D8CC"/></linearGradient>
-<linearGradient id="rim" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#00D8CC" stop-opacity=".8"/><stop offset=".45" stop-color="#00D8CC" stop-opacity=".08"/><stop offset="1" stop-color="#00D8CC" stop-opacity=".6"/></linearGradient>
-</defs>
-<rect x="12" y="12" width="488" height="488" rx="108" fill="url(#navy)"/>
-<rect x="13.5" y="13.5" width="485" height="485" rx="106.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
-<path fill="url(#cyan)" d="M91 152c-8-15 2-28 20-28h65c20 0 34 10 43 29l76 145c7 13 24 13 31-1l49-129c10-25 27-38 52-38 24 0 49 14 64 33 16 21 20 50 10 77-3 9-10 10-15 1-16-29-40-46-64-46-15 0-24 9-29 23l-51 136c-13 35-34 54-70 54-33 0-54-17-69-47L91 152Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 329 333" role="img" aria-labelledby="title desc">
+<title id="title">Vervfy official logo</title>
+<desc id="desc">Dark flowing V on a mint rounded-square background</desc>
+<defs><linearGradient id="mint" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08E7BE"/><stop offset="1" stop-color="#02DFB6"/></linearGradient></defs>
+<rect x="1" y="1" width="327" height="331" rx="91" fill="url(#mint)"/>
+<path fill="#030B12" d="M46 81 L119 239 L128 251 L142 260 L170 262 L194 246 L203 227 L230 133 L254 144 L274 171 L279 166 L284 149 L279 115 L262 94 L240 82 L221 80 L218 83 L185 192 L160 184 L119 96 L111 87 L96 80 Z"/>
 </svg>
