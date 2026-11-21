@@ -84,6 +84,8 @@
 .auth-footer{ margin-top:20px; text-align:center; font-size:0.85rem; color:var(--text-mid); }
 .auth-footer a{ color:var(--cyan); text-decoration:none; }
 .auth-footer a:hover{ text-decoration:underline; }
+.auth-footer a.auth-registration-login{ text-decoration:underline; text-underline-offset:3px; }
+.auth-footer a.auth-registration-login:focus-visible{ outline:2px solid var(--cyan); outline-offset:3px; }
 .auth-card .site-footer{ margin-top:10px; }
 
 @media (max-width:480px){

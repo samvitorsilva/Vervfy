@@ -348,7 +348,7 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
 
         {!isGoogleOnboarding ? <div className="auth-footer">
           {t(isLogin ? "No account yet? " : "Already have an account? ")}
-          <Link href={isLogin ? "/register" : "/login"}>
+          <Link href={isLogin ? "/register" : "/login"} className={isLogin ? undefined : "auth-registration-login"}>
             {t(isLogin ? "Create one" : "Log in")}
           </Link>
         </div> : null}

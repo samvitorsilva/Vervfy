@@ -14,12 +14,13 @@ declare global {
 }
 
 type LinkMode = "reset" | "verify" | "missing";
+type ErrorMessage = { key: string; fallback: string };
 
 export default function ResetPasswordForm() {
   const { t, translateError } = useLanguage();
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
-  const [csrfError, setCsrfError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [csrfError, setCsrfError] = useState<ErrorMessage | null>(null);
+  const [error, setError] = useState<ErrorMessage | null>(null);
   const [linkMode, setLinkMode] = useState<LinkMode>("missing");
   const [token, setToken] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
@@ -35,6 +36,7 @@ export default function ResetPasswordForm() {
     passwordLength > 0 && (passwordLength < 8 || passwordBytes > 72);
   const confirmationMismatch =
     confirmation.length > 0 && confirmation !== password;
+  const visibleError = error ?? csrfError;
 
   useEffect(() => {
     let active = true;
@@ -44,18 +46,16 @@ export default function ResetPasswordForm() {
       })
       .catch((reason: unknown) => {
         if (active) {
-          setCsrfError(
-            translateError(
-              reason instanceof Error ? reason.message : "",
-              "Could not load the form.",
-            ),
-          );
+          setCsrfError({
+            key: reason instanceof Error ? reason.message : "",
+            fallback: "Could not load the form.",
+          });
         }
       });
     return () => {
       active = false;
     };
-  }, [translateError]);
+  }, []);
 
   useEffect(() => {
     if (initialLink.current === null) {
@@ -116,12 +116,10 @@ export default function ResetPasswordForm() {
       setVerificationSent(true);
       setToken(null);
     } catch (reason: unknown) {
-      setError(
-        translateError(
-          reason instanceof Error ? reason.message : "",
-          "This verification link is invalid or has expired.",
-        ),
-      );
+      setError({
+        key: reason instanceof Error ? reason.message : "",
+        fallback: "This verification link is invalid or has expired.",
+      });
       setToken(null);
     } finally {
       setPending(false);
@@ -132,7 +130,7 @@ export default function ResetPasswordForm() {
     event.preventDefault();
     if (!csrfToken || !token || pending) return;
     if (password !== confirmation) {
-      setError(t("Passwords do not match."));
+      setError({ key: "Passwords do not match.", fallback: "Passwords do not match." });
       return;
     }
 
@@ -163,12 +161,10 @@ export default function ResetPasswordForm() {
       setToken(null);
       setSubmitted(true);
     } catch (reason: unknown) {
-      setError(
-        translateError(
-          reason instanceof Error ? reason.message : "",
-          "This reset link is invalid or has expired.",
-        ),
-      );
+      setError({
+        key: reason instanceof Error ? reason.message : "",
+        fallback: "This reset link is invalid or has expired.",
+      });
     } finally {
       setPending(false);
     }
@@ -192,9 +188,9 @@ export default function ResetPasswordForm() {
             : t("Choose a new password for your Vervfy account.")}
         </p>
 
-        {(error || csrfError) && (
+        {visibleError && (
           <div className="auth-error" role="alert">
-            {error || csrfError}
+            {translateError(visibleError.key, visibleError.fallback)}
           </div>
         )}
 
