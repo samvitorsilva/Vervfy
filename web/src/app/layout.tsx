@@ -22,9 +22,9 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: "/gemini-svg.svg", type: "image/svg+xml" },
-      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/brand-icon-192.png", sizes: "192x192", type: "image/png" },
     ],
-    apple: "/apple-icon.png",
+    apple: [{ url: "/brand-icon-180.png", sizes: "180x180", type: "image/png" }],
   },
   applicationName: "Vervfy",
   appleWebApp: {

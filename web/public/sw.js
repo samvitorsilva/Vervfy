@@ -1,8 +1,10 @@
-const CACHE_NAME = "vervfy-next-shell-v3";
+const CACHE_NAME = "vervfy-next-shell-v4";
 const SHELL_ASSETS = [
   "/offline.html",
   "/manifest.webmanifest",
   "/gemini-svg.svg",
+  "/brand-icon-192.png",
+  "/brand-icon-512.png",
 ];
 const STATIC_CACHE_PREFIX = "vervfy-next-shell-";
 
