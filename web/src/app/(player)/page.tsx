@@ -1,21 +1,30 @@
 import type { Metadata } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Homepage from "@/components/homepage";
 import { siteUrl, websiteMetadata } from "@/lib/site-metadata";
 
-const title = "Vervfy – Personal Music Player & Online MP3 Library";
-const description =
-  "Upload, organize, and play your own music online with Vervfy. Create playlists, save favorites, view lyrics, and enjoy your personal MP3 library.";
+import { homepageFeatures, homepageSeo } from "@/lib/homepage-seo";
+import { languageFromAcceptLanguage, languageFromLocale } from "@/lib/language";
 
-export const metadata: Metadata = {
-  ...websiteMetadata(title, description, "/"),
-  title: { absolute: title },
-};
+async function homepageLanguage() {
+  return languageFromLocale((await cookies()).get("vervfy-language")?.value) ??
+    languageFromAcceptLanguage((await headers()).get("accept-language"));
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const { title, description } = homepageSeo[await homepageLanguage()];
+  return {
+    ...websiteMetadata(title, description, "/"),
+    title: { absolute: title },
+  };
+}
 
 export default async function HomePage() {
   // Cookie presence is only a hint for the initial UI, never proof of authentication.
   const cookieStore = await cookies();
   const hasSessionCookie = Boolean(cookieStore.get("auralis_session")?.value);
+  const language = await homepageLanguage();
+  const { description } = homepageSeo[language];
   const structuredData = {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
@@ -24,12 +33,8 @@ export default async function HomePage() {
     applicationCategory: "MultimediaApplication",
     operatingSystem: "Web",
     description,
-    featureList: [
-      "Personal music library",
-      "MP3 uploads and playback",
-      "Playlists and favorites",
-      "Lyrics and artist information",
-    ],
+    inLanguage: language,
+    featureList: homepageFeatures[language],
   };
 
   return (

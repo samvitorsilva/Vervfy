@@ -75,5 +75,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22
+      - key: SITE_URL
+        value: https://vervfy.com
       - key: BACKEND_URL
         sync: false

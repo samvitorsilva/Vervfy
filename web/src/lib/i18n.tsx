@@ -1,12 +1,17 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { homepageSeo } from "@/lib/homepage-seo";
 import { usePathname } from "next/navigation";
 import { languageFromLocale, type Language } from "@/lib/language";
 
 export type { Language } from "@/lib/language";
 
 const translations: Record<string, string> = {
+  "View synchronized or plain lyrics and artist information when available.": "Veja letras sincronizadas ou simples e informações sobre artistas quando disponíveis.",
+  "An online MP3 player with playlists, favorites, and downloads for offline listening.": "Um player MP3 online com playlists, favoritos e downloads para ouvir offline.",
+  "Upload your own MP3 files with song metadata and embedded album artwork.": "Envie seus arquivos MP3 com metadados das músicas e capas de álbuns incorporadas.",
+  "Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.": "Seu player de música pessoal na web. Envie seus MP3s, organize playlists e favoritos e ouça online ou baixe músicas para ouvir offline.",
   "Keep listening": "Continuar ouvindo",
   "You beat your previous monthly best of {count} plays.": "Você superou seu recorde mensal anterior de {count} reproduções.",
   "A new listening record": "Um novo recorde de reprodução",
@@ -714,6 +719,10 @@ const translations: Record<string, string> = {
 };
 
 const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
+  "View synchronized or plain lyrics and artist information when available.": ["Consultez les paroles synchronisées ou simples et les informations sur les artistes si disponibles.", "Consulta letras sincronizadas o simples e información de artistas cuando estén disponibles."],
+  "An online MP3 player with playlists, favorites, and downloads for offline listening.": ["Un lecteur MP3 en ligne avec playlists, favoris et téléchargements pour une écoute hors ligne.", "Un reproductor MP3 online con listas, favoritos y descargas para escuchar sin conexión."],
+  "Upload your own MP3 files with song metadata and embedded album artwork.": ["Importez vos fichiers MP3 avec leurs métadonnées et pochettes intégrées.", "Sube tus archivos MP3 con metadatos y portadas de álbumes integradas."],
+  "Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.": ["Votre lecteur musical personnel sur le web. Importez vos MP3, gérez playlists et favoris, et écoutez en ligne ou téléchargez vos morceaux pour une écoute hors ligne.", "Tu reproductor de música personal en la web. Sube tus MP3, organiza listas y favoritos y escucha online o descarga canciones para escucharlas sin conexión."],
   "Keep listening": ["Continuer à écouter", "Seguir escuchando"],
   "You beat your previous monthly best of {count} plays.": ["Vous avez dépassé votre précédent record mensuel de {count} écoutes.", "Superaste tu récord mensual anterior de {count} reproducciones."],
   "A new listening record": ["Un nouveau record d’écoute", "Un nuevo récord de reproducciones"],
@@ -1556,9 +1565,19 @@ export function LanguageProvider({
     document.documentElement.lang = language;
     const [title, description] =
       pageMetadata[pathname] ?? ["Page not found", "The requested Vervfy page could not be found."];
-    const translatedTitle = `${t(title)} | Vervfy`;
-    const translatedDescription = t(description);
+    const translatedTitle = pathname === "/" ? homepageSeo[language].title : `${t(title)} | Vervfy`;
+    const translatedDescription = pathname === "/" ? homepageSeo[language].description : t(description);
     const applyMetadata = () => {
+      if (pathname === "/") {
+        for (const selector of ['meta[property="og:description"]', 'meta[name="twitter:description"]']) {
+          const element = document.querySelector(selector);
+          if (element?.getAttribute("content") !== translatedDescription) element?.setAttribute("content", translatedDescription);
+        }
+        for (const selector of ['meta[property="og:title"]', 'meta[name="twitter:title"]']) {
+          const element = document.querySelector(selector);
+          if (element?.getAttribute("content") !== translatedTitle) element?.setAttribute("content", translatedTitle);
+        }
+      }
       if (document.title !== translatedTitle) document.title = translatedTitle;
       const meta = document.querySelector('meta[name="description"]');
       if (meta?.getAttribute("content") !== translatedDescription) {

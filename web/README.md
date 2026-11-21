@@ -25,3 +25,26 @@ npm run test:e2e
 ```
 
 The Render deployment is defined in the repository-root `render.yaml`.
+
+For production, explicitly set `SITE_URL=https://vervfy.com` in the frontend
+hosting environment (including Vercel). Canonicals, social URLs, JSON-LD,
+robots.txt, and sitemap entries share this origin. Use the staging frontend
+origin for staging deployments. The Render frontend blueprint sets the
+production origin explicitly.
+
+SEO checks: `npx playwright test tests/seo.spec.ts tests/website-readiness.spec.ts`.
+These cover server-rendered content without JavaScript in English, Brazilian
+Portuguese, French, and Spanish, language-switch metadata, public sitemap
+entries, and authentication page exclusions. The public routes are `/`,
+`/privacy`, `/terms`, and `/credits`; account data is served through protected
+API routes and never listed in the sitemap. Robots rules are crawler guidance,
+not access control. Authentication pages retain their existing noindex metadata
+and robots exclusions.
+
+After deployment, inspect the homepage and submit `https://vervfy.com/sitemap.xml`
+in Google Search Console. Check Google's selected canonical and indexing status;
+crawlable HTML alone does not establish that a page is indexed. Language variants
+currently share URLs selected by cookie/request headers, so no separate-language
+hreflang URLs are advertised. Consider distinct public locale URLs if multilingual
+search visibility becomes a priority. The application describes personal uploads,
+not a public music streaming or download catalog.

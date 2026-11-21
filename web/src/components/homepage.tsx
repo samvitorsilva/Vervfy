@@ -71,7 +71,7 @@ export default function Homepage({ hasSessionCookie = false }: { hasSessionCooki
               <h1 id="homepage-title">{t("Your personal music library, accessible from anywhere.")}</h1>
               <p className="homepage-tagline">{t("Your music. Your rules.")}</p>
               <p className="homepage-description">
-                {t("Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.")}
+                {t("Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.")}
               </p>
               <div className="homepage-actions">
                 <Link className="homepage-cta" href="/register">{t("Create account")}</Link>
@@ -97,15 +97,15 @@ export default function Homepage({ hasSessionCookie = false }: { hasSessionCooki
               <ul>
                 <li>
                   <h2>{t("Your music library")}</h2>
-                  <p>{t("Upload audio files and keep their tags and embedded artwork.")}</p>
+                  <p>{t("Upload your own MP3 files with song metadata and embedded album artwork.")}</p>
                 </li>
                 <li>
                   <h2>{t("Playlists and playback")}</h2>
-                  <p>{t("Make playlists, save favorites, and manage what plays next.")}</p>
+                  <p>{t("An online MP3 player with playlists, favorites, and downloads for offline listening.")}</p>
                 </li>
                 <li>
                   <h2>{t("Lyrics and artist details")}</h2>
-                  <p>{t("Find more context for the music in your collection.")}</p>
+                  <p>{t("View synchronized or plain lyrics and artist information when available.")}</p>
                 </li>
               </ul>
             </aside>
