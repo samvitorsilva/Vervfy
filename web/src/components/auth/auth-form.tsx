@@ -6,6 +6,7 @@ import { getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 import SiteFooter from "@/components/site-footer";
 import { PasswordStrength } from "@/components/ui/password-strength";
+import { PasswordInput } from "@/components/auth/password-input";
 
 type AuthMode = "login" | "register";
 
@@ -295,11 +296,11 @@ export default function AuthForm({ mode }: { mode: AuthMode }) {
           )}
           <div className="auth-field">
             <label htmlFor="password">{t("Password")}</label>
-            <input
+            <PasswordInput
               id="password"
               name="password"
               className={passwordIncorrect ? "password-incorrect" : undefined}
-              type="password"
+              allowReveal={!isLogin}
               autoComplete={isLogin ? "current-password" : "new-password"}
               minLength={isLogin ? undefined : 8}
               required

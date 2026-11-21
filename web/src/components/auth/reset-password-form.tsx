@@ -6,6 +6,7 @@ import { ApiError, getCsrfToken } from "@/lib/api/client";
 import { LanguageSelect, useLanguage } from "@/lib/i18n";
 import SiteFooter from "@/components/site-footer";
 import { PasswordStrength } from "@/components/ui/password-strength";
+import { PasswordInput } from "@/components/auth/password-input";
 
 declare global {
   interface Window {
@@ -229,10 +230,9 @@ export default function ResetPasswordForm() {
           <form onSubmit={handleSubmit}>
             <div className="auth-field">
               <label htmlFor="password">{t("New password")}</label>
-              <input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete="new-password"
                 minLength={8}
                 required
@@ -256,10 +256,10 @@ export default function ResetPasswordForm() {
             </div>
             <div className="auth-field">
               <label htmlFor="confirmation">{t("Confirm new password")}</label>
-              <input
+              <PasswordInput
                 id="confirmation"
                 name="confirmation"
-                type="password"
+                confirmation
                 autoComplete="new-password"
                 required
                 value={confirmation}

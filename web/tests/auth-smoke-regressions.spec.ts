@@ -8,7 +8,7 @@ const locales = [
 ];
 
 test("registration login link is underlined, contrasting, and keyboard visible", async ({ page }) => {
-  await page.goto("/register");
+  await page.goto("/register", { waitUntil: "networkidle" });
   const link = page.locator('.auth-footer a[href="/login"]');
   for (const width of [1280, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
@@ -57,7 +57,7 @@ for (const mode of ["reset", "verify"] as const) {
         submissions += 1;
         return route.fulfill({ status: 400, json: { detail: knownError ? messageKey : "Untranslated upstream failure" } });
       });
-      await page.goto(`/reset-password#${mode === "reset" ? "token" : "verify"}=${token}`);
+      await page.goto(`/reset-password#${mode === "reset" ? "token" : "verify"}=${token}`, { waitUntil: "networkidle" });
       await page.locator(".auth-language-select select").selectOption("en");
       if (mode === "reset") {
         await page.locator("#password").fill(password);
@@ -84,7 +84,7 @@ test("reset form load errors translate live without refetching", async ({ page }
     requests += 1;
     return route.fulfill({ status: 503, json: { detail: "Untranslated upstream failure" } });
   });
-  await page.goto("/reset-password#token=synthetic-load-error");
+  await page.goto("/reset-password#token=synthetic-load-error", { waitUntil: "networkidle" });
   const alert = page.locator(".auth-error[role='alert']");
   for (const locale of locales) {
     await page.locator(".auth-language-select select").selectOption(locale.code);

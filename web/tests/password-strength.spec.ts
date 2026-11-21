@@ -113,7 +113,7 @@ for (const path of ["/register", "/reset-password#token=strength-regression"]) {
 for (const path of ["/register", "/reset-password#token=byte-boundary"]) {
   test(`password validation counts UTF-8 bytes on ${path.split("#")[0]}`, async ({ page }) => {
     await page.route("**/api/csrf", (route) => route.fulfill({ json: { csrf_token: "byte-boundary" } }));
-    await page.goto(path);
+    await page.goto(path, { waitUntil: "networkidle" });
     await page.locator(".auth-language-select select").selectOption("en");
     const password = page.locator("#password");
     const warning = page.getByRole("alert").filter({ hasText: "72 UTF-8 bytes" });
