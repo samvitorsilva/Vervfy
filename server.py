@@ -158,6 +158,17 @@ app = FastAPI(
 )
 
 
+def require_storage_writes_enabled() -> None:
+    try:
+        storage_lifecycle.require_storage_writes_enabled()
+    except storage_lifecycle.StorageWritersPaused as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage changes are temporarily paused",
+            headers={"Retry-After": "60"},
+        ) from exc
+
+
 def close_audio_store() -> None:
     audio_store.close_client()
     if google_oauth_service is not None:
@@ -1403,6 +1414,7 @@ def _save_artist_photo(
     storage_path: str | None = None,
     resized_for_display: bool = False,
 ) -> None:
+    storage_lifecycle.require_storage_writes_enabled()
     with tenant_session(user_id) as session:
         row = session.get(
             ArtistPhoto,
@@ -1428,6 +1440,7 @@ def _save_artist_photo(
 
 
 def _delete_artist_photo(user_id: str, normalized_name: str) -> str | None:
+    storage_lifecycle.require_storage_writes_enabled()
     storage_path = None
     with tenant_session(user_id) as session:
         row = session.get(
@@ -3313,6 +3326,7 @@ def _queue_staged_upload(
     filename: str,
     audio_path: str,
 ) -> None:
+    storage_lifecycle.require_storage_writes_enabled()
     try:
         staging_path=storage_lifecycle.upload_file(user_id,'staged-audio',audio_path,
             audio_store.guess_content_type(filename),os.path.splitext(filename)[1].lower().lstrip('.'))
@@ -3852,7 +3866,9 @@ def unlink_google_account(
     return {"google_linked": False}
 
 
-@app.delete("/api/account")
+@app.delete(
+    "/api/account", dependencies=[Depends(require_storage_writes_enabled)]
+)
 def delete_account(
     payload: AccountDeletionRequest,
     request: Request,
@@ -4220,7 +4236,9 @@ def artist_photo(
     )
 
 
-@app.put("/api/artists/photo")
+@app.put(
+    "/api/artists/photo", dependencies=[Depends(require_storage_writes_enabled)]
+)
 @limit_upload_processing
 async def upload_artist_photo(
     request: Request,
@@ -4282,7 +4300,9 @@ async def upload_artist_photo(
     return {"photo_url": "/api/artists/photo?name=" + quote(name.strip(), safe="")}
 
 
-@app.delete("/api/artists/photo")
+@app.delete(
+    "/api/artists/photo", dependencies=[Depends(require_storage_writes_enabled)]
+)
 def remove_artist_photo(
     name: str = Query(min_length=1, max_length=200),
     user=Depends(require_api_user),
@@ -4376,7 +4396,9 @@ def track_covers(
     return {"covers": results, "pending": pending}
 
 
-@app.post("/api/library/upload")
+@app.post(
+    "/api/library/upload", dependencies=[Depends(require_storage_writes_enabled)]
+)
 @limit_upload_processing
 async def upload_track(
     request: Request,
@@ -4463,6 +4485,12 @@ async def upload_track(
             ) from None
         except storage_lifecycle.RetainedStorageQuotaExceeded:
             raise HTTPException(status_code=413, detail="Retained storage quota reached") from None
+        except storage_lifecycle.StorageWritersPaused as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Storage changes are temporarily paused",
+                headers={"Retry-After": "60"},
+            ) from exc
         except audio_store.StorageError:
             log.exception("audio storage failed during upload")
             raise HTTPException(
@@ -4515,7 +4543,9 @@ def upload_status(
         return payload
 
 
-@app.delete("/api/tracks/{track_id}")
+@app.delete(
+    "/api/tracks/{track_id}", dependencies=[Depends(require_storage_writes_enabled)]
+)
 def delete_track(
     track_id: str, user=Depends(require_api_user), _csrf=Depends(auth.verify_api_csrf)
 ) -> dict:
@@ -4619,7 +4649,10 @@ def track_cover(
     )
 
 
-@app.put("/api/tracks/{track_id}/cover")
+@app.put(
+    "/api/tracks/{track_id}/cover",
+    dependencies=[Depends(require_storage_writes_enabled)],
+)
 @limit_upload_processing
 async def upload_track_cover(
     track_id: str,
@@ -4672,6 +4705,12 @@ async def upload_track_cover(
                 cover,
                 replace_user_covers=replace_user_covers,
             )
+        except storage_lifecycle.StorageWritersPaused as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Storage changes are temporarily paused",
+                headers={"Retry-After": "60"},
+            ) from exc
         except audio_store.StorageError as exc:
             log.exception("track cover storage failed")
             raise HTTPException(
@@ -4687,6 +4726,12 @@ async def upload_track_cover(
         return {"cover_source": "user", "updated_count": updated_count}
     try:
         track = await run_in_threadpool(library.set_user_cover, track_id, cover)
+    except storage_lifecycle.StorageWritersPaused as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Storage changes are temporarily paused",
+            headers={"Retry-After": "60"},
+        ) from exc
     except audio_store.StorageError as exc:
         log.exception("track cover storage failed")
         raise HTTPException(
@@ -4697,7 +4742,10 @@ async def upload_track_cover(
     return {"cover_source": track.cover_source, "updated_count": 1}
 
 
-@app.delete("/api/tracks/{track_id}/cover")
+@app.delete(
+    "/api/tracks/{track_id}/cover",
+    dependencies=[Depends(require_storage_writes_enabled)],
+)
 async def remove_track_cover(
     track_id: str,
     user=Depends(require_api_user),
@@ -4717,7 +4765,10 @@ async def remove_track_cover(
     return {"cover_source": track.cover_source}
 
 
-@app.post("/api/tracks/{track_id}/cover/retry")
+@app.post(
+    "/api/tracks/{track_id}/cover/retry",
+    dependencies=[Depends(require_storage_writes_enabled)],
+)
 async def retry_track_cover(
     track_id: str,
     background_tasks: BackgroundTasks,
@@ -4766,13 +4817,23 @@ def update_track_metadata(
 
 
 @app.get("/api/tracks/{track_id}/stream")
-def track_stream(track_id: str, user=Depends(require_api_user)) -> Response:
+def track_stream(
+    track_id: str, request: Request, user=Depends(require_api_user)
+) -> Response:
     library = get_library(user["id"])
     info = library.audio_info(track_id)
     if info is None:
         raise HTTPException(status_code=404, detail="Track not found")
     try:
-        storage_path = info.storage_path or library.ensure_audio_storage(track_id)
+        storage_path = info.storage_path
+        if storage_path is None:
+            try:
+                storage_lifecycle.require_storage_writes_enabled()
+            except storage_lifecycle.StorageWritersPaused:
+                return _legacy_audio_response(
+                    library, track_id, request.headers.get("range")
+                )
+            storage_path = library.ensure_audio_storage(track_id)
         if not storage_path:
             raise HTTPException(status_code=404, detail="Track not found")
         signed_url = audio_store.create_signed_url(storage_path)
@@ -4789,3 +4850,57 @@ def track_stream(track_id: str, user=Depends(require_api_user)) -> Response:
         headers={"Cache-Control": "private, no-store"},
     )
 
+
+def _legacy_audio_response(
+    library, track_id: str, range_header: str | None
+) -> Response:
+    try:
+        audio, filename = library.audio_bytes(track_id)
+    except AudioUnavailableError:
+        raise HTTPException(status_code=404, detail="Track audio not found") from None
+    if audio is None or filename is None:
+        raise HTTPException(status_code=404, detail="Track audio not found")
+
+    total = len(audio)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+    }
+    status_code = 200
+    if range_header:
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if match is None or (not match.group(1) and not match.group(2)):
+            raise HTTPException(
+                status_code=416,
+                detail="Requested audio range is not satisfiable",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        try:
+            if not match.group(1):
+                suffix_length = int(match.group(2))
+                if suffix_length <= 0 or total == 0:
+                    raise ValueError
+                start = max(total - suffix_length, 0)
+                end = total - 1
+            else:
+                start = int(match.group(1))
+                end = int(match.group(2)) if match.group(2) else total - 1
+                if start >= total or end < start:
+                    raise ValueError
+                end = min(end, total - 1)
+        except ValueError:
+            raise HTTPException(
+                status_code=416,
+                detail="Requested audio range is not satisfiable",
+                headers={"Content-Range": f"bytes */{total}"},
+            ) from None
+        audio = audio[start : end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+        status_code = 206
+    headers["Content-Length"] = str(len(audio))
+    return Response(
+        content=audio,
+        status_code=status_code,
+        media_type=audio_store.guess_content_type(filename),
+        headers=headers,
+    )

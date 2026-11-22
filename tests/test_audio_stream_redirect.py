@@ -110,6 +110,30 @@ class TrackAudioRedirectTests(unittest.TestCase):
         upload.assert_not_called()
         create_signed_url.assert_called_once_with("user-a/track-id.mp3")
 
+    def test_legacy_track_remains_range_playable_while_storage_writes_paused(
+        self,
+    ) -> None:
+        self.library.info.storage_path = None
+        self.library.audio_bytes = lambda _track_id: (b"0123456789", "test.mp3")
+        with (
+            patch.dict(os.environ, {"VERVFY_STORAGE_WRITES_PAUSED": "1"}),
+            patch.object(self.library, "ensure_audio_storage") as ensure_audio_storage,
+            patch.object(
+                server.audio_store, "create_signed_url"
+            ) as create_signed_url,
+        ):
+            response = self.client.get(
+                "/api/tracks/track-id/stream",
+                headers={"Range": "bytes=2-5"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"2345")
+        self.assertEqual(response.headers["content-range"], "bytes 2-5/10")
+        ensure_audio_storage.assert_not_called()
+        create_signed_url.assert_not_called()
+
     def test_stream_requires_authentication(self) -> None:
         server.app.dependency_overrides.pop(server.require_api_user)
         response = self.client.get("/api/tracks/track-id/stream")

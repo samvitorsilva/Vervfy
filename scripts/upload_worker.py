@@ -123,6 +123,10 @@ def _complete_artwork(job_id: str, user_id: str) -> bool:
 
 def process(job_id: str, user_id: str) -> bool:
     """True allows queue acknowledgement; False leaves its durable lease intact."""
+    try:
+        storage_lifecycle.require_storage_writes_enabled()
+    except storage_lifecycle.StorageWritersPaused:
+        return False
     audio_path = None
     token = uuid.uuid4()
     try:
@@ -228,6 +232,11 @@ def process(job_id: str, user_id: str) -> bool:
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     while True:
+        try:
+            storage_lifecycle.require_storage_writes_enabled()
+        except storage_lifecycle.StorageWritersPaused:
+            time.sleep(1)
+            continue
         job = upload_queue.dequeue()
         if job:
             try:
