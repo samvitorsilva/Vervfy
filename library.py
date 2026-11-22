@@ -344,6 +344,7 @@ class Library:
         max_tracks: int | None = None,
         storage_path_override: str | None = None,
     ):
+        storage_lifecycle.require_storage_writes_enabled()
         path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -377,6 +378,7 @@ class Library:
         legacy_data: BytesLike | None = None,
         job_context: tuple[str, uuid.UUID] | None = None,
     ):
+        storage_lifecycle.require_storage_writes_enabled()
         if storage_path_override is not None:
             raise ValueError("Direct storage adoption is retired; staged audio must be copied")
         safe=os.path.basename(filename.replace("\\","/")).replace("\x00","") or "upload.mp3"
@@ -547,6 +549,7 @@ class Library:
         )
 
     def remove(self, track_id: str):
+        storage_lifecycle.require_storage_writes_enabled()
         from db import Favorite, Playlist, PlaylistTrack
         with tenant_session(self.user_id) as s:
             row=s.get(TrackRecord,{"id":track_id,"user_id":self.user_id})
@@ -604,6 +607,7 @@ class Library:
 
     def _attach_cover(self, track_id, version, **values):
         """CAS a prepared cover in a short, bounded transaction; no Storage I/O."""
+        storage_lifecycle.require_storage_writes_enabled()
         with tenant_session(self.user_id) as session:
             storage_lifecycle.bound_transaction(session)
             row = session.get(TrackRecord, {"id": track_id, "user_id": self.user_id}, with_for_update=True)
@@ -618,6 +622,7 @@ class Library:
             return self._track(row)
 
     def set_user_cover(self, track_id: str, cover_data: bytes):
+        storage_lifecycle.require_storage_writes_enabled()
         snapshot = self.get(track_id)
         if snapshot is None:
             return None
@@ -626,6 +631,7 @@ class Library:
             cover_path=path, has_cover=True, cover_source='user', cover_url=None)
 
     def set_album_user_cover(self, track_id: str, cover_data: bytes, *, replace_user_covers: bool = False) -> int | None:
+        storage_lifecycle.require_storage_writes_enabled()
         anchor = self.get(track_id)
         if anchor is None:
             return None
@@ -660,6 +666,7 @@ class Library:
             return count
 
     def remove_user_cover(self, track_id: str):
+        storage_lifecycle.require_storage_writes_enabled()
         snapshot = self.get(track_id)
         if snapshot is None:
             return None
@@ -716,6 +723,7 @@ class Library:
 
     def ensure_audio_storage(self, track_id: str) -> str | None:
         """Move one legacy audio blob to Storage and return its stable object path."""
+        storage_lifecycle.require_storage_writes_enabled()
         with tenant_session(self.user_id) as session:
             storage_lifecycle.bound_transaction(session)
             row = session.execute(
@@ -913,6 +921,7 @@ class Library:
 
     def set_resolved_cover(self, track_id: str, source: str, image: bytes | None = None,
                            url: str | None = None, *, expected_version: uuid.UUID | None = None) -> bool:
+        storage_lifecycle.require_storage_writes_enabled()
         if source not in {'upload', 'embedded', 'musicbrainz', 'audiodb', 'generated'}:
             raise ValueError('unsupported resolved cover source')
         snapshot = self.get(track_id)

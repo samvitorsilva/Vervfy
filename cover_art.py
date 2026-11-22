@@ -14,6 +14,7 @@ from io import BytesIO
 import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+import storage_lifecycle
 from artist_images import fetch_track_cover
 from library import _extract_cover, make_placeholder_cover
 
@@ -234,7 +235,13 @@ def generated_cover(title: str) -> bytes:
     return output.getvalue()
 
 
-def schedule_cover_resolution(background_tasks, user_id: str, track_id: str, **kwargs) -> bool:
+def schedule_cover_resolution(
+    background_tasks, user_id: str, track_id: str, **kwargs
+) -> bool:
+    try:
+        storage_lifecycle.require_storage_writes_enabled()
+    except storage_lifecycle.StorageWritersPaused:
+        return False
     key = (user_id, track_id)
     with _lookup_pending_lock:
         if key in _lookup_pending:
@@ -276,6 +283,10 @@ async def resolve_cover(
     prefer_audiodb: bool = False,
 ) -> None:
     """Run the ordered lookup; each failed provider logs and falls through."""
+    try:
+        storage_lifecycle.require_storage_writes_enabled()
+    except storage_lifecycle.StorageWritersPaused:
+        return
     from library import Library
 
     library = Library(user_id)

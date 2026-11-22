@@ -46,6 +46,21 @@ STATEMENT_TIMEOUT_MS = 5000
 IDLE_TRANSACTION_TIMEOUT_MS = 70000
 
 
+class StorageWritersPaused(audio_store.StorageError):
+    """Raised when storage-affecting writes are paused for maintenance."""
+
+
+def require_storage_writes_enabled() -> None:
+    setting = os.environ.get("VERVFY_STORAGE_WRITES_PAUSED", "0").strip()
+    if setting == "0":
+        return
+    if setting == "1":
+        raise StorageWritersPaused("Storage writes are temporarily paused")
+    raise StorageWritersPaused(
+        "Storage writes are paused because VERVFY_STORAGE_WRITES_PAUSED must be 0 or 1"
+    )
+
+
 def bound_transaction(session) -> None:
     """Transaction-local USERSET limits; no role grants or persistent settings."""
     if (
@@ -317,6 +332,7 @@ async def _transfer(binding, path, source, content_type, size, expected_digest):
 
 
 def upload_file(user_id, kind, file_path, content_type, extension):
+    require_storage_writes_enabled()
     try:
         local_backend = local_storage_selected()
     except LocalStorageConfigurationError as exc:
@@ -363,6 +379,7 @@ def upload_file(user_id, kind, file_path, content_type, extension):
 
 
 def upload_bytes(user_id, kind, data, content_type="image/jpeg", extension="jpg"):
+    require_storage_writes_enabled()
     with tempfile.NamedTemporaryFile(suffix="." + extension) as source:
         source.write(data)
         source.flush()
