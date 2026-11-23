@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import random
+import tempfile
 import ssl
 import sys
 import uuid
@@ -191,6 +192,45 @@ class ReadOnlyObserver:
             return {"bytes": count, "sha256": digest.hexdigest(), "etag": etag}
 
 
+
+def _checkpoint_path(plan_file):
+    return plan_file.with_name(plan_file.name + ".checkpoint")
+
+
+def _load_checkpoint(path, before):
+    if not path.exists():
+        return {}
+    if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
+        raise InventoryBlocked("Checkpoint is unsafe", reason_code="PLAN_SIZE_LIMIT")
+    with path.open("r") as stream:
+        checkpoint = json.load(stream)
+    if (
+        not isinstance(checkpoint, dict)
+        or set(checkpoint) != {"snapshot", "observations"}
+        or checkpoint["snapshot"] != before
+        or not isinstance(checkpoint["observations"], dict)
+    ):
+        raise InventoryBlocked(
+            "Checkpoint snapshot changed", reason_code="LEDGER_SNAPSHOT_CHANGED"
+        )
+    return checkpoint["observations"]
+
+
+def _save_checkpoint(path, before, observations):
+    # Atomic replacement; never write to the approved plan file.
+    fd, temp_name = tempfile.mkstemp(prefix=".inventory-", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump({"snapshot": before, "observations": observations}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
 def verify_connection(connection, target):
     """Check the actual plan/apply transaction, not a different connection."""
     runner._verify_client_tls(connection)
@@ -275,15 +315,26 @@ def main(argv=None):
                     flush=True,
                 )
 
+            checkpoint_path = _checkpoint_path(args.plan_file)
+            recovered = _load_checkpoint(checkpoint_path, before)
+            observations = dict(recovered)
+
+            def save_observation(object_id, evidence):
+                observations[object_id] = evidence
+                _save_checkpoint(checkpoint_path, before, observations)
+
             plan = measure_inventory(
                 before,
                 ReadOnlyObserver(client_factory, binding),
                 max_workers=args.workers,
                 progress=report_progress,
+                on_observation=save_observation,
+                initial_observations=recovered,
             )
             fd = os.open(args.plan_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w") as out:
                 json.dump(plan, out, sort_keys=True, indent=2)
+            checkpoint_path.unlink(missing_ok=True)
             print(
                 f"Read-only plan covers {len(plan['observations'])} unknown charges; "
                 f"SHA-256: {plan_digest(plan)}"
