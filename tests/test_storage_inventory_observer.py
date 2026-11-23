@@ -562,6 +562,22 @@ def test_cli_does_not_overwrite_existing_plan(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".inventory-plan-*"))
 
 
+
+def test_checkpoint_rejects_symlink_and_public_permissions(tmp_path):
+    before = {"objects": []}
+    private = tmp_path / "private.checkpoint"
+    inventory_cli._save_checkpoint(private, before, {})
+    link = tmp_path / "linked.checkpoint"
+    link.symlink_to(private)
+    with pytest.raises(OSError):
+        inventory_cli._load_checkpoint(link, before)
+    private.chmod(0o644)
+    with pytest.raises(InventoryBlocked) as error:
+        inventory_cli._load_checkpoint(private, before)
+    assert error.value.reason_code == "PLAN_SIZE_LIMIT"
+
+
+
 def test_checkpoint_write_failure_keeps_last_complete_file(tmp_path):
     path = tmp_path / "inventory.json.checkpoint"
     before = {"objects": []}
