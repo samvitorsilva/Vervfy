@@ -1,4 +1,5 @@
 """Fail-closed, explicitly authorized production Alembic upgrade runner."""
+
 from __future__ import annotations
 
 import argparse
@@ -93,7 +94,9 @@ def load_target(env: Mapping[str, str] | None = None) -> ProductionTarget:
         raise MigrationBlocked("VERVFY_ENVIRONMENT must be exactly production")
     for name in ("DATABASE_URL", "MIGRATION_DATABASE_URL"):
         if values.get(name, "").strip():
-            raise MigrationBlocked(f"Unset {name}; use only VERVFY_PRODUCTION_DATABASE_URL")
+            raise MigrationBlocked(
+                f"Unset {name}; use only VERVFY_PRODUCTION_DATABASE_URL"
+            )
     for name in FORBIDDEN_PG_ENV:
         if values.get(name, "").strip():
             raise MigrationBlocked(f"Unset {name}; libpq overrides are not allowed")
@@ -116,11 +119,15 @@ def load_target(env: Mapping[str, str] | None = None) -> ProductionTarget:
     if database != "postgres":
         raise MigrationBlocked("Expected production database must be postgres")
     if username != PRODUCTION_MIGRATION_ROLE:
-        raise MigrationBlocked("Expected production user must be the restricted migration role")
+        raise MigrationBlocked(
+            "Expected production user must be the restricted migration role"
+        )
 
     start_revision = values.get("VERVFY_PRODUCTION_START_REVISION", START_REVISION)
     if start_revision not in SUPPORTED_START_REVISIONS:
-        raise MigrationBlocked("Production start revision is not an approved upgrade boundary")
+        raise MigrationBlocked(
+            "Production start revision is not an approved upgrade boundary"
+        )
 
     raw_url = _required(values, "VERVFY_PRODUCTION_DATABASE_URL")
     try:
@@ -165,21 +172,27 @@ def load_target(env: Mapping[str, str] | None = None) -> ProductionTarget:
         raise MigrationBlocked(
             "Production URL must set sslmode=verify-full and the configured CA bundle"
         )
-    return ProductionTarget(url, project_ref, database, username, connection_mode, start_revision)
+    return ProductionTarget(
+        url, project_ref, database, username, connection_mode, start_revision
+    )
 
 
 def validate_authorization(expires_at: str, *, now: datetime | None = None) -> None:
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", expires_at) is None:
-        raise MigrationBlocked("Authorization expiry must be UTC RFC3339 seconds ending in Z")
-    try:
-        expiry = datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=UTC
+        raise MigrationBlocked(
+            "Authorization expiry must be UTC RFC3339 seconds ending in Z"
         )
+    try:
+        expiry = datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except ValueError:
-        raise MigrationBlocked("Authorization expiry is not a valid UTC timestamp") from None
+        raise MigrationBlocked(
+            "Authorization expiry is not a valid UTC timestamp"
+        ) from None
     current = datetime.now(UTC) if now is None else now.astimezone(UTC)
     if expiry <= current or expiry > current + AUTHORIZATION_TTL:
-        raise MigrationBlocked("Authorization must be active and expire within 15 minutes")
+        raise MigrationBlocked(
+            "Authorization must be active and expire within 15 minutes"
+        )
 
 
 def validate_migration_chain() -> None:
@@ -200,10 +213,7 @@ def validate_migration_chain() -> None:
             "Local Alembic history must be the reviewed linear chain through "
             f"{TARGET_REVISION}"
         )
-    if any(
-        newer.down_revision != older.revision
-        for newer, older in pairwise(chain)
-    ):
+    if any(newer.down_revision != older.revision for newer, older in pairwise(chain)):
         raise MigrationBlocked("Local Alembic history is not a single linear chain")
 
 
@@ -213,9 +223,7 @@ ROLE_GRAPH_CATEGORY_APP_RUNTIME_ATTRIBUTES = "app_runtime_attributes"
 ROLE_GRAPH_CATEGORY_CAPABILITY_MEMBERSHIPS = "capability_memberships"
 ROLE_GRAPH_CATEGORY_APP_RUNTIME_MEMBERSHIPS = "app_runtime_memberships"
 ROLE_GRAPH_CATEGORY_STORAGE_MEMBERSHIP_OPTIONS = "storage_membership_options"
-ROLE_GRAPH_CATEGORY_EFFECTIVE_PRIVILEGE_INHERITANCE = (
-    "effective_privilege_inheritance"
-)
+ROLE_GRAPH_CATEGORY_EFFECTIVE_PRIVILEGE_INHERITANCE = "effective_privilege_inheritance"
 ROLE_GRAPH_CATEGORY_OWNER_SET_CAPABILITY = "owner_set_capability"
 ROLE_GRAPH_CATEGORY_PREEXISTING_PRIVILEGES = "preexisting_privileges"
 APP_RUNTIME = "app_runtime"
@@ -235,9 +243,7 @@ def _load_storage_lifecycle_migration():
 
 def _block_role_graph(category: str, detail: str) -> None:
     """Fail closed with a categorized, credential-free role-graph diagnostic."""
-    raise MigrationBlocked(
-        f"storage_role_graph category={category}; {detail}"
-    )
+    raise MigrationBlocked(f"storage_role_graph category={category}; {detail}")
 
 
 def _check_app_runtime_attributes(connection: Connection, migration) -> object:
@@ -316,37 +322,40 @@ def _check_storage_membership_options(
 
 
 def _check_auth_sessions(
-    connection: Connection, *, expected_exists: bool
+    connection: Connection,
+    *,
+    expected_exists: bool,
+    allow_reviewed_overgrants: bool = False,
 ) -> None:
     """Require the reviewed auth-session owner, RLS state, and exact grants."""
-    exists = connection.execute(text("""
+    exists = connection.execute(
+        text("""
         SELECT pg_catalog.to_regclass('public.auth_sessions') IS NOT NULL
-    """)).scalar_one()
+    """)
+    ).scalar_one()
     if exists != expected_exists:
-        raise MigrationBlocked("auth_sessions does not match the approved starting revision")
+        raise MigrationBlocked(
+            "auth_sessions does not match the approved starting revision"
+        )
     if not exists:
         return
 
-    relation = connection.execute(text("""
+    relation = connection.execute(
+        text("""
         SELECT pg_catalog.pg_get_userbyid(c.relowner),
                c.relrowsecurity, c.relforcerowsecurity
         FROM pg_catalog.pg_class c
         WHERE c.oid = pg_catalog.to_regclass('public.auth_sessions')
-    """)).one_or_none()
-    current_user = connection.exec_driver_sql(
-        "SELECT current_user"
-    ).scalar_one()
-    if (
-        relation is None
-        or relation[0] != current_user
-        or relation[1]
-        or relation[2]
-    ):
+    """)
+    ).one_or_none()
+    current_user = connection.exec_driver_sql("SELECT current_user").scalar_one()
+    if relation is None or relation[0] != current_user or relation[1] or relation[2]:
         raise MigrationBlocked(
             "auth_sessions must be migration-owned with RLS disabled"
         )
 
-    acl = connection.execute(text("""
+    acl = connection.execute(
+        text("""
         SELECT COALESCE(r.rolname, 'PUBLIC'),
                a.privilege_type,
                a.is_grantable
@@ -357,20 +366,41 @@ def _check_auth_sessions(
         LEFT JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
         WHERE c.oid = pg_catalog.to_regclass('public.auth_sessions')
           AND a.grantee <> c.relowner
-    """)).all()
-    actual_acl = {
-        (row[0], row[1], bool(row[2]))
-        for row in acl
-    }
+    """)
+    ).all()
+    actual_acl = {(row[0], row[1], bool(row[2])) for row in acl}
     expected_acl = {
         ("app_runtime", "SELECT", False),
         ("app_runtime", "INSERT", False),
         ("app_runtime", "DELETE", False),
     }
-    if actual_acl != expected_acl:
+    reviewed_overgrants = set(expected_acl)
+    if allow_reviewed_overgrants:
+        version_num = int(
+            connection.exec_driver_sql("SHOW server_version_num").scalar_one()
+        )
+        full_privileges = {
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "TRUNCATE",
+            "REFERENCES",
+            "TRIGGER",
+        }
+        if version_num >= 170000:
+            full_privileges.add("MAINTAIN")
+        for role in ("anon", "authenticated", "service_role"):
+            reviewed_overgrants.update(
+                (role, privilege, False) for privilege in full_privileges
+            )
+    if actual_acl != (
+        reviewed_overgrants if allow_reviewed_overgrants else expected_acl
+    ):
         raise MigrationBlocked("Unexpected direct auth_sessions privileges")
 
-    runtime_privileges = connection.execute(text("""
+    runtime_privileges = connection.execute(
+        text("""
         SELECT
             has_table_privilege('app_runtime', 'public.auth_sessions', 'SELECT'),
             has_table_privilege('app_runtime', 'public.auth_sessions', 'INSERT'),
@@ -379,10 +409,9 @@ def _check_auth_sessions(
             has_table_privilege('app_runtime', 'public.auth_sessions', 'TRUNCATE'),
             has_table_privilege('app_runtime', 'public.auth_sessions', 'REFERENCES'),
             has_table_privilege('app_runtime', 'public.auth_sessions', 'TRIGGER')
-    """)).one()
-    if tuple(runtime_privileges) != (
-        True, True, False, True, False, False, False
-    ):
+    """)
+    ).one()
+    if tuple(runtime_privileges) != (True, True, False, True, False, False, False):
         raise MigrationBlocked("Unexpected effective auth_sessions privileges")
 
 
@@ -602,7 +631,6 @@ def _check_role_graph(connection: Connection, migration_user: str) -> None:
         )
 
 
-
 def _check_storage_acl_inventory(
     connection: Connection,
     *,
@@ -616,7 +644,8 @@ def _check_storage_acl_inventory(
     fresh-role check. Existing grants on the lifecycle tables and functions
     are required for the application to operate and must not be revoked.
     """
-    rows = connection.execute(text("""
+    rows = connection.execute(
+        text("""
         SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
                n.nspname::text AS object_name, a.privilege_type,
                a.is_grantable
@@ -675,7 +704,9 @@ def _check_storage_acl_inventory(
         JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
         WHERE n.nspname = 'vervfy_storage'
           AND r.rolname IN (:owner, :executor, :worker)
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
 
     # Recognize only the exact reviewed quota migration, not arbitrary future
     # schemas. This inventory is read-only and never creates or restores grants.
@@ -684,8 +715,13 @@ def _check_storage_acl_inventory(
     ).scalars().all() == ["0034_storage_byte_reservations"]
 
     actual = {
-        (row.role_name, row.object_type, row.object_name,
-         row.privilege_type, bool(row.is_grantable))
+        (
+            row.role_name,
+            row.object_type,
+            row.object_name,
+            row.privilege_type,
+            bool(row.is_grantable),
+        )
         for row in rows
     }
 
@@ -704,7 +740,9 @@ def _check_storage_acl_inventory(
 
     if quota_aware:
         for privilege in ("SELECT", "UPDATE"):
-            allowed.add((owner, "TABLE", "vervfy_storage.quota_policy", privilege, False))
+            allowed.add(
+                (owner, "TABLE", "vervfy_storage.quota_policy", privilege, False)
+            )
 
     for table, column in (
         ("public.users", "id"),
@@ -736,9 +774,9 @@ def _check_storage_acl_inventory(
             "retained_bytes()",
         )
     for signature in lifecycle_functions:
-        allowed.add((
-            owner, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
-        ))
+        allowed.add(
+            (owner, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False)
+        )
 
     executor_functions = (
         "claim_cleanup(p_object uuid)",
@@ -749,13 +787,14 @@ def _check_storage_acl_inventory(
         "validate_namespace(p_id uuid, p_environment text, p_endpoint text, p_bucket text)",
     )
     for signature in executor_functions:
-        allowed.add((
-            executor, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False
-        ))
+        allowed.add(
+            (executor, "FUNCTION", f"vervfy_storage.{signature}", "EXECUTE", False)
+        )
 
     # Also inspect effective privileges, not just direct ACL entries. This
     # catches PUBLIC grants and privileges inherited through an unexpected role.
-    effective_relations = connection.execute(text("""
+    effective_relations = connection.execute(
+        text("""
         SELECT r.rolname AS role_name,
                n.nspname || '.' || c.relname AS object_name,
                privilege.privilege_type
@@ -772,7 +811,9 @@ def _check_storage_acl_inventory(
           AND pg_catalog.has_table_privilege(
               r.oid, c.oid, privilege.privilege_type
           )
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
 
     effective_allowed = set()
     for table, privileges in {
@@ -812,7 +853,8 @@ def _check_storage_acl_inventory(
             )
         )
 
-    effective_columns = connection.execute(text("""
+    effective_columns = connection.execute(
+        text("""
         SELECT r.rolname AS role_name,
                n.nspname || '.' || c.relname || '.' || att.attname AS object_name,
                privilege.privilege_type
@@ -828,7 +870,9 @@ def _check_storage_acl_inventory(
           AND pg_catalog.has_column_privilege(
               r.oid, c.oid, att.attnum, privilege.privilege_type
           )
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
 
     expected_columns = {
         (owner, "public.users.id", "SELECT"),
@@ -850,7 +894,8 @@ def _check_storage_acl_inventory(
             )
         )
 
-    effective_sequences = connection.execute(text("""
+    effective_sequences = connection.execute(
+        text("""
         SELECT r.rolname AS role_name,
                n.nspname || '.' || c.relname AS object_name,
                privilege.privilege_type
@@ -865,11 +910,16 @@ def _check_storage_acl_inventory(
           AND pg_catalog.has_sequence_privilege(
               r.oid, c.oid, privilege.privilege_type
           )
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
     if effective_sequences:
-        raise RuntimeError("Storage capability roles have unexpected sequence privileges")
+        raise RuntimeError(
+            "Storage capability roles have unexpected sequence privileges"
+        )
 
-    effective_functions = connection.execute(text("""
+    effective_functions = connection.execute(
+        text("""
         SELECT r.rolname AS role_name,
                n.nspname::text || '.' || p.proname::text || '(' ||
                    pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' AS object_name
@@ -878,12 +928,14 @@ def _check_storage_acl_inventory(
         JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
         WHERE r.rolname IN (:owner, :executor, :worker)
           AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+          AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'USAGE')
           AND pg_catalog.has_function_privilege(r.oid, p.oid, 'EXECUTE')
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
 
     expected_function_access = {
-        (owner, "vervfy_storage." + signature)
-        for signature in lifecycle_functions
+        (owner, "vervfy_storage." + signature) for signature in lifecycle_functions
     } | {
         (role, "vervfy_storage." + signature)
         for role in (executor, worker)
@@ -902,7 +954,8 @@ def _check_storage_acl_inventory(
             )
         )
 
-    unsafe_schema_create = connection.execute(text("""
+    unsafe_schema_create = connection.execute(
+        text("""
         SELECT r.rolname, n.nspname
         FROM pg_catalog.pg_roles r
         CROSS JOIN pg_catalog.pg_namespace n
@@ -910,22 +963,28 @@ def _check_storage_acl_inventory(
           AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
           AND pg_catalog.has_schema_privilege(r.oid, n.oid, 'CREATE')
         LIMIT 1
-    """), {"owner": owner, "executor": executor, "worker": worker}).first()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).first()
     if unsafe_schema_create:
-        raise RuntimeError("Storage capability roles have unexpected schema CREATE access")
+        raise RuntimeError(
+            "Storage capability roles have unexpected schema CREATE access"
+        )
 
     unexpected = actual - allowed
     if unexpected:
         sample = sorted(unexpected)
         raise RuntimeError(
-            "Unexpected direct storage capability ACL entries:" + chr(10)
+            "Unexpected direct storage capability ACL entries:"
+            + chr(10)
             + chr(10).join(
                 repr((role, kind, name, privilege, grantable))
                 for role, kind, name, privilege, grantable in sample
             )
         )
 
-    ownership = connection.execute(text("""
+    ownership = connection.execute(
+        text("""
         SELECT r.rolname AS role_name, 'SCHEMA' AS object_type,
                n.nspname::text AS object_name
         FROM pg_catalog.pg_namespace n
@@ -948,7 +1007,9 @@ def _check_storage_acl_inventory(
         JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
         WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
           AND r.rolname IN (:owner, :executor, :worker)
-    """), {"owner": owner, "executor": executor, "worker": worker}).all()
+    """),
+        {"owner": owner, "executor": executor, "worker": worker},
+    ).all()
 
     expected_owned_functions = {
         "vervfy_storage." + signature for signature in lifecycle_functions
@@ -965,14 +1026,21 @@ def _check_storage_acl_inventory(
     if unexpected_ownership:
         raise RuntimeError("Storage capability role unexpectedly owns database objects")
 
-    defaults = connection.execute(text("""
+    defaults = (
+        connection.execute(
+            text("""
         SELECT DISTINCT r.rolname
         FROM pg_catalog.pg_default_acl d
         CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) a
         JOIN pg_catalog.pg_roles r
           ON r.oid = d.defaclrole OR r.oid = a.grantee
         WHERE r.rolname IN (:owner, :executor, :worker) OR a.grantee = 0
-    """), {"owner": owner, "executor": executor, "worker": worker}).scalars().all()
+    """),
+            {"owner": owner, "executor": executor, "worker": worker},
+        )
+        .scalars()
+        .all()
+    )
     if defaults:
         raise RuntimeError("Storage capability roles have unexpected default ACLs")
 
@@ -996,7 +1064,12 @@ def _verify_client_tls(connection: Connection) -> None:
         )
 
 
-def preflight(connection: Connection, target: ProductionTarget) -> None:
+def preflight(
+    connection: Connection,
+    target: ProductionTarget,
+    *,
+    _for_internal_acl_repair: bool = False,
+) -> None:
     _verify_client_tls(connection)
     with connection.begin():
         connection.exec_driver_sql("SET TRANSACTION READ ONLY")
@@ -1009,13 +1082,19 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         ).one()
         db_name, session_user, current_user, schema, version_num = identity
         if db_name != target.database:
-            raise MigrationBlocked("Connected database does not match the approved target")
+            raise MigrationBlocked(
+                "Connected database does not match the approved target"
+            )
         if session_user != target.username or current_user != target.username:
-            raise MigrationBlocked("Connected login does not match the approved migration role")
+            raise MigrationBlocked(
+                "Connected login does not match the approved migration role"
+            )
         if schema != "public":
             raise MigrationBlocked("Production migration search path is not public")
         if version_num < 160000:
-            raise MigrationBlocked("PostgreSQL 16 or newer is required for membership checks")
+            raise MigrationBlocked(
+                "PostgreSQL 16 or newer is required for membership checks"
+            )
 
         principal = connection.execute(
             text("""
@@ -1025,7 +1104,9 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
             """)
         ).one_or_none()
         if principal is None or any(principal[:5]) or not principal.rolcanlogin:
-            raise MigrationBlocked("Migration login must be unprivileged and able to log in")
+            raise MigrationBlocked(
+                "Migration login must be unprivileged and able to log in"
+            )
 
         privileges = connection.execute(
             text("""
@@ -1067,10 +1148,14 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         ).scalar_one_or_none()
         if version_owner != current_user:
             raise MigrationBlocked("Migration login must own public.alembic_version")
-        revision = connection.execute(
-            text("SELECT version_num FROM public.alembic_version")
-        ).scalars().all()
-        if target.start_revision not in SUPPORTED_START_REVISIONS or revision != [target.start_revision]:
+        revision = (
+            connection.execute(text("SELECT version_num FROM public.alembic_version"))
+            .scalars()
+            .all()
+        )
+        if target.start_revision not in SUPPORTED_START_REVISIONS or revision != [
+            target.start_revision
+        ]:
             raise MigrationBlocked(
                 f"Expected exactly {target.start_revision}; found a different Alembic revision state"
             )
@@ -1086,14 +1171,18 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         if not schema_exists:
             raise MigrationBlocked("Existing storage lifecycle schema is missing")
 
-        storage_schema = connection.execute(text("""
+        storage_schema = connection.execute(
+            text("""
             SELECT pg_catalog.pg_get_userbyid(nspowner),
                    has_schema_privilege(current_user, 'vervfy_storage', 'USAGE'),
                    has_schema_privilege(current_user, 'vervfy_storage', 'CREATE')
             FROM pg_catalog.pg_namespace
             WHERE nspname = 'vervfy_storage'
-        """)).one_or_none()
-        storage_table_owners = set(connection.execute(text("""
+        """)
+        ).one_or_none()
+        storage_table_owners = set(
+            connection.execute(
+                text("""
             SELECT c.relname
             FROM pg_catalog.pg_class c
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -1101,7 +1190,9 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
               AND c.relname IN ('namespaces', 'objects', 'cleanup_jobs')
               AND c.relkind IN ('r', 'p')
               AND pg_catalog.pg_get_userbyid(c.relowner) = current_user
-        """)).scalars())
+        """)
+            ).scalars()
+        )
         if (
             storage_schema is None
             or storage_schema[0] != current_user
@@ -1114,15 +1205,15 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
             )
 
         # Read the namespace using its restricted lifecycle-owner capability.
-        connection.exec_driver_sql(
-            "SET LOCAL ROLE vervfy_storage_lifecycle_owner"
-        )
-        namespace_rows = connection.execute(text("""
+        connection.exec_driver_sql("SET LOCAL ROLE vervfy_storage_lifecycle_owner")
+        namespace_rows = connection.execute(
+            text("""
             SELECT namespace_id::text, environment, endpoint,
                    bucket, physical_cleanup_enabled
             FROM vervfy_storage.namespaces
             WHERE id = 1
-        """)).all()
+        """)
+        ).all()
         connection.exec_driver_sql("RESET ROLE")
 
         expected_namespace = (
@@ -1142,7 +1233,8 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         # The storage lifecycle columns must already exist at revision 0031.
         existing_columns = {
             (row.table_name, row.column_name)
-            for row in connection.execute(text("""
+            for row in connection.execute(
+                text("""
                 SELECT table_name, column_name
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
@@ -1151,7 +1243,8 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                       OR (table_name = 'artist_photos' AND column_name = 'media_version')
                       OR (table_name = 'upload_jobs' AND column_name = 'processing_token')
                   )
-            """)).all()
+            """)
+            ).all()
         }
 
         expected_columns = {
@@ -1161,18 +1254,30 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
         }
 
         if not expected_columns.issubset(existing_columns):
-            raise MigrationBlocked(
-                "Existing storage lifecycle columns are incomplete"
-            )
+            raise MigrationBlocked("Existing storage lifecycle columns are incomplete")
 
         # 0032 creates auth_sessions; 0033 preserves its reviewed grants.
         _check_auth_sessions(
             connection,
             expected_exists=target.start_revision in AUTH_SESSIONS_PRESENT_REVISIONS,
+            allow_reviewed_overgrants=_for_internal_acl_repair,
         )
+        if target.start_revision in AUTH_SESSIONS_PRESENT_REVISIONS:
+            from storage_internal_acl import check_internal_acls
+
+            try:
+                check_internal_acls(
+                    connection,
+                    allow_reviewed_overgrants=_for_internal_acl_repair,
+                )
+            except RuntimeError:
+                raise MigrationBlocked(
+                    "Internal public-table ACLs do not match the reviewed state"
+                ) from None
 
         # Confirm the expected pre-0033 cleanup permissions.
-        cleanup_privileges = connection.execute(text("""
+        cleanup_privileges = connection.execute(
+            text("""
             SELECT
                 has_function_privilege(
                     'vervfy_storage_lifecycle_owner',
@@ -1190,7 +1295,8 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
                     'app_runtime',
                     'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
                 )
-        """)).one()
+        """)
+        ).one()
 
         expected_claims = (
             (True, True, True, False)
@@ -1201,7 +1307,6 @@ def preflight(connection: Connection, target: ProductionTarget) -> None:
             raise MigrationBlocked(
                 "Unexpected cleanup-claim privileges at the approved starting revision"
             )
-
 
 
 def _engine(target: ProductionTarget):
@@ -1217,19 +1322,34 @@ def run_check(target: ProductionTarget) -> None:
         engine.dispose()
 
 
-def _verify_followup_result(connection: Connection, *, installation: bool = True) -> None:
+def _verify_followup_result(
+    connection: Connection, *, installation: bool = True
+) -> None:
     """Verify the quota-aware head without enabling cleanup or changing data."""
-    with (connection.begin_nested() if connection.in_transaction() else connection.begin()):
-        revision = connection.execute(
-            text("SELECT version_num FROM public.alembic_version")
-        ).scalars().all()
+    with (
+        connection.begin_nested() if connection.in_transaction() else connection.begin()
+    ):
+        revision = (
+            connection.execute(text("SELECT version_num FROM public.alembic_version"))
+            .scalars()
+            .all()
+        )
 
         if revision != [TARGET_REVISION]:
             raise MigrationBlocked("Post-migration revision verification failed")
 
         _check_auth_sessions(connection, expected_exists=True)
+        from storage_internal_acl import check_internal_acls
 
-        cleanup_privileges = connection.execute(text("""
+        try:
+            check_internal_acls(connection)
+        except RuntimeError:
+            raise MigrationBlocked(
+                "Internal public-table ACLs do not match the reviewed state"
+            ) from None
+
+        cleanup_privileges = connection.execute(
+            text("""
             SELECT
                 has_function_privilege(
                     'vervfy_storage_lifecycle_owner',
@@ -1247,7 +1367,8 @@ def _verify_followup_result(connection: Connection, *, installation: bool = True
                     'app_runtime',
                     'vervfy_storage.claim_next_cleanup()', 'EXECUTE'
                 )
-        """)).one()
+        """)
+        ).one()
 
         if tuple(cleanup_privileges) != (True, False, False, False):
             raise MigrationBlocked(
@@ -1255,16 +1376,16 @@ def _verify_followup_result(connection: Connection, *, installation: bool = True
             )
 
         # Verify the immutable namespace using its restricted owner role.
-        connection.exec_driver_sql(
-            "SET LOCAL ROLE vervfy_storage_lifecycle_owner"
-        )
+        connection.exec_driver_sql("SET LOCAL ROLE vervfy_storage_lifecycle_owner")
 
-        namespace = connection.execute(text("""
+        namespace = connection.execute(
+            text("""
             SELECT namespace_id::text, environment, endpoint,
                    bucket, physical_cleanup_enabled
             FROM vervfy_storage.namespaces
             WHERE id = 1
-        """)).all()
+        """)
+        ).all()
 
         connection.exec_driver_sql("RESET ROLE")
 
@@ -1277,19 +1398,19 @@ def _verify_followup_result(connection: Connection, *, installation: bool = True
         )
 
         if len(namespace) != 1 or tuple(namespace[0]) != expected:
-            raise MigrationBlocked(
-                "Production storage namespace changed unexpectedly"
-            )
+            raise MigrationBlocked("Production storage namespace changed unexpectedly")
         connection.exec_driver_sql("SET LOCAL ROLE vervfy_storage_lifecycle_owner")
         policy = connection.exec_driver_sql(
             "SELECT tenant_limit_bytes,total_limit_bytes FROM vervfy_storage.quota_policy WHERE id=1"
         ).one()
         connection.exec_driver_sql("RESET ROLE")
-        if ((installation and tuple(policy) != (157286400, 10737418240))
-            or any(type(value) is not int or value <= 0 for value in policy)):
+        if (installation and tuple(policy) != (157286400, 10737418240)) or any(
+            type(value) is not int or value <= 0 for value in policy
+        ):
             raise MigrationBlocked("Unexpected quota policy after 0034")
 
-        quota_access = connection.execute(text("""
+        quota_access = connection.execute(
+            text("""
             SELECT
               has_function_privilege('app_runtime', 'vervfy_storage.reserve_sized_object(text,text,bigint,bigint)', 'EXECUTE'),
               has_function_privilege('app_runtime', 'vervfy_storage.retained_bytes()', 'EXECUTE'),
@@ -1297,14 +1418,18 @@ def _verify_followup_result(connection: Connection, *, installation: bool = True
               has_table_privilege('app_runtime', 'vervfy_storage.quota_policy', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),
               (SELECT relrowsecurity AND relforcerowsecurity FROM pg_catalog.pg_class
                WHERE oid='vervfy_storage.quota_policy'::regclass)
-        """)).one()
+        """)
+        ).one()
         if tuple(quota_access) != (True, True, False, False, True):
-            raise MigrationBlocked("Unexpected quota RLS or runtime privileges after 0034")
+            raise MigrationBlocked(
+                "Unexpected quota RLS or runtime privileges after 0034"
+            )
         _check_storage_acl_inventory(
-            connection, owner="vervfy_storage_lifecycle_owner",
-            executor="vervfy_storage_cleanup", worker="storage_cleanup_worker",
+            connection,
+            owner="vervfy_storage_lifecycle_owner",
+            executor="vervfy_storage_cleanup",
+            worker="storage_cleanup_worker",
         )
-
 
 
 def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
@@ -1344,7 +1469,10 @@ def run_upgrade(target: ProductionTarget, expires_at: str) -> None:
             stage = "alembic_upgrade"
             # Postflight failures roll back the entire upgrade, including DDL.
             with (
-                patch.dict(os.environ, {"DATABASE_URL": target.url.render_as_string(hide_password=False)}),
+                patch.dict(
+                    os.environ,
+                    {"DATABASE_URL": target.url.render_as_string(hide_password=False)},
+                ),
                 connection.begin(),
             ):
                 command.upgrade(config, TARGET_REVISION)
@@ -1367,7 +1495,9 @@ def _parser() -> argparse.ArgumentParser:
             subparser.add_argument(
                 "--authorize-production-migration",
                 required=True,
-                choices=tuple(f"{start}..{TARGET_REVISION}" for start in SUPPORTED_START_REVISIONS),
+                choices=tuple(
+                    f"{start}..{TARGET_REVISION}" for start in SUPPORTED_START_REVISIONS
+                ),
             )
             subparser.add_argument(
                 "--authorization-expires-at",
@@ -1383,10 +1513,17 @@ def main(argv: list[str] | None = None) -> int:
         validate_migration_chain()
         target = load_target()
         if args.confirm_project_ref != target.project_ref:
-            raise MigrationBlocked("Confirmation does not match the configured production project")
+            raise MigrationBlocked(
+                "Confirmation does not match the configured production project"
+            )
         if args.operation == "upgrade":
-            if args.authorize_production_migration != f"{target.start_revision}..{TARGET_REVISION}":
-                raise MigrationBlocked("Authorization does not match the configured upgrade boundary")
+            if (
+                args.authorize_production_migration
+                != f"{target.start_revision}..{TARGET_REVISION}"
+            ):
+                raise MigrationBlocked(
+                    "Authorization does not match the configured upgrade boundary"
+                )
             validate_authorization(args.authorization_expires_at)
             run_upgrade(target, args.authorization_expires_at)
             print(f"Production migration completed at {TARGET_REVISION}")
