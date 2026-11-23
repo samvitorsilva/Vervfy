@@ -500,6 +500,53 @@ def test_cli_configures_bounded_observation_workers(
     engine.dispose.assert_called_once()
 
 
+
+def test_cli_does_not_overwrite_existing_plan(tmp_path, monkeypatch):
+    target = SimpleNamespace(project_ref="synthetic-project")
+    engine = MagicMock()
+    before = {"objects": []}
+    plan_file = tmp_path / "inventory-plan.json"
+    plan_file.write_text("approved existing plan")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "synthetic-only")
+    with (
+        patch.object(inventory_cli.runner, "validate_migration_chain"),
+        patch.object(inventory_cli.runner, "load_target", return_value=target),
+        patch.object(inventory_cli.runner, "_engine", return_value=engine),
+        patch.object(inventory_cli, "verify_connection"),
+        patch.object(inventory_cli, "snapshot", return_value=before),
+        patch.object(
+            inventory_cli,
+            "measure_inventory",
+            return_value={"version": 2, "snapshot": before, "observations": {}},
+        ),
+    ):
+        result = inventory_cli.main(
+            [
+                "plan",
+                "--plan-file",
+                str(plan_file),
+                "--confirm-project-ref",
+                target.project_ref,
+                "--confirm-uploads-paused",
+            ]
+        )
+    assert result == 1
+    assert plan_file.read_text() == "approved existing plan"
+    assert not list(tmp_path.glob(".inventory-plan-*"))
+
+
+def test_checkpoint_write_failure_keeps_last_complete_file(tmp_path):
+    path = tmp_path / "inventory.json.checkpoint"
+    before = {"objects": []}
+    inventory_cli._save_checkpoint(path, before, {})
+    original = path.read_bytes()
+    with patch.object(inventory_cli.os, "replace", side_effect=OSError("interrupted")):
+        with pytest.raises(OSError):
+            inventory_cli._save_checkpoint(path, before, {"x": {}})
+    assert path.read_bytes() == original
+    assert not list(tmp_path.glob(".inventory-*"))
+
+
 @pytest.mark.parametrize("workers", ["0", str(MAX_CONCURRENT_OBSERVATIONS + 1)])
 def test_cli_rejects_observation_workers_out_of_bounds(workers, tmp_path):
     with pytest.raises(SystemExit) as error:
