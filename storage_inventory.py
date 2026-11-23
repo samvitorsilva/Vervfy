@@ -244,10 +244,20 @@ def measure_inventory(
     observations = dict(initial_observations or {})
     if not set(observations).issubset({row["id"] for row in unknown}):
         raise InventoryBlocked("Checkpoint coverage mismatch", reason_code="OBSERVATION_COVERAGE_MISMATCH")
-    for evidence in observations.values():
-        _validate_measurement(evidence)
+    # Expired checkpoint entries are never trusted: re-observe them from scratch.
+    # Future timestamps and malformed evidence remain hard failures.
     if observations:
-        _validate_freshness(observations, datetime.now(UTC))
+        current = datetime.now(UTC)
+        for object_id, evidence in list(observations.items()):
+            _validate_measurement(evidence)
+            age = current - datetime.fromisoformat(evidence["measured_at"]).astimezone(UTC)
+            if age < timedelta(0):
+                raise InventoryBlocked(
+                    "Checkpoint evidence is future dated",
+                    reason_code="EVIDENCE_STALE_OR_FUTURE",
+                )
+            if age >= MAX_AGE:
+                del observations[object_id]
 
     def observe_one(row):
         # A timed-out object gets one fresh, independently verified observation.
