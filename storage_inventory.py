@@ -223,6 +223,7 @@ def measure_inventory(
     max_workers=MAX_CONCURRENT_OBSERVATIONS,
     progress=None,
     on_observation=None,
+    initial_observations=None,
 ) -> dict:
     """Observe unknown rows concurrently, without holding a SQL transaction."""
     if (
@@ -239,6 +240,13 @@ def measure_inventory(
             "An unknown-size object still has an active operation",
             reason_code="ACTIVE_UNKNOWN_OBJECT",
         )
+
+    observations = dict(initial_observations or {})
+    if not set(observations).issubset({row["id"] for row in unknown}):
+        raise InventoryBlocked("Checkpoint coverage mismatch", reason_code="OBSERVATION_COVERAGE_MISMATCH")
+    for evidence in observations.values():
+        _validate_measurement(evidence)
+    _validate_freshness(observations, datetime.now(UTC))
 
     def observe_one(row):
         # A timed-out object gets one fresh, independently verified observation.
@@ -270,11 +278,11 @@ def measure_inventory(
         _validate_measurement(evidence)
         return row["id"], evidence
 
-    observations = {}
+    pending = [row for row in unknown if row["id"] not in observations]
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(observe_one, row): row for row in unknown}
+        futures = {pool.submit(observe_one, row): row for row in pending}
         try:
-            for completed, future in enumerate(as_completed(futures), start=1):
+            for completed, future in enumerate(as_completed(futures), start=len(observations) + 1):
                 object_id, evidence = future.result()
                 observations[object_id] = evidence
                 if on_observation is not None:
