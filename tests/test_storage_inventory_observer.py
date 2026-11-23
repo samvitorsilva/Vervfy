@@ -343,6 +343,39 @@ def test_inventory_never_retries_permanent_or_repeated_failure():
         assert calls == expected_calls
 
 
+
+def test_inventory_emits_only_complete_verified_observations_before_failure():
+    checkpoints = []
+    rows = [
+        {"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None},
+        {"id": "2", "path": "legacy/2", "state": "hold", "reserved_bytes": None},
+    ]
+
+    def callback(path):
+        if path.endswith("/2"):
+            raise InventoryBlocked("missing", reason_code="OBJECT_NOT_FOUND")
+        return {
+            "bytes": 3,
+            "sha256": hashlib.sha256(b"abc").hexdigest(),
+            "etag": '"stable"',
+        }
+
+    with pytest.raises(InventoryBlocked) as error:
+        measure_inventory(
+            {"objects": rows},
+            callback,
+            max_workers=1,
+            on_observation=lambda object_id, evidence: checkpoints.append(
+                (object_id, evidence)
+            ),
+        )
+    assert error.value.reason_code == "OBJECT_NOT_FOUND"
+    assert len(checkpoints) == 1
+    assert checkpoints[0][0] == "1"
+    assert checkpoints[0][1]["bytes"] == 3
+    assert "measured_at" in checkpoints[0][1]
+
+
 def test_measure_inventory_rejects_unbounded_concurrency():
     with pytest.raises(InventoryBlocked) as error:
         measure_inventory(
