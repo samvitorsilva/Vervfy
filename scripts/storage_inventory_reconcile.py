@@ -199,7 +199,9 @@ def _checkpoint_path(plan_file):
 
 
 def _load_checkpoint(path, before):
-    if not path.exists():
+    # lexists detects dangling symlinks too; Path.exists would silently treat
+    # one as an absent checkpoint and permit an unsafe restart.
+    if not os.path.lexists(path):
         return {}
     # Open without following symlinks and validate the opened inode, not a
     # potentially replaced pathname. Checkpoints contain private object metadata.
