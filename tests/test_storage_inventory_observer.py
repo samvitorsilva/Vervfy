@@ -407,10 +407,37 @@ def test_stale_checkpoint_evidence_fails_closed():
         "etag": '"stable"',
         "measured_at": (datetime.now(UTC) - timedelta(minutes=16)).isoformat(),
     }
+    calls = []
+
+    def fresh_read(path):
+        calls.append(path)
+        return {
+            "bytes": 4,
+            "sha256": hashlib.sha256(b"new!").hexdigest(),
+            "etag": '"new"',
+        }
+
+    plan = measure_inventory(
+        {"objects": rows}, fresh_read, initial_observations={"1": evidence}
+    )
+    assert calls == ["legacy/1"]
+    assert plan["observations"]["1"]["bytes"] == 4
+    assert plan["observations"]["1"]["sha256"] != evidence["sha256"]
+
+
+
+def test_future_checkpoint_evidence_blocks_without_provider_reads():
+    rows = [{"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None}]
+    evidence = {
+        "bytes": 3,
+        "sha256": hashlib.sha256(b"abc").hexdigest(),
+        "etag": '"stable"',
+        "measured_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    }
     with pytest.raises(InventoryBlocked) as error:
         measure_inventory(
             {"objects": rows},
-            lambda path: pytest.fail("Stale evidence must not be reused"),
+            lambda path: pytest.fail("Future evidence must fail closed"),
             initial_observations={"1": evidence},
         )
     assert error.value.reason_code == "EVIDENCE_STALE_OR_FUTURE"
