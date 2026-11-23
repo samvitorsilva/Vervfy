@@ -222,6 +222,7 @@ def measure_inventory(
     *,
     max_workers=MAX_CONCURRENT_OBSERVATIONS,
     progress=None,
+    on_observation=None,
 ) -> dict:
     """Observe unknown rows concurrently, without holding a SQL transaction."""
     if (
@@ -276,6 +277,8 @@ def measure_inventory(
             for completed, future in enumerate(as_completed(futures), start=1):
                 object_id, evidence = future.result()
                 observations[object_id] = evidence
+                if on_observation is not None:
+                    on_observation(object_id, evidence)
                 if progress is not None:
                     progress(completed, len(unknown))
         except Exception:
