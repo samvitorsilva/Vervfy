@@ -376,6 +376,46 @@ def test_inventory_emits_only_complete_verified_observations_before_failure():
     assert "measured_at" in checkpoints[0][1]
 
 
+
+def test_checkpoint_round_trip_and_reuses_only_fresh_matching_evidence(tmp_path):
+    path = tmp_path / "inventory.json.checkpoint"
+    rows = [{"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None}]
+    before = {"objects": rows}
+    evidence = {
+        "bytes": 3,
+        "sha256": hashlib.sha256(b"abc").hexdigest(),
+        "etag": '"stable"',
+        "measured_at": datetime.now(UTC).isoformat(),
+    }
+    inventory_cli._save_checkpoint(path, before, {"1": evidence})
+    assert inventory_cli._load_checkpoint(path, before) == {"1": evidence}
+    plan = measure_inventory(
+        before,
+        lambda path: pytest.fail("Fresh evidence must not be re-read"),
+        initial_observations={"1": evidence},
+    )
+    assert plan["observations"]["1"] == evidence
+    with pytest.raises(InventoryBlocked, match="snapshot"):
+        inventory_cli._load_checkpoint(path, {"objects": []})
+
+
+def test_stale_checkpoint_evidence_fails_closed():
+    rows = [{"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None}]
+    evidence = {
+        "bytes": 3,
+        "sha256": hashlib.sha256(b"abc").hexdigest(),
+        "etag": '"stable"',
+        "measured_at": (datetime.now(UTC) - timedelta(minutes=16)).isoformat(),
+    }
+    with pytest.raises(InventoryBlocked) as error:
+        measure_inventory(
+            {"objects": rows},
+            lambda path: pytest.fail("Stale evidence must not be reused"),
+            initial_observations={"1": evidence},
+        )
+    assert error.value.reason_code == "EVIDENCE_STALE_OR_FUTURE"
+
+
 def test_measure_inventory_rejects_unbounded_concurrency():
     with pytest.raises(InventoryBlocked) as error:
         measure_inventory(
