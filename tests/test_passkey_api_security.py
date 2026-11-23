@@ -129,7 +129,7 @@ def test_distributed_limiter_fails_closed(result, status):
         backend.eval.side_effect = result
     else:
         backend.eval.return_value = result
-    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+    request = SimpleNamespace(scope={}, client=SimpleNamespace(host="127.0.0.1"))
     with pytest.raises(HTTPException) as caught:
         server.PasskeyRequestLimiter(backend).check(
             request, Binding("a", "sid", 1, "logout_all"), "test"

@@ -468,7 +468,7 @@ class GoogleTokenTests(unittest.TestCase):
 class CallbackTests(unittest.TestCase):
     def setUp(self):
         self.config = oauth_config()
-        self.client = TestClient(server.app, follow_redirects=False)
+        self.client = TestClient(server.app, base_url="https://testserver", follow_redirects=False)
 
     def _flow(
         self,
@@ -1028,6 +1028,7 @@ class CallbackTests(unittest.TestCase):
             cookies={
                 self.config.browser_cookie_name: flow.browser_binding,
             },
+            scope={},
             client=None,
             headers={},
             session={
@@ -1087,6 +1088,7 @@ class CallbackTests(unittest.TestCase):
             cookies={
                 self.config.browser_cookie_name: flow.browser_binding,
             },
+            scope={},
             client=None,
             headers={},
             session={
@@ -1177,6 +1179,7 @@ class CallbackTests(unittest.TestCase):
         password_hash = hash_password("existing-password")
         request = SimpleNamespace(
             session={"csrf_token": "csrf"},
+            scope={},
             client=None,
         )
         with (
@@ -1203,6 +1206,7 @@ class CallbackTests(unittest.TestCase):
     def test_existing_registration_still_creates_password_account(self):
         request = SimpleNamespace(
             session={"csrf_token": "csrf"},
+            scope={},
             client=None,
             app=SimpleNamespace(state=SimpleNamespace(is_first_account=True)),
         )

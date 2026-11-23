@@ -116,7 +116,9 @@ class InventoryTests(unittest.TestCase):
                     "bytes"
                 ] = 1
             elif change in {"stale", "future"}:
-                candidate["measured_at"] = (
+                candidate["observations"][next(iter(candidate["observations"]))][
+                    "measured_at"
+                ] = (
                     datetime.now(UTC)
                     + timedelta(minutes=-16 if change == "stale" else 1)
                 ).isoformat()
@@ -141,6 +143,33 @@ class InventoryTests(unittest.TestCase):
                     "SELECT reserved_bytes FROM vervfy_storage.objects"
                 ).scalar_one()
             )
+
+    def test_per_object_evidence_must_be_fresh_and_versioned(self):
+        plan = self.plan()
+        for age in (
+            timedelta(minutes=15),
+            timedelta(minutes=16),
+            timedelta(seconds=-1),
+        ):
+            candidate = copy.deepcopy(plan)
+            candidate["observations"][next(iter(candidate["observations"]))][
+                "measured_at"
+            ] = (datetime.now(UTC) - age).isoformat()
+            with (
+                self.subTest(age=age),
+                self.migrator.begin() as c,
+                self.assertRaises(InventoryBlocked) as error,
+            ):
+                apply_inventory(c, self.binding, candidate, plan_digest(candidate))
+            self.assertEqual(error.exception.reason_code, "EVIDENCE_STALE_OR_FUTURE")
+
+        old_format = copy.deepcopy(plan)
+        old_format["version"] = 1
+        with (
+            self.migrator.begin() as c,
+            self.assertRaisesRegex(InventoryBlocked, "format"),
+        ):
+            apply_inventory(c, self.binding, old_format, plan_digest(old_format))
 
     def test_ledger_drift_and_known_charge_reduction_fail_closed(self):
         plan = self.plan()

@@ -91,6 +91,12 @@ class Runner0034Tests(unittest.TestCase):
         cls.engine = sa.create_engine(cls.url)
         cls.addClassCleanup(cls.engine.dispose)
         with cls.engine.begin() as c:
+            for role in ("anon", "authenticated", "service_role"):
+                c.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
+            c.exec_driver_sql(
+                "GRANT ALL PRIVILEGES ON TABLE public.artist_images, "
+                "public.track_cover_cache TO postgres"
+            )
             # Model the reviewed grantor topology inside this new test cluster.
             # No runtime permissions or runner guards are modified.
             c.exec_driver_sql("""UPDATE pg_catalog.pg_auth_members SET grantor='postgres'::regrole
@@ -221,6 +227,74 @@ class Runner0034Tests(unittest.TestCase):
                     restoration if isinstance(restoration, tuple) else (restoration,)
                 ):
                     c.exec_driver_sql(statement)
+
+    def test_public_execute_without_schema_usage_is_not_effective_access(self):
+        schema = "preflight_inaccessible_" + uuid4().hex
+        with self.engine.begin() as c:
+            c.exec_driver_sql(f"CREATE SCHEMA {schema}")
+            c.exec_driver_sql(
+                f"CREATE FUNCTION {schema}.public_exec() RETURNS integer "
+                "LANGUAGE sql AS 'SELECT 1'"
+            )
+            c.exec_driver_sql(
+                f"GRANT EXECUTE ON FUNCTION {schema}.public_exec() TO PUBLIC"
+            )
+            access = c.execute(
+                sa.text("""
+                SELECT has_schema_privilege(
+                           'storage_cleanup_worker', :schema, 'USAGE'
+                       ),
+                       has_function_privilege(
+                           'storage_cleanup_worker',
+                           :schema || '.public_exec()', 'EXECUTE'
+                       )
+            """),
+                {"schema": schema},
+            ).one()
+            self.assertEqual(tuple(access), (False, True))
+        try:
+            with self.engine.connect() as c:
+                runner._check_storage_acl_inventory(
+                    c,
+                    owner="vervfy_storage_lifecycle_owner",
+                    executor="vervfy_storage_cleanup",
+                    worker="storage_cleanup_worker",
+                )
+        finally:
+            with self.engine.begin() as c:
+                c.exec_driver_sql(f"DROP SCHEMA {schema} CASCADE")
+
+    def test_public_execute_with_schema_usage_is_rejected(self):
+        schema = "preflight_callable_" + uuid4().hex
+        with self.engine.begin() as c:
+            c.exec_driver_sql(f"CREATE SCHEMA {schema}")
+            c.exec_driver_sql(
+                f"CREATE FUNCTION {schema}.public_exec() RETURNS integer "
+                "LANGUAGE sql AS 'SELECT 1'"
+            )
+            c.exec_driver_sql(
+                f"GRANT EXECUTE ON FUNCTION {schema}.public_exec() TO PUBLIC"
+            )
+            c.exec_driver_sql(
+                f"GRANT USAGE ON SCHEMA {schema} TO storage_cleanup_worker"
+            )
+        try:
+            with (
+                self.engine.connect() as c,
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "Unexpected effective storage capability function privileges",
+                ),
+            ):
+                runner._check_storage_acl_inventory(
+                    c,
+                    owner="vervfy_storage_lifecycle_owner",
+                    executor="vervfy_storage_cleanup",
+                    worker="storage_cleanup_worker",
+                )
+        finally:
+            with self.engine.begin() as c:
+                c.exec_driver_sql(f"DROP SCHEMA {schema} CASCADE")
 
     def visible_storage_ids(self, tenant_id):
         with self.engine.begin() as c:

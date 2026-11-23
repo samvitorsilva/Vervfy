@@ -204,6 +204,7 @@ def test_google_only_password_creation_consumes_bound_proof():
     old_session = sessions.create(user["id"])
     request = SimpleNamespace(
         session={"sid": old_session, "sv": 2, "user_id": user["id"]},
+        scope={},
         client=None,
         headers={},
     )
@@ -271,7 +272,7 @@ def test_google_password_setup_rate_limit_is_bounded_and_fails_closed():
 
     import server
 
-    request = SimpleNamespace(client=None, headers={})
+    request = SimpleNamespace(scope={}, client=None, headers={})
     limiter = Mock()
     limiter.allow.side_effect = [True, False]
     with patch.object(server, "request_throttle", limiter), pytest.raises(
