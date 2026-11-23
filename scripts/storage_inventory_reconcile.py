@@ -331,9 +331,20 @@ def main(argv=None):
                 on_observation=save_observation,
                 initial_observations=recovered,
             )
-            fd = os.open(args.plan_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as out:
-                json.dump(plan, out, sort_keys=True, indent=2)
+            # Publish only a complete, fsynced plan; never overwrite an approved plan.
+            fd, temp_name = tempfile.mkstemp(
+                prefix=".inventory-plan-", dir=args.plan_file.parent
+            )
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w") as out:
+                    json.dump(plan, out, sort_keys=True, indent=2)
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.link(temp_name, args.plan_file)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
             checkpoint_path.unlink(missing_ok=True)
             print(
                 f"Read-only plan covers {len(plan['observations'])} unknown charges; "
