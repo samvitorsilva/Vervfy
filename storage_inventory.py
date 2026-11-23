@@ -240,7 +240,22 @@ def measure_inventory(
         )
 
     def observe_one(row):
-        measurement = observe(row["path"])
+        # A timed-out object gets one fresh, independently verified observation.
+        # Do not retry permanent errors or reuse partial reads.
+        for attempt in range(2):
+            try:
+                measurement = observe(row["path"])
+                break
+            except InventoryBlocked as exc:
+                if (
+                    attempt != 0
+                    or exc.reason_code not in {
+                        "PROVIDER_DEADLINE_EXCEEDED",
+                        "PROVIDER_RETRY_EXHAUSTED",
+                        "PROVIDER_CONNECTION_ERROR",
+                    }
+                ):
+                    raise
         if not isinstance(measurement, dict) or set(measurement) != {
             "bytes",
             "sha256",
