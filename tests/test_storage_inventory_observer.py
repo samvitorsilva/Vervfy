@@ -571,6 +571,10 @@ def test_checkpoint_rejects_symlink_and_public_permissions(tmp_path):
     link.symlink_to(private)
     with pytest.raises(OSError):
         inventory_cli._load_checkpoint(link, before)
+    dangling = tmp_path / "dangling.checkpoint"
+    dangling.symlink_to(tmp_path / "missing-target")
+    with pytest.raises(OSError):
+        inventory_cli._load_checkpoint(dangling, before)
     private.chmod(0o644)
     with pytest.raises(InventoryBlocked) as error:
         inventory_cli._load_checkpoint(private, before)
