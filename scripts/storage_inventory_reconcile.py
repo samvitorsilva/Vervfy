@@ -10,6 +10,7 @@ import os
 import random
 import tempfile
 import ssl
+import stat
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -200,9 +201,19 @@ def _checkpoint_path(plan_file):
 def _load_checkpoint(path, before):
     if not path.exists():
         return {}
-    if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
-        raise InventoryBlocked("Checkpoint is unsafe", reason_code="PLAN_SIZE_LIMIT")
-    with path.open("r") as stream:
+    # Open without following symlinks and validate the opened inode, not a
+    # potentially replaced pathname. Checkpoints contain private object metadata.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_size > 16 * 1024 * 1024
+            or info.st_mode & 0o077
+        ):
+            raise InventoryBlocked(
+                "Checkpoint is unsafe", reason_code="PLAN_SIZE_LIMIT"
+            )
         checkpoint = json.load(stream)
     if (
         not isinstance(checkpoint, dict)
