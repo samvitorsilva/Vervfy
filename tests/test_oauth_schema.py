@@ -21,7 +21,7 @@ from db import Base, ProviderIdentity, User
 class CredentialTests(unittest.TestCase):
     def test_existing_password_login_rotates_session(self):
         hashed = auth.hash_password('existing-password')
-        request = SimpleNamespace(session={'csrf_token': 'csrf', 'sid': 'old'}, client=None)
+        request = SimpleNamespace(scope={}, session={'csrf_token': 'csrf', 'sid': 'old'}, client=None)
         with (
             patch.object(server.user_store, 'get_by_username', return_value={
                 'id': 'existing', 'password_hash': hashed, 'session_version': 7,
@@ -54,7 +54,7 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_passwordless_login_does_not_issue_session(self):
-        request = SimpleNamespace(session={'csrf_token': 'csrf'}, client=None)
+        request = SimpleNamespace(scope={}, session={'csrf_token': 'csrf'}, client=None)
         with (
             patch.object(server.user_store, 'get_by_username', return_value={'password_hash': None}),
             patch.object(server.login_throttle, 'is_locked', return_value=False),
@@ -69,7 +69,7 @@ class CredentialTests(unittest.TestCase):
     def test_passwordless_account_routes_never_mutate_data(self):
         user = User(id='a', username='someone', password_hash=None)
         request = SimpleNamespace(
-            session={'sid': 'existing', 'sv': 3}, client=None, headers={}
+            scope={}, session={'sid': 'existing', 'sv': 3}, client=None, headers={}
         )
         actions = (
             lambda: server.change_account_email(

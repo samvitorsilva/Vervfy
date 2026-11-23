@@ -83,6 +83,17 @@ ALLOWED_EXTERNAL_HOSTS = {
     "vervfy.invalid",
     "127.0.0.1",
     "api.mailjet.com",
+    # Reviewed application origin and configured transactional email provider.
+    "vervfy.com",
+    "api.resend.com",
+    # Generated floorplan tooling: documentation and its explicit waitlist link.
+    "docs.claude.com",
+    "developers.openai.com",
+    "floorplan-waitlist-690500262396.us-central1.run.app",
+    # Existing UI attribution links and structured-data vocabulary.
+    "21st.dev",
+    "kokonutui.com",
+    "schema.org",
 }
 URL_HOST = re.compile(r"https?://([A-Za-z0-9._-]+)", re.IGNORECASE)
 FORBIDDEN_CATALOG_HOSTS = (
