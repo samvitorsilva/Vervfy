@@ -295,6 +295,54 @@ def test_measure_inventory_bounds_concurrency_and_reports_path_free_progress():
         assert measured_at >= completed_at[object_id]
 
 
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "PROVIDER_DEADLINE_EXCEEDED",
+        "PROVIDER_RETRY_EXHAUSTED",
+        "PROVIDER_CONNECTION_ERROR",
+    ],
+)
+def test_inventory_retries_one_transient_observation_without_partial_evidence(reason):
+    calls = 0
+
+    def flaky(path):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise InventoryBlocked("temporary failure", reason_code=reason)
+        return {
+            "bytes": 3,
+            "sha256": hashlib.sha256(b"abc").hexdigest(),
+            "etag": '"stable"',
+        }
+
+    rows = [{"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None}]
+    plan = measure_inventory({"objects": rows}, flaky, max_workers=1)
+    assert calls == 2
+    assert plan["observations"]["1"]["bytes"] == 3
+
+
+def test_inventory_never_retries_permanent_or_repeated_failure():
+    rows = [{"id": "1", "path": "legacy/1", "state": "hold", "reserved_bytes": None}]
+    for reason, expected_calls in (
+        ("OBJECT_NOT_FOUND", 1),
+        ("PROVIDER_DEADLINE_EXCEEDED", 2),
+    ):
+        calls = 0
+
+        def fails(path):
+            nonlocal calls
+            calls += 1
+            raise InventoryBlocked("failed", reason_code=reason)
+
+        with pytest.raises(InventoryBlocked) as error:
+            measure_inventory({"objects": rows}, fails, max_workers=1)
+        assert error.value.reason_code == reason
+        assert calls == expected_calls
+
+
 def test_measure_inventory_rejects_unbounded_concurrency():
     with pytest.raises(InventoryBlocked) as error:
         measure_inventory(
