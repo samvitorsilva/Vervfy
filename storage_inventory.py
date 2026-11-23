@@ -246,7 +246,8 @@ def measure_inventory(
         raise InventoryBlocked("Checkpoint coverage mismatch", reason_code="OBSERVATION_COVERAGE_MISMATCH")
     for evidence in observations.values():
         _validate_measurement(evidence)
-    _validate_freshness(observations, datetime.now(UTC))
+    if observations:
+        _validate_freshness(observations, datetime.now(UTC))
 
     def observe_one(row):
         # A timed-out object gets one fresh, independently verified observation.
