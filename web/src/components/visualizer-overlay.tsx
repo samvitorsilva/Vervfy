@@ -1,5 +1,7 @@
 "use client";
 
+import { paletteRgb } from "@/lib/design-tokens";
+
 import { useEffect, useRef } from "react";
 import { usePlayerStore } from "@/store/player-store";
 import { useLanguage } from "@/lib/i18n";
@@ -75,9 +77,9 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
       ctx.save();
       ctx.translate(centerX, centerY);
       const glow = ctx.createRadialGradient(0, 0, baseRadius * 0.3, 0, 0, baseRadius * 2.2);
-      glow.addColorStop(0, "rgba(93,174,199,.18)");
-      glow.addColorStop(0.6, "rgba(84,232,212,.06)");
-      glow.addColorStop(1, "rgba(8,10,16,0)");
+      glow.addColorStop(0, `rgba(${paletteRgb.accent},.18)`);
+      glow.addColorStop(0.6, `rgba(${paletteRgb.accent},.06)`);
+      glow.addColorStop(1, `rgba(${paletteRgb.background},0)`);
       ctx.fillStyle = glow;
       ctx.beginPath();
       ctx.arc(0, 0, baseRadius * 2.2, 0, Math.PI * 2);
@@ -96,8 +98,8 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
         const x2 = Math.cos(angle) * endRadius;
         const y2 = Math.sin(angle) * endRadius;
         const gradient = ctx.createLinearGradient(x1, y1, x2, y2);
-        gradient.addColorStop(0, "rgba(84,232,212,.9)");
-        gradient.addColorStop(1, "rgba(93,174,199,.75)");
+        gradient.addColorStop(0, `rgba(${paletteRgb.accent},.9)`);
+        gradient.addColorStop(1, `rgba(${paletteRgb.accent},.75)`);
         ctx.strokeStyle = gradient;
         ctx.lineWidth = Math.max(2, width * 0.004);
         ctx.lineCap = "round";
@@ -108,9 +110,9 @@ export default function VisualizerOverlay({ onClose }: { onClose: () => void }) 
       }
       ctx.beginPath();
       ctx.arc(0, 0, baseRadius, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(242,243,247,.06)";
+      ctx.fillStyle = `rgba(${paletteRgb.text},.06)`;
       ctx.fill();
-      ctx.strokeStyle = "rgba(181,220,229,.36)";
+      ctx.strokeStyle = `rgba(${paletteRgb.accent},.36)`;
       ctx.lineWidth = Math.max(1, width * 0.002);
       ctx.stroke();
       ctx.restore();

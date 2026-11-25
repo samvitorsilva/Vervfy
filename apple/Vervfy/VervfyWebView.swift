@@ -240,8 +240,8 @@ private struct NativeWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.isOpaque = false
-        webView.backgroundColor = .systemBackground
-        webView.scrollView.backgroundColor = .systemBackground
+        webView.backgroundColor = UIColor(VervfyPalette.background)
+        webView.scrollView.backgroundColor = UIColor(VervfyPalette.background)
         let refreshControl = UIRefreshControl()
         refreshControl.addTarget(
             controller,

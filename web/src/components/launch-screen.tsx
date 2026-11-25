@@ -25,10 +25,10 @@ export default function LaunchScreen() {
         <span>Vervfy</span>
       </div>
       <svg className="vervfy-launch-waves" viewBox="0 0 1000 340" preserveAspectRatio="none" aria-hidden="true">
-        <defs><linearGradient id="launchWave" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#00D5B3" stopOpacity=".02"/><stop offset=".7" stopColor="#00D5B3" stopOpacity=".27"/><stop offset="1" stopColor="#00D5B3" stopOpacity=".06"/></linearGradient></defs>
+        <defs><linearGradient id="launchWave" x1="0" y1="0" x2="1" y2="1"><stop stopColor="var(--accent)" stopOpacity=".02"/><stop offset=".7" stopColor="var(--accent)" stopOpacity=".27"/><stop offset="1" stopColor="var(--accent)" stopOpacity=".06"/></linearGradient></defs>
         <path d="M0 120 C210 125 265 260 465 178 S800 0 1000 25 L1000 340 L0 340Z" fill="url(#launchWave)"/>
-        <path d="M0 120 C210 125 265 260 465 178 S800 0 1000 25" fill="none" stroke="#16E7C8" strokeOpacity=".65" strokeWidth="1.5"/>
-        <path d="M0 230 C280 315 360 340 580 260 S850 180 1000 200" fill="none" stroke="#0D9E8D" strokeOpacity=".32" strokeWidth="1.5"/>
+        <path d="M0 120 C210 125 265 260 465 178 S800 0 1000 25" fill="none" stroke="var(--accent)" strokeOpacity=".65" strokeWidth="1.5"/>
+        <path d="M0 230 C280 315 360 340 580 260 S850 180 1000 200" fill="none" stroke="var(--accent)" strokeOpacity=".32" strokeWidth="1.5"/>
       </svg>
     </div>
   );

@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from design_tokens import PALETTE
+
 logger = logging.getLogger("vervfy.email")
 
 # Safe, fixed reason codes for delivery diagnostics. Never derive these from
@@ -605,10 +607,10 @@ def _branded_email_html(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>Vervfy</title></head>'
-        '<body style="margin:0;padding:24px 12px;background:#f3f6f8;'
-        'font-family:Arial,Helvetica,sans-serif;color:#17212b;">'
+        f'<body style="margin:0;padding:24px 12px;background:{PALETTE["background"]};'
+        f'font-family:Arial,Helvetica,sans-serif;color:{PALETTE["text"]};">'
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'style="width:100%;max-width:520px;margin:0 auto;background:#ffffff;'
+        f'style="width:100%;max-width:520px;margin:0 auto;background:{PALETTE["surface"]};'
         'border-radius:18px;"><tr><td style="padding:36px 30px;">'
         f'<img src="{safe_logo}" width="64" height="64" alt="Vervfy" '
         'style="display:block;border:0;border-radius:16px;width:64px;height:64px;">'
@@ -616,16 +618,16 @@ def _branded_email_html(
         f'<h1 style="font-size:25px;line-height:1.25;margin:24px 0 12px;">{escape(title)}</h1>'
         f'<p style="font-size:15px;line-height:1.6;">{escape(description)}</p>'
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-        'style="margin:28px 0;"><tr><td bgcolor="#00cfb3" '
+        f'style="margin:28px 0;"><tr><td bgcolor="{PALETTE["accent"]}" '
         'style="border-radius:10px;">'
         f'<a href="{safe_action}" style="display:inline-block;padding:15px 22px;'
-        'color:#071319;text-decoration:none;font-size:15px;font-weight:bold;">'
+        f'color:{PALETTE["deep"]};text-decoration:none;font-size:15px;font-weight:bold;">'
         f'{escape(action_label)}</a></td></tr></table>'
-        f'<p style="font-size:13px;line-height:1.6;color:#566371;">{escape(closing)}</p>'
-        '<p style="font-size:12px;color:#566371;line-height:1.5;">'
+        f'<p style="font-size:13px;line-height:1.6;color:{PALETTE["secondary"]};">{escape(closing)}</p>'
+        f'<p style="font-size:12px;color:{PALETTE["secondary"]};line-height:1.5;">'
         'If the button does not work, copy this link into your browser:</p>'
         f'<p style="font-size:12px;overflow-wrap:anywhere;word-break:break-all;">'
-        f'<a href="{safe_action}" style="color:#087b76;">{safe_action}</a></p>'
+        f'<a href="{safe_action}" style="color:{PALETTE["accent"]};">{safe_action}</a></p>'
         '</td></tr></table></body></html>'
     )
 

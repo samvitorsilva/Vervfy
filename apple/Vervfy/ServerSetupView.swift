@@ -20,7 +20,7 @@ struct ServerSetupView: View {
                     .font(.largeTitle.weight(.bold))
                 Text("Enter the web address of your Vervfy server.")
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VervfyPalette.secondary)
                     .multilineTextAlignment(.center)
             }
 
@@ -33,21 +33,24 @@ struct ServerSetupView: View {
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(VervfyPalette.danger)
                 }
             }
 
             Button(action: connect) {
                 Text("Connect")
+                    .foregroundStyle(VervfyPalette.deep)
                     .font(.headline)
                     .frame(maxWidth: .infinity, minHeight: 48)
             }
             .buttonStyle(.borderedProminent)
             .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .foregroundStyle(VervfyPalette.text)
         .padding(28)
         .frame(maxWidth: 440)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(VervfyPalette.background.ignoresSafeArea())
         .onAppear { address = initialAddress }
     }
 

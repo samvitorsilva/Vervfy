@@ -1,0 +1,35 @@
+/* Auth roles share the original navy palette and exact logo accent.
+   Edit design-tokens.json for colors; keep auth-only treatment here. */
+.auth-page {
+  --auth-bg:var(--bg);
+  --auth-surface:var(--bg-2);
+  --blue:var(--accent);
+  --cyan:var(--accent);
+  --auth-brand-glow:rgba(var(--accent-rgb),.28);
+  --auth-input-border:var(--input-border);
+  --auth-error-surface:rgba(var(--danger-rgb),.12);
+  --auth-error-border:rgba(var(--danger-rgb),.35);
+  --auth-notice-surface:rgba(var(--accent-rgb),.1);
+  --auth-notice-border:rgba(var(--accent-rgb),.28);
+  --auth-submit-gradient:var(--action-gradient);
+  --auth-submit-ink:var(--ink);
+  --auth-submit-border:rgba(var(--light-rgb),.45);
+  --auth-submit-shadow:0 8px 25px rgba(var(--accent-rgb),.19);
+}
+
+/* Original dark password-strength colors from b56a6a5's utility classes.
+   Dark variants apply throughout auth, matching its dark surfaces on every OS. */
+.auth-page {
+  --strength-empty-bar:rgba(255,255,255,.2);
+  --strength-empty-text:oklch(70.9% 0.01 56.259);
+  --strength-danger-bar:oklch(63.7% 0.237 25.331);
+  --strength-danger-text:oklch(70.4% 0.191 22.216);
+  --strength-caution-bar:oklch(76.9% 0.188 70.08);
+  --strength-caution-text:oklch(82.8% 0.189 84.429);
+  --strength-safe-bar:oklch(69.6% 0.17 162.48);
+  --strength-safe-text:oklch(76.5% 0.177 163.223);
+  --strength-track:rgba(255,255,255,.12);
+  --strength-check-border:rgba(255,255,255,.16);
+  --strength-check-ink:oklch(21.6% 0.006 56.043);
+  --strength-met:oklch(92.3% 0.003 48.717);
+}

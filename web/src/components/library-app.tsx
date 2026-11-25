@@ -1,5 +1,7 @@
 "use client";
 
+import { palette } from "@/lib/design-tokens";
+
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   FormEvent,
@@ -96,12 +98,9 @@ const AUDIO_FILE_ACCEPT = "audio/*,.mp3,.m4a,.wav,.flac,.ogg,.oga,.aac,.opus,.we
 const AUDIO_FILE_EXTENSION = /\.(mp3|m4a|wav|flac|ogg|oga|aac|opus|weba)$/i;
 
 const AURA_PALETTE = [
-  ["#5daec7", "#54e8d4"],
-  ["#ff8fb1", "#5daec7"],
-  ["#54e8d4", "#3aa0ff"],
-  ["#ffb86b", "#ff6b9d"],
-  ["#6bd6ff", "#5daec7"],
-  ["#c084fc", "#54e8d4"],
+  [palette.accent, palette.deep],
+  [palette.endpoint, palette.accent],
+  [palette.deep, palette.endpoint],
 ] as const;
 
 function hashCoverSeed(seed: string): number {
@@ -152,7 +151,7 @@ function generateAura(seed: string): string {
   const angle = (hash % 360) * (Math.PI / 180);
   const x = Math.round(50 + Math.cos(angle) * 15);
   const y = Math.round(50 + Math.sin(angle) * 15);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><defs><radialGradient id="a" cx="${x}%" cy="${y}%" r="75%"><stop stop-color="${first}"/><stop offset=".5" stop-color="${second}" stop-opacity=".34"/><stop offset="1" stop-color="#0c0e14" stop-opacity="0"/></radialGradient><radialGradient id="b" cx="${100 - x}%" cy="${100 - y}%" r="60%"><stop stop-color="${second}"/><stop offset="1" stop-color="#0c0e14" stop-opacity="0"/></radialGradient></defs><rect width="300" height="300" fill="#12151e"/><rect width="300" height="300" fill="url(#a)" opacity=".9"/><rect width="300" height="300" fill="url(#b)" opacity=".55"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><defs><radialGradient id="a" cx="${x}%" cy="${y}%" r="75%"><stop stop-color="${first}"/><stop offset=".5" stop-color="${second}" stop-opacity=".34"/><stop offset="1" stop-color="${palette.background}" stop-opacity="0"/></radialGradient><radialGradient id="b" cx="${100 - x}%" cy="${100 - y}%" r="60%"><stop stop-color="${second}"/><stop offset="1" stop-color="${palette.background}" stop-opacity="0"/></radialGradient></defs><rect width="300" height="300" fill="${palette.surface}"/><rect width="300" height="300" fill="url(#a)" opacity=".9"/><rect width="300" height="300" fill="url(#b)" opacity=".55"/></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
@@ -169,14 +168,14 @@ function GeneratedAura({ seed, className = "" }: { seed: string; className?: str
         <radialGradient id={`${id}-a`} cx={`${x}%`} cy={`${y}%`} r="75%">
           <stop stopColor={first} />
           <stop offset=".5" stopColor={second} stopOpacity=".34" />
-          <stop offset="1" stopColor="#0c0e14" stopOpacity="0" />
+          <stop offset="1" stopColor={palette.background} stopOpacity="0" />
         </radialGradient>
         <radialGradient id={`${id}-b`} cx={`${100 - x}%`} cy={`${100 - y}%`} r="60%">
           <stop stopColor={second} />
-          <stop offset="1" stopColor="#0c0e14" stopOpacity="0" />
+          <stop offset="1" stopColor={palette.background} stopOpacity="0" />
         </radialGradient>
       </defs>
-      <rect width="300" height="300" fill="#12151e" />
+      <rect width="300" height="300" fill={palette.surface} />
       <rect className="generated-aura-first" width="300" height="300" fill={`url(#${id}-a)`} opacity=".9" />
       <rect className="generated-aura-second" width="300" height="300" fill={`url(#${id}-b)`} opacity=".55" />
     </svg>

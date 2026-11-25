@@ -1,6 +1,7 @@
-const CACHE_NAME = "vervfy-next-shell-v4";
+const CACHE_NAME = "vervfy-next-shell-v6";
 const SHELL_ASSETS = [
   "/offline.html",
+  "/design-tokens.css",
   "/manifest.webmanifest",
   "/gemini-svg.svg",
   "/brand-icon-192.png",

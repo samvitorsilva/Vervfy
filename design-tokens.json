@@ -1,0 +1,16 @@
+{
+  "background": "#0C0E14",
+  "surface": "#12151E",
+  "deep": "#080A10",
+  "surfaceRaised": "#161925",
+  "controlSurface": "#12141C",
+  "surfaceHover": "#161923",
+  "accent": "#08E7BE",
+  "endpoint": "#02DFB6",
+  "text": "#F2F3F7",
+  "secondary": "#C0C5D1",
+  "muted": "#A0A8BA",
+  "highlight": "#FFFFFF",
+  "inputBorder": "#838B9B",
+  "danger": "#FF6B7A"
+}

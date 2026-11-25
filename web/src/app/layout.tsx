@@ -1,12 +1,15 @@
+import { palette } from "@/lib/design-tokens";
 import type { Metadata, Viewport } from "next";
 import { cookies, headers } from "next/headers";
 import type { ReactNode } from "react";
 import RootProviders from "@/components/root-providers";
 import { languageFromAcceptLanguage, languageFromLocale } from "@/lib/language";
 import { siteUrl } from "@/lib/site-metadata";
+import "./design-tokens.css";
 import "./styles.css";
+import "./auth-tokens.css";
 import "./auth.css";
-import "./theme-preview.css";
+import "./theme.css";
 import "./tailwind.css";
 
 export const metadata: Metadata = {
@@ -39,7 +42,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   colorScheme: "dark",
-  themeColor: "#11191d",
+  themeColor: palette.background,
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {

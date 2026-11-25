@@ -1,3 +1,4 @@
+import { palette } from "@/lib/design-tokens";
 import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
@@ -7,8 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Your personal music library.",
     start_url: "/",
     display: "standalone",
-    background_color: "#050B12",
-    theme_color: "#11191d",
+    background_color: palette.background,
+    theme_color: palette.background,
     icons: [
       { src: "/gemini-svg.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
       { src: "/brand-icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },

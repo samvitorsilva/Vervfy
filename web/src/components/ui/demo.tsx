@@ -11,7 +11,7 @@ export function PasswordStrengthDemo() {
   const [value, setValue] = useState("");
   return (
     <div className="mx-auto w-full max-w-[320px]">
-      <label htmlFor={id} className="block text-[13px] font-medium text-stone-700 dark:text-stone-200">{t("New password")}</label>
+      <label htmlFor={id} className="block text-[13px] font-medium text-[var(--text-mid)]">{t("New password")}</label>
       <PasswordInput
         id={id}
         value={value}
@@ -19,7 +19,7 @@ export function PasswordStrengthDemo() {
         spellCheck={false}
         onChange={(e) => setValue(e.target.value)}
         placeholder={t("Type a password")}
-        className="mt-1.5 h-10 w-full rounded-[10px] border-2 border-stone-200 bg-stone-100/70 px-3 text-[13px] text-stone-700 shadow-[inset_0_1px_2px_rgba(28,25,23,0.07)] outline-none transition-[background-color,border-color,box-shadow] duration-150 placeholder:text-stone-400 focus:border-[#4568FF] focus:bg-white focus:shadow-none focus-visible:outline-none dark:border-white/[0.08] dark:bg-[#1D1D1A] dark:text-stone-200 dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)] dark:placeholder:text-stone-500 dark:focus:border-[#93B0FF] dark:focus:bg-[#252522]"
+        className="mt-1.5 h-10 w-full rounded-[10px] border-2 border-[var(--text-dim)] bg-[var(--bg-2)] px-3 text-[13px] text-[var(--text)] placeholder:text-[var(--text-dim)] focus:border-[var(--accent)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
       />
       <PasswordStrength value={value} className="mt-3" />
     </div>

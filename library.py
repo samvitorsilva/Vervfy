@@ -17,11 +17,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
+
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import load_only
 
 import audio_store
 import storage_lifecycle
+from design_tokens import PALETTE
 from db import TrackRecord, User, tenant_session
 
 log = logging.getLogger(__name__)
@@ -100,12 +102,9 @@ def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
     """Create title-specific abstract aura artwork for tracks without a cover."""
     seed = hashlib.sha256(title.strip().casefold().encode("utf-8")).digest()
     palettes = (
-        ("8b7fff", "54e8d4"),
-        ("ff8fb1", "8b7fff"),
-        ("54e8d4", "3aa0ff"),
-        ("ffb86b", "ff6b9d"),
-        ("6bd6ff", "8b7fff"),
-        ("c084fc", "54e8d4"),
+        (PALETTE["accent"][1:], PALETTE["deep"][1:]),
+        (PALETTE["endpoint"][1:], PALETTE["accent"][1:]),
+        (PALETTE["deep"][1:], PALETTE["endpoint"][1:]),
     )
     palette = palettes[seed[2] % len(palettes)]
     angle = int.from_bytes(seed[:2], "big") / 65535 * math.tau
@@ -114,7 +113,7 @@ def make_placeholder_cover(title: str, size: int = 512) -> Image.Image:
 
     gradient = Image.linear_gradient("L").resize((size, size), Image.Resampling.BILINEAR)
     gradient = Image.blend(gradient, gradient.transpose(Image.Transpose.ROTATE_90), 0.5)
-    image = ImageOps.colorize(gradient, "#0c0e14", "#191d2b").convert("RGBA")
+    image = ImageOps.colorize(gradient, PALETTE["background"], PALETTE["surface"]).convert("RGBA")
     glow = Image.new("RGBA", (size, size))
     draw = ImageDraw.Draw(glow)
     for color, center, radius, alpha in (

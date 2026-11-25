@@ -80,10 +80,10 @@ export type PasswordStrengthProps = {
   className?: string;
 };
 const TONES = {
-  none: { bar: "bg-stone-300 dark:bg-white/20", text: "text-stone-500 dark:text-stone-400" },
-  danger: { bar: "bg-red-500", text: "text-red-600 dark:text-red-400" },
-  caution: { bar: "bg-amber-500", text: "text-amber-600 dark:text-amber-400" },
-  safe: { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400" },
+  none: { bar: "bg-[var(--strength-empty-bar,var(--text-dim))]", text: "text-[var(--strength-empty-text,var(--text-dim))]" },
+  danger: { bar: "bg-[var(--strength-danger-bar,var(--danger))]", text: "text-[var(--strength-danger-text,var(--danger))]" },
+  caution: { bar: "bg-[var(--strength-caution-bar,var(--text-mid))]", text: "text-[var(--strength-caution-text,var(--text-mid))]" },
+  safe: { bar: "bg-[var(--strength-safe-bar,var(--accent))]", text: "text-[var(--strength-safe-text,var(--accent))]" },
 } as const;
 function toneFor(score: number, max: number) {
   if (score === 0) return TONES.none;
@@ -101,7 +101,7 @@ export function PasswordStrength({ value, rules = defaultPasswordRules, labels =
     <div className={`w-full ${className}`}>
       <div role="meter" aria-label={t("Password strength")} aria-valuemin={0} aria-valuemax={max} aria-valuenow={score} aria-valuetext={label} className="password-strength-meter" style={{ gridTemplateColumns: `repeat(${max}, minmax(0, 1fr))` }}>
         {Array.from({ length: max }, (_, i) => (
-          <div key={i} className="relative h-1.5 overflow-hidden rounded-[2px] bg-stone-200 dark:bg-white/12">
+          <div key={i} className="relative h-1.5 overflow-hidden rounded-[2px] bg-[var(--strength-track,var(--surface-control))]">
             <motion.span className={`absolute inset-0 origin-left rounded-[2px] transition-colors duration-200 ${tone.bar}`} initial={false} animate={{ scaleX: i < score ? 1 : 0 }} transition={reduced ? INSTANT : { ...CELL, delay: i < score ? i * 0.03 : 0 }} />
           </div>
         ))}
@@ -112,19 +112,19 @@ export function PasswordStrength({ value, rules = defaultPasswordRules, labels =
             <motion.span key={text} aria-hidden className={`col-start-1 row-start-1 whitespace-nowrap transition-colors duration-200 ${tone.text}`} initial={false} animate={{ opacity: i === Math.min(score, labels.length - 1) ? 1 : 0 }} transition={reduced ? INSTANT : CROSSFADE}>{t(text)}</motion.span>
           ))}
         </span>
-        <motion.span aria-hidden className="whitespace-nowrap text-[11.5px] leading-5 text-amber-600 dark:text-amber-400" initial={false} animate={{ opacity: guessable ? 1 : 0 }} transition={reduced ? INSTANT : CROSSFADE}>{t("Commonly guessed")}</motion.span>
+        <motion.span aria-hidden className="whitespace-nowrap text-[11.5px] leading-5 text-[var(--strength-caution-text,var(--text-mid))]" initial={false} animate={{ opacity: guessable ? 1 : 0 }} transition={reduced ? INSTANT : CROSSFADE}>{t("Commonly guessed")}</motion.span>
       </div>
       {showRules && (
         <ul className="password-strength-rules mt-3">
           {evaluated.map((rule) => (
             <li key={rule.id} className="flex items-center gap-2">
-              <span className="password-strength-check relative size-[14px] shrink-0 rounded-[4px] border border-stone-200 text-white dark:border-white/[0.16] dark:text-stone-900">
-                <motion.span className="absolute inset-0 rounded-[3px] bg-emerald-500" initial={false} animate={{ opacity: rule.met ? 1 : 0 }} transition={reduced ? INSTANT : CROSSFADE} />
+              <span className="password-strength-check relative size-[14px] shrink-0 rounded-[4px] border border-[var(--strength-check-border,var(--text-dim))] text-[var(--strength-check-ink,var(--ink))]">
+                <motion.span className="absolute inset-0 rounded-[3px] bg-[var(--strength-safe-bar,var(--accent))]" initial={false} animate={{ opacity: rule.met ? 1 : 0 }} transition={reduced ? INSTANT : CROSSFADE} />
                 <motion.svg viewBox="0 0 12 12" fill="none" aria-hidden className="relative size-[9px]" initial={false} animate={{ opacity: rule.met ? 1 : 0, scale: rule.met ? 1 : 0.6 }} transition={reduced ? INSTANT : CELL}>
                   <path d="M2 6.2 4.7 8.9 10 3.3" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" />
                 </motion.svg>
               </span>
-              <span className={`text-[12.5px] leading-5 transition-colors duration-200 ${rule.met ? "text-stone-700 dark:text-stone-200" : "text-stone-500 dark:text-stone-400"}`}>{rule.label}</span>
+              <span className={`text-[12.5px] leading-5 transition-colors duration-200 ${rule.met ? "text-[var(--strength-met,var(--text-mid))]" : "text-[var(--strength-empty-text,var(--text-dim))]"}`}>{rule.label}</span>
               <span className="sr-only">{t(rule.met ? "met" : "not met")}</span>
             </li>
           ))}

@@ -898,7 +898,7 @@ export default function LyricsOverlay({
 
   return (
     <Modal open onDismiss={onClose} className="lyrics-overlay open" role="dialog" aria-modal="true" aria-label={t("Lyrics")}>
-      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}"), radial-gradient(circle at 50% 40%, #1b3035, #12151e 75%)` }} />
+      <div className="lyrics-bg" style={{ backgroundImage: `url("${activeTrack.coverUrl}"), radial-gradient(circle at 50% 40%, var(--ink), var(--bg-2) 75%)` }} />
       <header className="lyrics-topbar">
         <button className="lyrics-close" type="button" aria-label={t("Close lyrics")} onClick={onClose}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m6 9 6 6 6-6" /></svg>
