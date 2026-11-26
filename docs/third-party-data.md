@@ -9,11 +9,24 @@
   proxy; the app server sends the `Lrclib-Client` identifier and track metadata
   to LRCLIB. The browser caches results locally for three days, and fetched
   lyrics are not persisted in the Vervfy database. Disable requests with
-  `LYRICS_PROVIDER_LRCLIB=0`. Commercial permission from LRCLIB has not been
-  confirmed; no response has been received. Do not treat API availability as
-  commercial authorization. Lyrics may remain subject to rights held by their
-  respective owners; this integration does not grant a license to reproduce
-  them commercially.
+  `LYRICS_PROVIDER_LRCLIB=0`.
+
+  **API access permission confirmed (documentation update: 2026-11-26).**
+  As reported by the Vervfy maintainer, LRCLIB maintainer Thang explicitly
+  confirmed free API access for paid and subscription-based apps without prior
+  approval. API use must comply with rate limits, proper User-Agent
+  identification, responsible caching, and takedown notifications. Attribution
+  and developer registration are optional. This records the supplied maintainer
+  confirmation; it does not certify Vervfy's implementation compliance.
+  References: [API terms](https://lrclib.net/developers/terms),
+  [API documentation](https://lrclib.net/docs), and
+  [developer portal](https://lrclib.net/developers).
+
+  **Lyrics copyright remains unresolved.** This authorization covers API access
+  only. It does not grant rights to display or store copyrighted lyrics,
+  regardless of whether users pay. Applicable rights must be obtained or
+  verified separately with the rights holders; free API access and browser
+  caching do not resolve this concern.
 - **MusicBrainz + Cover Art Archive**: track cover URLs only. Search recordings
   with the MusicBrainz JSON web service, pick a release-group, then link
   `https://coverartarchive.org/release-group/<mbid>/front-500`. Store the URL

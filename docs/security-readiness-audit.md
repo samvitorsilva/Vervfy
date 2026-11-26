@@ -18,6 +18,24 @@ Source inspection and synthetic local tests do not prove production
 configuration, database policies, provider permissions, or real-user behavior.
 No production account, customer data, or production deletion was used.
 
+## LRCLIB provider permission update — 2026-11-26
+
+As reported by the Vervfy maintainer, LRCLIB maintainer Thang explicitly
+confirmed free API access for paid and subscription-based apps without prior
+approval. API use must comply with rate limits, proper User-Agent
+identification, responsible caching, and takedown notifications. Attribution
+and developer registration are optional. References:
+[API terms](https://lrclib.net/developers/terms),
+[API documentation](https://lrclib.net/docs), and
+[developer portal](https://lrclib.net/developers).
+
+This confirmation resolves the previous uncertainty about commercial API
+access only. It grants no rights to display or store copyrighted lyrics,
+regardless of whether users pay. Lyrics copyright clearance remains an
+unresolved release concern. This documentation update does not verify
+implementation compliance, change application behavior, or resolve the other
+provider, image-rights, or production-readiness findings in this audit.
+
 ## Checklist — 24 requested areas
 
 | # | Area | Disposition | Evidence and remaining limit |
@@ -43,7 +61,7 @@ No production account, customer data, or production deletion was used.
 | 19 | Account deletion and session revocation | **PARTIAL — MEDIUM** | Source confirms session-version advancement and Redis revocation precede Storage and database deletion; Storage object paths and database rows are account-scoped. Backend failure tests and the local browser cleanup test pass. The production checklist remains manual and dedicated-synthetic-account-only; production deletion was not performed. |
 | 20 | Upload limits, image validation, truncated JPEG | **PASS (local)** | Backend suite passed 130 tests; the focused truncated-JPEG pixel-data test passed 1/1 (10 deselected). This verifies local validation code, not production storage behavior. |
 | 21 | Database/storage consistency, migrations, backup, recovery | **PARTIAL — MEDIUM** | Tenant-scoped cleanup and partial-failure paths were reviewed and locally tested. Live Supabase/PostgreSQL state, migration execution, backups, restore procedures, and retention were not verified. |
-| 22 | Lyrics proxy, synchronization, and custom lyrics | **PASS (local)** | Eight JavaScript proxy tests and browser lyrics flows passed. Commercial permission from LRCLIB remains unconfirmed. |
+| 22 | Lyrics proxy, synchronization, and custom lyrics | **PASS (local)** | Eight JavaScript proxy tests and browser lyrics flows passed. LRCLIB API access is confirmed for paid and subscription-based apps without prior approval; rights to display or store copyrighted lyrics remain unresolved regardless of whether users pay. See the provider permission update above. |
 | 23 | Artist data, artwork, provider failures, attribution, and rights | **PARTIAL — HIGH release blocker** | Mocked fallback/attribution behavior passed. Live provider availability, applicable terms, image rights, and commercial permissions require provider/rightsholder confirmation. |
 | 24 | Service worker, deployment configuration, accessibility, and live performance | **PARTIAL** | Local service-worker, metadata, CSP, build, and viewport checks passed. Screen-reader/physical-device testing, live deployment overrides, and field Core Web Vitals were not verified. |
 
@@ -52,7 +70,7 @@ No production account, customer data, or production deletion was used.
 | Severity | Finding | Evidence / disposition |
 |---|---|---|
 | **MEDIUM** | Historical Playwright failures remain unexplained; the long flow is slow. | Two clean local full runs passed 58 tests with 2 skips, and a focused rerun passed all 4 selected tests. Both reported empty-library checks and the queue-panel alignment assertion passed. The 60-track mock playback flow passed in 5.3 minutes in the first full run, 5.2 minutes focused, and 5.1 minutes in the latest full run, below its existing 420-second limit. Investigation found one worker, serial execution, isolated Playwright browser contexts, a process-shared mock backend reset on successful local login, and server reuse disabled unless explicitly opted in. Library content renders asynchronously behind its loading skeleton; the heading assertions wait for the heading. The queue is fixed at `right: 0` and the test polls after opening. No test-isolation, server-reuse, asynchronous-rendering, or application defect was confirmed as the cause of the historical failures. No assertions or timeouts were weakened. |
-| **HIGH — release blocker** | Commercial/provider and image-rights confirmation is incomplete. | LRCLIB commercial permission remains unconfirmed. Preserve TheAudioDB’s exact informal reply: “It's entirely up to you. Use our services as you like. Cheers, Zag.” It is not a formal commercial license or image-rights clearance. Confirm terms, attribution, commercial use, and image rights with providers/rightsholders. |
+| **HIGH — release blocker** | Lyrics copyright, other provider permissions, and image rights remain unresolved. | Thang confirmed free LRCLIB API access for paid and subscription-based apps without prior approval. This covers API access only; rights to display or store copyrighted lyrics remain unresolved regardless of whether users pay. Preserve TheAudioDB’s exact informal reply: “It's entirely up to you. Use our services as you like. Cheers, Zag.” It is not a formal commercial license or image-rights clearance. Confirm the remaining TheAudioDB terms, attribution, commercial use, and image rights with providers/rightsholders; obtain or verify lyrics rights separately. |
 | **MEDIUM** | Production security and deletion controls need operator verification. | Confirm live HTTPS/Secure cookie behavior, Redis/session-secret configuration, database tenant controls/RLS, Storage bucket policy, and the complete deletion process using only the manual synthetic-account checklist. |
 | **MEDIUM** | LGPD and operational confirmations are incomplete. | Hosting region, international-transfer basis/measures, retention schedule, incident-response ownership/procedure, migrations, backup, and restore were not evidenced for production and require operator/legal confirmation. |
 | **LOW** | ESLint warnings remain. | ESLint: 16 warnings, 0 errors (10 dynamic/script-managed or blob/remote `<img>` uses, 5 intentional full-document auth/session navigations, and 1 root Google Fonts warning). Review found no safe justified change: image optimization needs loader/domain and behavior work, full reloads refresh auth/session state, and changing font loading would alter the app's font setup. Ruff is now clean; the two BLE001 catches were narrowed to expected provider, storage, and database failures. |
@@ -196,9 +214,10 @@ Files changed by this cleanup: `ruff.toml`, `artist_images.py`, `audio_store.py`
 `tests/test_artist_profiles.py`, `tests/test_security_regressions.py`, and
 this report. The shebang scripts and `server.py` gained executable mode only.
 All pre-existing uncommitted work, including account deletion/session
-revocation, its production checklist, website readiness work, the exact
-TheAudioDB response, and LRCLIB's unconfirmed commercial permission status,
-remains preserved.
+revocation, its production checklist, website readiness work, and the exact
+TheAudioDB response, remains preserved. LRCLIB's API permission status is
+recorded in the provider permission update above; the separate lyrics copyright
+concern remains unresolved.
 
 The following dirty-worktree inventory was preserved. Ruff safe autofixes in
 this continuation touched Python files within this inventory; the other
