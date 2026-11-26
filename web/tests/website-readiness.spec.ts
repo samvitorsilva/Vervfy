@@ -25,9 +25,9 @@ test("social previews, crawl rules and existing brand assets are valid", async (
   const sitemap = await request.get("/sitemap.xml");
   expect(sitemap.status()).toBe(200);
   const xml = await sitemap.text();
-  expect(xml.match(/<loc>/g)).toHaveLength(4);
+  expect(xml.match(/<loc>/g)).toHaveLength(5);
   expect(xml).toMatch(/<loc>https?:\/\/[^<]+\/<\/loc>/);
-  for (const path of ["privacy", "terms", "credits"]) expect(xml).toContain(`/${path}</loc>`);
+  for (const path of ["privacy", "terms", "credits", "features"]) expect(xml).toContain(`/${path}</loc>`);
   expect(xml).not.toMatch(/\/(login|register|api)\b/);
   for (const asset of ["/favicon.ico", "/apple-icon.png", "/gemini-svg.svg", "/icon-192.png", "/icon-512.png", "/manifest.webmanifest"]) {
     expect((await request.get(asset)).status()).toBe(200);

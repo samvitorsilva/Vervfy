@@ -63,7 +63,7 @@ test("language switching preserves consistent homepage metadata", async ({ page 
 test("only public pages appear in the sitemap and auth pages remain noindex", async ({ request }) => {
   const xml = await (await request.get("/sitemap.xml")).text();
   const urls = [...xml.matchAll(/<loc>(.*?)<\/loc>/g)].map(match => new URL(match[1]));
-  expect(urls.map(url => url.pathname)).toEqual(["/", "/privacy", "/terms", "/credits"]);
+  expect(urls.map(url => url.pathname)).toEqual(["/", "/privacy", "/terms", "/credits", "/features"]);
   const robots = await (await request.get("/robots.txt")).text();
   expect(robots).toContain(`Sitemap: ${urls[0].origin}/sitemap.xml`);
   for (const path of ["/login", "/register", "/forgot-password", "/reset-password"]) {
@@ -77,7 +77,7 @@ test("public page canonicals match the configured origin and sitemap", async ({ 
   const urls = [...xml.matchAll(/<loc>(.*?)<\/loc>/g)].map(match => match[1]);
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
-  for (const path of ["/", "/privacy", "/terms", "/credits"]) {
+  for (const path of ["/", "/privacy", "/terms", "/credits", "/features"]) {
     const expected = new URL(path, canonicalHome).href;
     expect(urls).toContain(expected);
     const response = await page.goto(path, { waitUntil: "domcontentloaded" });

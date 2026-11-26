@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { featuresContent } from "@/lib/features-content";
 import { homepageSeo } from "@/lib/homepage-seo";
 import { usePathname } from "next/navigation";
 import { languageFromLocale, type Language } from "@/lib/language";
@@ -1567,10 +1568,10 @@ export function LanguageProvider({
     document.documentElement.lang = language;
     const [title, description] =
       pageMetadata[pathname] ?? ["Page not found", "The requested Vervfy page could not be found."];
-    const translatedTitle = pathname === "/" ? homepageSeo[language].title : `${t(title)} | Vervfy`;
-    const translatedDescription = pathname === "/" ? homepageSeo[language].description : t(description);
+    const translatedTitle = pathname === "/" ? homepageSeo[language].title : `${pathname === "/features" ? featuresContent[language].title : t(title)} | Vervfy`;
+    const translatedDescription = pathname === "/" ? homepageSeo[language].description : pathname === "/features" ? featuresContent[language].description : t(description);
     const applyMetadata = () => {
-      if (pathname === "/") {
+      if (pathname === "/" || pathname === "/features") {
         for (const selector of ['meta[property="og:description"]', 'meta[name="twitter:description"]']) {
           const element = document.querySelector(selector);
           if (element?.getAttribute("content") !== translatedDescription) element?.setAttribute("content", translatedDescription);

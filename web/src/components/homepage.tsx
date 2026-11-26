@@ -8,12 +8,13 @@ import { lazy, Suspense, useEffect, useState } from "react";
 const LibraryApp = lazy(() => import("@/components/library-app"));
 import { LibraryLoadingScreen } from "@/components/page-loading";
 import SiteFooter from "@/components/site-footer";
+import { featuresContent } from "@/lib/features-content";
 import { useLanguage } from "@/lib/i18n";
 
 type SessionStatus = "checking" | "anonymous" | "authenticated" | "error";
 
 export default function Homepage({ hasSessionCookie = false }: { hasSessionCookie?: boolean }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>(hasSessionCookie ? "checking" : "anonymous");
   const [sessionAttempt, setSessionAttempt] = useState(0);
 
@@ -73,6 +74,7 @@ export default function Homepage({ hasSessionCookie = false }: { hasSessionCooki
               <p className="homepage-description">
                 {t("Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.")}
               </p>
+              <p><Link className="homepage-secondary-cta" href="/features">{featuresContent[language].link} →</Link></p>
               <div className="homepage-actions">
                 <Link className="homepage-cta" href="/register">{t("Create account")}</Link>
                 <Link className="homepage-secondary-cta" href="/login">{t("Log in")}</Link>
