@@ -2088,7 +2088,15 @@ export default function LibraryApp() {
         if (event.key === "Escape") target.blur();
         return;
       }
-      if (event.key !== "Escape" && target instanceof Element && target.closest('button, a, summary, [role="button"], [role="slider"], [role="menu"], [role="dialog"], dialog, [contenteditable]:not([contenteditable="false"])')) return;
+      if (event.key !== "Escape" && target instanceof Element) {
+        // Clicking navigation or playback leaves a button focused. Keep global
+        // shortcuts available there while preserving native control activation.
+        if (target.closest('[role="slider"], [role="menu"], [role="dialog"], dialog, [contenteditable]:not([contenteditable="false"])')) return;
+        if (
+          (event.key === " " || event.key === "Enter") &&
+          target.closest('button, a, summary, [role="button"]')
+        ) return;
+      }
       if (
         event.key === "/" &&
         !event.shiftKey &&
@@ -2123,10 +2131,12 @@ export default function LibraryApp() {
           togglePlayback();
           break;
         case "ArrowRight":
+          event.preventDefault();
           if (event.shiftKey) playNext(false);
           else seekAudio(usePlayerStore.getState().audioElement, 5);
           break;
         case "ArrowLeft":
+          event.preventDefault();
           if (event.shiftKey) playPrevious();
           else seekAudio(usePlayerStore.getState().audioElement, -5);
           break;
@@ -4297,7 +4307,8 @@ export default function LibraryApp() {
       {removals.items.length > 0 && typeof document !== "undefined" ? createPortal(
         <div className="undo-toasts" aria-label={t("Pending removals")}>
           {removals.items.map((item) => <div className="toast undo-toast" key={item.id} onPointerEnter={() => removals.pause(item.id)} onPointerLeave={() => removals.resume(item.id)} onFocus={() => removals.pause(item.id)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) removals.resume(item.id); }}>
-            <span role="status">{t(item.busy ? "Removing {name}…" : "Removal pending: {name}").replace("{name}", item.label)}</span>
+            <span className="undo-toast-mark" aria-hidden="true">↶</span>
+            <span className="undo-toast-copy" role="status"><strong>{item.label}</strong><small>{t(item.busy ? "Removing…" : "Removal pending")}</small></span>
             <button type="button" disabled={item.busy} onClick={() => removals.undo(item.id)}>{t("Undo")}</button>
           </div>)}
         </div>, document.body) : null}
