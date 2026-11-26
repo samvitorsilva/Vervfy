@@ -129,7 +129,7 @@ const translations: Record<string, string> = {
   "Your music. Your rules.": "Sua música. Suas regras.",
   "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.": "Seu espaço pessoal para música. Envie suas faixas, crie playlists, descubra letras e ouça sua coleção — tudo em um só lugar.",
   "Your library. Your experience. Vervfy.": "Sua biblioteca. Sua experiência. Vervfy.",
-  "Your personal music library, accessible from anywhere.": "Sua biblioteca pessoal de música, acessível de qualquer lugar.",
+  "Vervfy — your personal music library, accessible from anywhere.": "Vervfy — sua biblioteca pessoal de música, acessível de qualquer lugar.",
   "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.": "Envie suas músicas, organize playlists e favoritos e encontre letras e informações sobre artistas em um só lugar.",
   "What Vervfy includes": "O que o Vervfy oferece",
   "Upload audio files and keep their tags and embedded artwork.": "Envie arquivos de áudio e mantenha suas tags e capas incorporadas.",
@@ -839,7 +839,7 @@ const frenchSpanishTranslations: Record<string, readonly [string, string]> = {
   "Your music. Your rules.": ["Votre musique. Vos règles.", "Tu música. Tus reglas."],
   "Your personal space for music. Upload your tracks, build playlists, discover lyrics, and listen to your collection—all in one place.": ["Votre espace musical personnel. Importez vos morceaux, créez des playlists, découvrez les paroles et écoutez votre collection au même endroit.", "Tu espacio personal para la música. Sube tus canciones, crea listas, descubre letras y escucha tu colección, todo en un mismo lugar."],
   "Your library. Your experience. Vervfy.": ["Votre bibliothèque. Votre expérience. Vervfy.", "Tu biblioteca. Tu experiencia. Vervfy."],
-  "Your personal music library, accessible from anywhere.": ["Votre bibliothèque musicale personnelle, accessible partout.", "Tu biblioteca personal de música, accesible desde cualquier lugar."],
+  "Vervfy — your personal music library, accessible from anywhere.": ["Vervfy — votre bibliothèque musicale personnelle, accessible partout.", "Vervfy — tu biblioteca personal de música, accesible desde cualquier lugar."],
   "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place.": ["Importez votre musique, organisez vos playlists et vos favoris, et retrouvez des paroles et des informations sur les artistes au même endroit.", "Sube tu música, organiza listas y favoritos, y encuentra letras e información de artistas en un solo lugar."],
   "What Vervfy includes": ["Ce que propose Vervfy", "Qué incluye Vervfy"],
   "Upload audio files and keep their tags and embedded artwork.": ["Importez vos fichiers audio avec leurs tags et leurs pochettes intégrées.", "Sube archivos de audio y conserva sus etiquetas y portadas integradas."],
@@ -1476,7 +1476,7 @@ const LanguageContext = createContext<LanguageContextValue>({
 let activeLanguage: Language | null = null;
 const languageListeners = new Set<() => void>();
 const pageMetadata: Record<string, readonly [string, string]> = {
-  "/": ["Your personal music library, accessible from anywhere.", "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place."],
+  "/": ["Vervfy — your personal music library, accessible from anywhere.", "Upload your music, organize playlists and favorites, and find lyrics and artist details in one place."],
   "/login": ["Log in", "Log in to your Vervfy account to access your music library."],
   "/register": ["Create an account", "Create a Vervfy account to organize and listen to your music library."],
   "/forgot-password": ["Forgot password", "Request secure password reset instructions for your Vervfy account."],

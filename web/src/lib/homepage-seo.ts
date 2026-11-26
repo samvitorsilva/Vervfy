@@ -3,19 +3,19 @@ import type { Language } from "@/lib/language";
 export const homepageSeo: Record<Language, { title: string; description: string }> = {
   "en": {
     "title": "Vervfy – Personal Music Player & Online MP3 Library",
-    "description": "Play your own MP3s online or download them for offline listening. Manage playlists and favorites, with lyrics and artist information when available."
+    "description": "With Vervfy, play your own MP3s online or download them for offline listening. Manage playlists and favorites, with lyrics and artist information when available."
   },
   "pt-BR": {
     "title": "Vervfy – Player de música pessoal e biblioteca MP3 online",
-    "description": "Ouça seus MP3s online ou baixe-os para ouvir offline. Organize playlists e favoritos, com letras e informações sobre artistas quando disponíveis."
+    "description": "Com o Vervfy, ouça seus MP3s online ou baixe-os para ouvir offline. Organize playlists e favoritos, com letras e informações sobre artistas quando disponíveis."
   },
   "fr": {
     "title": "Vervfy – Lecteur musical personnel et bibliothèque MP3 en ligne",
-    "description": "Écoutez vos MP3 en ligne ou téléchargez-les pour une écoute hors ligne. Gérez playlists et favoris, avec paroles et informations sur les artistes si disponibles."
+    "description": "Avec Vervfy, écoutez vos MP3 en ligne ou téléchargez-les pour une écoute hors ligne. Gérez playlists et favoris, avec paroles et informations sur les artistes si disponibles."
   },
   "es": {
     "title": "Vervfy – Reproductor de música personal y biblioteca MP3 online",
-    "description": "Escucha tus MP3 online o descárgalos para escucharlos sin conexión. Organiza listas y favoritos, con letras e información de artistas cuando estén disponibles."
+    "description": "Con Vervfy, escucha tus MP3 online o descárgalos para escucharlos sin conexión. Organiza listas y favoritos, con letras e información de artistas cuando estén disponibles."
   }
 };
 

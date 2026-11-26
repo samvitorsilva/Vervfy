@@ -27,14 +27,24 @@ export default async function HomePage() {
   const { description } = homepageSeo[language];
   const structuredData = {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    name: "Vervfy",
-    url: new URL("/", siteUrl).href,
-    applicationCategory: "MultimediaApplication",
-    operatingSystem: "Web",
-    description,
-    inLanguage: language,
-    featureList: homepageFeatures[language],
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": new URL("/#website", siteUrl).href,
+        name: "Vervfy",
+        url: new URL("/", siteUrl).href,
+      },
+      {
+        "@type": "SoftwareApplication",
+        name: "Vervfy",
+        url: new URL("/", siteUrl).href,
+        applicationCategory: "MultimediaApplication",
+        operatingSystem: "Web",
+        description,
+        inLanguage: language,
+        featureList: homepageFeatures[language],
+      },
+    ],
   };
 
   return (

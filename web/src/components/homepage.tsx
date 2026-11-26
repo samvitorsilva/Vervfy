@@ -68,7 +68,7 @@ export default function Homepage({ hasSessionCookie = false }: { hasSessionCooki
         <main className="homepage-main">
           <section className="landing-hero" aria-labelledby="homepage-title">
             <div className="landing-copy">
-              <h1 id="homepage-title">{t("Your personal music library, accessible from anywhere.")}</h1>
+              <h1 id="homepage-title">{t("Vervfy — your personal music library, accessible from anywhere.")}</h1>
               <p className="homepage-tagline">{t("Your music. Your rules.")}</p>
               <p className="homepage-description">
                 {t("Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.")}

@@ -1,5 +1,7 @@
 # Vervfy
 
+[Use Vervfy](https://vervfy.com/) — your personal music player on the web.
+
 Your personal music player for the web, built with a modern design that feels unique and user-friendly.
 
 Upload your own files, organize them into playlists, look up lyrics and artist bio, and listen through a player that doesn't feel like an afterthought.
@@ -77,6 +79,17 @@ vervfy/
 ## Persistent data and deployment
 
 Vervfy uses PostgreSQL to store user accounts, bcrypt password hashes for password-based accounts, linked authentication identities, profile photos, track metadata, custom lyrics, favorites, playlists, and storage references. Audio files and some artwork are stored in a private Supabase Storage bucket, while legacy artwork may remain in PostgreSQL. Audio playback uses temporary, one-hour signed URLs, allowing clients to stream directly from Supabase Storage without FastAPI proxying the audio bytes.
+
+### Production domain configuration
+
+Keep production `SITE_URL` set to `https://vervfy.com` so metadata, JSON-LD,
+and the sitemap use the canonical origin. In Vercel Project Settings → Domains,
+add `www.vervfy.com` to this project and configure a permanent redirect to
+`vervfy.com`, preserving paths and query strings. Apply the DNS record Vercel
+specifies at the DNS provider and wait for domain verification and a valid TLS
+certificate before checking the redirect. TLS is established before repository
+code runs, so an application redirect cannot repair a mismatched certificate.
+Verify any historically public Vercel aliases there as well.
 
 ---
 

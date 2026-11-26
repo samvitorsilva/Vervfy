@@ -47,10 +47,10 @@ test("homepage explains Vervfy publicly, translates its message, and links to si
   const response = await page.goto("/");
   expect(response?.status()).toBe(200);
   const html = await response!.text();
-  expect(html).toContain("Your personal music library, accessible from anywhere.");
+  expect(html).toContain("Vervfy — your personal music library, accessible from anywhere.");
   expect(html).toContain("Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.");
   expect(html).not.toContain("self-hosted");
-  await expect(page.getByRole("heading", { level: 1, name: "Your personal music library, accessible from anywhere." })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Vervfy — your personal music library, accessible from anywhere." })).toBeVisible();
   await expect(page.getByText("Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your music library" })).toBeVisible();
   await expect(page.getByText("Each account has its own separate music library.")).toBeVisible();
@@ -62,16 +62,16 @@ test("homepage explains Vervfy publicly, translates its message, and links to si
   await expect(page.getByRole("link", { name: "Terms and Conditions" })).toHaveAttribute("href", "/terms");
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",
-    "Play your own MP3s online or download them for offline listening. Manage playlists and favorites, with lyrics and artist information when available.",
+    "With Vervfy, play your own MP3s online or download them for offline listening. Manage playlists and favorites, with lyrics and artist information when available.",
   );
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /index/);
 
   const languageSelect = page.locator(".site-footer-language select");
   for (const [language, heading, description, privacyLink] of [
-    ["pt-BR", "Sua biblioteca pessoal de música, acessível de qualquer lugar.", "Seu player de música pessoal na web. Envie seus MP3s, organize playlists e favoritos e ouça online ou baixe músicas para ouvir offline.", "Leia a política de privacidade"],
-    ["fr", "Votre bibliothèque musicale personnelle, accessible partout.", "Votre lecteur musical personnel sur le web. Importez vos MP3, gérez playlists et favoris, et écoutez en ligne ou téléchargez vos morceaux pour une écoute hors ligne.", "Lire la politique de confidentialité"],
-    ["es", "Tu biblioteca personal de música, accesible desde cualquier lugar.", "Tu reproductor de música personal en la web. Sube tus MP3, organiza listas y favoritos y escucha online o descarga canciones para escucharlas sin conexión.", "Lee la política de privacidad"],
-    ["en", "Your personal music library, accessible from anywhere.", "Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.", "Read the privacy policy"],
+    ["pt-BR", "Vervfy — sua biblioteca pessoal de música, acessível de qualquer lugar.", "Seu player de música pessoal na web. Envie seus MP3s, organize playlists e favoritos e ouça online ou baixe músicas para ouvir offline.", "Leia a política de privacidade"],
+    ["fr", "Vervfy — votre bibliothèque musicale personnelle, accessible partout.", "Votre lecteur musical personnel sur le web. Importez vos MP3, gérez playlists et favoris, et écoutez en ligne ou téléchargez vos morceaux pour une écoute hors ligne.", "Lire la politique de confidentialité"],
+    ["es", "Vervfy — tu biblioteca personal de música, accesible desde cualquier lugar.", "Tu reproductor de música personal en la web. Sube tus MP3, organiza listas y favoritos y escucha online o descarga canciones para escucharlas sin conexión.", "Lee la política de privacidad"],
+    ["en", "Vervfy — your personal music library, accessible from anywhere.", "Your personal web music player. Upload your own MP3s, organize playlists and favorites, and listen online or download songs for offline playback.", "Read the privacy policy"],
   ]) {
     await languageSelect.selectOption(language);
     await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
