@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 import audio_store
+import audio_security
 from db import tenant_session
 from storage_adapters import (
     LOCAL_NAMESPACE_ENVIRONMENT,
@@ -309,7 +310,7 @@ async def _transfer(binding, path, source, content_type, size, expected_digest):
                 "Content-Type": content_type,
                 "Content-Length": str(size),
                 "x-upsert": "false",
-                "Cache-Control": "max-age=31536000",
+                "Cache-Control": audio_security.upload_cache_control(path),
             },
         ) as response:
             if response.status_code >= 300:

@@ -21,6 +21,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -40,11 +41,15 @@ log = logging.getLogger("vervfy.audio_store")
 _transport: httpx.BaseTransport | None = None
 _shared_client: httpx.Client | None = None
 _shared_client_key: tuple[str, str, str, int] | None = None
-_signed_url_cache: OrderedDict[tuple[str, int], tuple[str, float]] = OrderedDict()
+@dataclass(frozen=True)
+class SignedLease:
+    url: str
+    expires_monotonic: float
+
+
+_signed_url_cache: OrderedDict[tuple[str, str, str, int], SignedLease] = OrderedDict()
 _signed_url_cache_lock = threading.Lock()
 _SIGNED_URL_CACHE_MAX_SIZE = 512
-_SIGNED_URL_EXPIRY_MARGIN_SECONDS = 60
-_STORAGE_CACHE_CONTROL = "max-age=31536000"
 
 
 class StorageError(RuntimeError):
@@ -214,17 +219,32 @@ def upload_file(*args, **kwargs) -> None:
 @_wrap_errors
 def create_signed_url(path: str, expires_in: int = 3600) -> str:
     """Create a direct-to-Storage URL for one object in the private bucket."""
+    return _signed_lease(path, expires_in, min(60, expires_in / 4)).url
+
+
+@_wrap_errors
+def create_audio_lease(path: str) -> dict:
+    from audio_security import AUDIO_TTL_SECONDS, AUDIO_MIN_VALIDITY_SECONDS
+    lease = _signed_lease(path, AUDIO_TTL_SECONDS, AUDIO_MIN_VALIDITY_SECONDS)
+    # Derive wall time at response time from the conservative monotonic deadline.
+    now = time.time()
+    return {"url": lease.url, "serverTime": now,
+            "expiresAt": now + max(0, lease.expires_monotonic - time.monotonic())}
+
+
+def _signed_lease(path: str, expires_in: int, minimum_validity: float) -> SignedLease:
     _guard_managed_read(path)
     if _local_adapter() is not None:
         raise StorageError("Local filesystem objects do not have signed URLs")
-    key = (path, expires_in)
+    project, _, bucket = _settings()
+    key = (project, bucket, path, expires_in)
     with _signed_url_cache_lock:
         now = time.monotonic()
         cached = _signed_url_cache.get(key)
         if cached is not None:
-            if cached[1] > now:
+            if cached.expires_monotonic - minimum_validity > now:
                 _signed_url_cache.move_to_end(key)
-                return cached[0]
+                return cached
             del _signed_url_cache[key]
 
         started_at = now
@@ -251,13 +271,13 @@ def create_signed_url(path: str, expires_in: int = 3600) -> str:
                 signed_path = "/" + signed_path
             signed_url = f"{_settings()[0]}/storage/v1{signed_path}"
 
-        cache_for = expires_in - _SIGNED_URL_EXPIRY_MARGIN_SECONDS
-        if cache_for > 0:
-            _signed_url_cache[key] = (signed_url, started_at + cache_for)
+        lease = SignedLease(signed_url, started_at + expires_in)
+        if expires_in > minimum_validity:
+            _signed_url_cache[key] = lease
             _signed_url_cache.move_to_end(key)
             while len(_signed_url_cache) > _SIGNED_URL_CACHE_MAX_SIZE:
                 _signed_url_cache.popitem(last=False)
-        return signed_url
+        return lease
 
 
 @_wrap_errors

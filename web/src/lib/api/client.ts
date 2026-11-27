@@ -1,3 +1,5 @@
+import { endLocalSession } from "@/lib/session-events";
+
 const CSRF_PATH = "/api/csrf";
 
 export class ApiError extends Error {
@@ -25,6 +27,7 @@ function redirectToLoginOnUnauthorized(input: string, response: Response): void 
     input.startsWith("/api/") &&
     response.status === 401
   ) {
+    endLocalSession();
     window.location.assign("/login");
   }
 }
