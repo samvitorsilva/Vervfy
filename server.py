@@ -47,6 +47,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 import audio_store
+import audio_security
 import auth
 import email_smtp
 import google_oauth
@@ -1589,7 +1590,7 @@ def require_api_user(request: Request):
     return row
 
 
-def _track_payload(track) -> dict:
+def _track_payload(track, *, user_id: str | None = None) -> dict:
     return {
         "id": track.id,
         "title": track.title,
@@ -1601,6 +1602,8 @@ def _track_payload(track) -> dict:
         "cover_source": track.cover_source,
         "cover_url": track.cover_url or f"/api/tracks/{track.id}/cover",
         "stream_url": f"/api/tracks/{track.id}/stream",
+        "lease_url": (f"/api/tracks/{track.id}/playback-lease"
+                      if audio_security.enabled(user_id) else None),
     }
 
 
@@ -4343,7 +4346,7 @@ def authorize_lyrics_lookup(user: Annotated[User, Depends(require_api_user)]) ->
 def list_tracks(user=Depends(require_api_user)) -> dict:
     library = get_library(user["id"])
     tracks = library.list_tracks()
-    return {"tracks": [_track_payload(track) for track in tracks]}
+    return {"tracks": [_track_payload(track, user_id=user["id"]) for track in tracks]}
 
 
 @app.get("/api/tracks/covers")
@@ -4507,7 +4510,7 @@ async def upload_track(
             lookup_audiodb=audiodb_queue.lookup_track_cover,
             prefer_audiodb=True,
         )
-        return _track_payload(track)
+        return _track_payload(track, user_id=user["id"])
     finally:
         await file.close()
         if audio_path:
@@ -4539,7 +4542,7 @@ def upload_status(
             payload["track_id"] = job.track_id
             track = get_library(user["id"]).get(job.track_id)
             if track:
-                payload["track"] = _track_payload(track)
+                payload["track"] = _track_payload(track, user_id=user["id"])
         return payload
 
 
@@ -4813,7 +4816,25 @@ def update_track_metadata(
     track = get_library(user["id"]).update_metadata(track_id, **values)
     if track is None:
         raise HTTPException(status_code=404, detail="Track not found")
-    return _track_payload(track)
+    return _track_payload(track, user_id=user["id"])
+
+
+@app.get("/api/tracks/{track_id}/playback-lease")
+def track_playback_lease(track_id: str, user=Depends(require_api_user)) -> Response:
+    if not audio_security.enabled(user["id"]):
+        raise HTTPException(status_code=404, detail="Not found")
+    library = get_library(user["id"])
+    info = library.audio_info(track_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    # Renewal must never create objects, change references, or bypass a writer pause.
+    if not info.storage_path:
+        raise HTTPException(status_code=409, detail="Audio requires a reviewed storage migration")
+    try:
+        lease = audio_store.create_audio_lease(info.storage_path)
+    except audio_store.StorageError:
+        raise HTTPException(status_code=502, detail="Audio storage is unavailable") from None
+    return JSONResponse(lease, headers={"Cache-Control": audio_security.AUDIO_CACHE_CONTROL})
 
 
 @app.get("/api/tracks/{track_id}/stream")
@@ -4827,6 +4848,10 @@ def track_stream(
     try:
         storage_path = info.storage_path
         if storage_path is None:
+            if audio_security.enabled(user["id"]):
+                # The trial serves legacy bytes through authenticated Range
+                # requests. Reading/renewing audio must not migrate storage.
+                return _legacy_audio_response(library, track_id, request.headers.get("range"))
             try:
                 storage_lifecycle.require_storage_writes_enabled()
             except storage_lifecycle.StorageWritersPaused:
@@ -4836,7 +4861,8 @@ def track_stream(
             storage_path = library.ensure_audio_storage(track_id)
         if not storage_path:
             raise HTTPException(status_code=404, detail="Track not found")
-        signed_url = audio_store.create_signed_url(storage_path)
+        signed_url = (audio_store.create_audio_lease(storage_path)["url"]
+                      if audio_security.enabled(user["id"]) else audio_store.create_signed_url(storage_path))
     except AudioUnavailableError:
         raise HTTPException(status_code=404, detail="Track audio not found") from None
     except audio_store.StorageError as exc:

@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { apiFetch, expectOk } from "@/lib/api/client";
 import { useLanguage } from "@/lib/i18n";
+import { endLocalSession } from "@/lib/session-events";
 
 export default function LogoutButton({
   className = "auth-submit",
@@ -18,6 +19,8 @@ export default function LogoutButton({
   const [pending, setPending] = useState(false);
 
   async function logout() {
+    // Stop now, before CSRF acquisition or any potentially slow network request.
+    endLocalSession();
     setPending(true);
     setError(null);
     try {

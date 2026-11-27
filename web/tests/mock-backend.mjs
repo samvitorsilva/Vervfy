@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 
 const port = 8100;
+const mediaOrigin = process.env.VERVFY_MOCK_SECURE_MEDIA === "1" ? "https://audio-test.supabase.co" : "http://127.0.0.1:8100";
 const testCookie = "vervfy_playwright_session=authenticated";
 const csrfToken = "playwright-csrf-token";
 const sampleRate = 22_050;
@@ -33,6 +34,7 @@ let artistPhotoSource = "none";
 let signedAudioUrlVersion = 0;
 let expireNextMediaUrl = false;
 let mediaFailuresRemaining = 0;
+const mediaDeadlines = new Map();
 const expiredMediaTokens = new Set();
 const artistPhoto = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFElEQVR4nGMUCahgwAaYsIoOWgkAsMwA7Nwb4ScAAAAASUVORK5CYII=",
@@ -106,6 +108,18 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/__test/short-lived-media" && request.method === "POST") {
+    const token = `expiry-test-${++signedAudioUrlVersion}`;
+    mediaDeadlines.set(token, Date.now() + 1500);
+    json(response, 200, { url: `http://127.0.0.1:8100/storage/v1/object/sign/songs/playwright-track-1.wav?token=${token}` });
+    return;
+  }
+  if (url.pathname === "/__test/expire-issued-media" && request.method === "POST") {
+    for (const token of mediaDeadlines.keys()) expiredMediaTokens.add(token);
+    send(response, 204, "");
+    return;
+  }
+
   if (url.pathname === "/__test/expire-next-media" && request.method === "POST") {
     expireNextMediaUrl = true;
     send(response, 204, "");
@@ -138,7 +152,7 @@ const server = createServer(async (request, response) => {
       "Content-Type": "audio/wav",
       Vary: "Origin",
     };
-    if (expiredMediaTokens.has(token)) {
+    if (expiredMediaTokens.has(token) || (mediaDeadlines.has(token) && Date.now() >= mediaDeadlines.get(token))) {
       send(response, 403, "signed URL expired", corsHeaders);
       return;
     }
@@ -204,6 +218,7 @@ const server = createServer(async (request, response) => {
     expireNextMediaUrl = false;
     mediaFailuresRemaining = 0;
     expiredMediaTokens.clear();
+    mediaDeadlines.clear();
     send(response, 303, "", {
       Location: "/",
       "Set-Cookie": `${testCookie}; Path=/; HttpOnly; SameSite=Lax`,
@@ -536,10 +551,22 @@ const server = createServer(async (request, response) => {
   }
 
   const audioStream = url.pathname.match(/^\/api\/tracks\/(playwright-track-\d+)\/stream$/);
+  const audioLease = url.pathname.match(/^\/api\/tracks\/(playwright-track-\d+)\/playback-lease$/);
+  if (audioLease && request.method === "GET") {
+    if (!isAuthenticated(request)) { json(response, 401, { detail: "Not authenticated" }); return; }
+    const token = `lease-${++signedAudioUrlVersion}`;
+    const now = Date.now();
+    mediaDeadlines.set(token, now + 900_000);
+    json(response, 200, {
+      url: `${mediaOrigin}/storage/v1/object/sign/songs/${audioLease[1]}.wav?token=${token}`,
+      serverTime: now / 1000, expiresAt: (now + 900_000) / 1000,
+    });
+    return;
+  }
   if (audioStream && request.method === "GET") {
     signedAudioUrlVersion += 1;
     send(response, 302, "", {
-      Location: `http://127.0.0.1:8100/storage/v1/object/sign/songs/${audioStream[1]}.wav?token=mock-${signedAudioUrlVersion}`,
+      Location: `${mediaOrigin}/storage/v1/object/sign/songs/${audioStream[1]}.wav?token=mock-${signedAudioUrlVersion}`,
       "Cache-Control": "private, no-store",
     });
     return;

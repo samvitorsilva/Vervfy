@@ -2,8 +2,11 @@
 
 import { apiFetch, expectOk } from "@/lib/api/client";
 import { usePlayerStore, type TrackRecord } from "@/store/player-store";
+import { AudioLease } from "@/lib/audio-lease";
+import { listenForSessionEnd } from "@/lib/session-events";
 
 interface PlaybackAttempt {
+  lease: AudioLease | null;
   trackId: string;
   src: string;
   retrySource: string | null;
@@ -71,10 +74,22 @@ export class PlaybackController {
   private activeTrack: TrackRecord | null = null;
   private uiCallbacks: PlaybackUiCallbacks | null = null;
   private unsubscribeStore: (() => void) | null = null;
+  private unsubscribeSession: (() => void) | null = null;
+  private sessionEnded = false;
   private readonly mediaSession: MediaSession | null;
 
   constructor(private readonly audio: HTMLAudioElement) {
     this.lastPlaybackTime = audio.currentTime;
+    this.unsubscribeSession = listenForSessionEnd(() => {
+      this.sessionEnded = true;
+      this.stop();
+      const state = usePlayerStore.getState();
+      state.setQueue([], -1);
+      state.setTracks([]);
+      state.setLibraryMeta([], []);
+      state.setSleepTimer(null, null);
+      if (this.mediaSession) { this.mediaSession.metadata = null; this.mediaSession.playbackState = "none"; }
+    });
     this.mediaSession = navigator.mediaSession ?? null;
 
     audio.addEventListener("timeupdate", this.onTimeUpdate);
@@ -134,6 +149,7 @@ export class PlaybackController {
     debounceSkip = false,
     automaticTransition = false,
   ): void {
+    if (this.sessionEnded) return;
     if (this.startTimer !== null) {
       window.clearTimeout(this.startTimer);
       this.startTimer = null;
@@ -253,6 +269,8 @@ export class PlaybackController {
   }
 
   stop(): void {
+    if (this.startTimer !== null) window.clearTimeout(this.startTimer);
+    this.startTimer = null;
     this.cancelAttempt();
     this.audio.pause();
     this.audio.removeAttribute("src");
@@ -263,6 +281,9 @@ export class PlaybackController {
   }
 
   dispose(): void {
+    this.unsubscribeSession?.();
+    this.unsubscribeSession = null;
+    this.stop();
     if (this.startTimer !== null) window.clearTimeout(this.startTimer);
     this.startTimer = null;
     if (this.sleepTimer !== null) window.clearTimeout(this.sleepTimer);
@@ -491,6 +512,7 @@ export class PlaybackController {
   };
 
   private readonly onSeeked = (): void => {
+    this.attempt?.lease?.warm();
     this.lastPlaybackTime = this.audio.currentTime;
     if (this.attempt) this.attempt.lastListenPosition = this.audio.currentTime;
     this.updateMediaPosition();
@@ -604,6 +626,7 @@ export class PlaybackController {
       this.clearStallTimer(attempt);
       return;
     }
+    attempt?.lease?.warm();
     this.restorePlayback();
     if (
       attempt &&
@@ -619,6 +642,7 @@ export class PlaybackController {
 
   private readonly onOnline = (): void => {
     const attempt = this.attempt;
+    attempt?.lease?.warm();
     if (!attempt?.failed || !attempt.retryableNetworkFailure) return;
     this.restoreFailedNetworkAttempt(attempt);
   };
@@ -681,6 +705,7 @@ export class PlaybackController {
   }
 
   private beginTrack(trackId: string, automaticTransition: boolean): void {
+    if (this.sessionEnded) return;
     const state = usePlayerStore.getState();
     const track = state.tracks.find((item) => item.id === trackId);
     if (!track) return;
@@ -691,6 +716,12 @@ export class PlaybackController {
       window.location.href,
     ).href;
     const currentAttempt = this.attempt;
+    if (currentAttempt?.src === src && !currentAttempt.failed && this.audio.paused) {
+      currentAttempt.wantsPlayback = true;
+      currentAttempt.recoveryPosition = this.audio.currentTime;
+      this.runPlaybackAttempt(currentAttempt);
+      return;
+    }
     if (
       currentAttempt?.src === src &&
       !currentAttempt.failed &&
@@ -702,6 +733,7 @@ export class PlaybackController {
 
     this.cancelAttempt();
     const attempt: PlaybackAttempt = {
+      lease: !track.offlineUrl && track.leaseUrl ? new AudioLease(track.leaseUrl) : null,
       trackId,
       src,
       retrySource: null,
@@ -730,8 +762,23 @@ export class PlaybackController {
   private runPlaybackAttempt(attempt: PlaybackAttempt): void {
     if (this.attempt !== attempt) return;
     const requestId = ++attempt.requestId;
-    const source = attempt.retrySource ?? attempt.src;
     attempt.loading = true;
+    if (attempt.lease) {
+      void attempt.lease.source().then((source) => {
+        if (this.attempt !== attempt || attempt.requestId !== requestId || !attempt.wantsPlayback) return;
+        attempt.retrySource = source;
+        this.playResolvedAttempt(attempt, source, requestId);
+      }).catch((error: unknown) => {
+        if (this.attempt !== attempt || attempt.requestId !== requestId) return;
+        this.handlePlaybackFailure(attempt, { name: "NetworkError" }, "Playback authorization is unavailable.");
+        void error; // Never log capabilities, response bodies or network error URLs.
+      });
+      return;
+    }
+    this.playResolvedAttempt(attempt, attempt.retrySource ?? attempt.src, requestId);
+  }
+
+  private playResolvedAttempt(attempt: PlaybackAttempt, source: string, requestId: number): void {
     const needsLoad =
       this.audio.src !== source ||
       this.audio.error !== null ||
@@ -887,7 +934,10 @@ export class PlaybackController {
     const refreshSignedUrl =
       !attempt.signedUrlRefreshed &&
       (attempt.retryCount > 0 || reusableSignedSource === null);
-    if (refreshSignedUrl) attempt.signedUrlRefreshed = true;
+    if (refreshSignedUrl) {
+      attempt.signedUrlRefreshed = true;
+      attempt.lease?.invalidate();
+    }
     attempt.retrySource = refreshSignedUrl ? null : reusableSignedSource;
     attempt.retryCount += 1;
     usePlayerStore.getState().setPlaybackStatus("buffering");
@@ -936,6 +986,7 @@ export class PlaybackController {
   private cancelAttempt(): void {
     const attempt = this.attempt;
     if (!attempt) return;
+    attempt.lease?.dispose();
     attempt.wantsPlayback = false;
     attempt.recovering = false;
     attempt.requestId += 1;

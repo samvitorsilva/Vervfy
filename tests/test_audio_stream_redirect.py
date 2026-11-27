@@ -147,6 +147,45 @@ class TrackAudioRedirectTests(unittest.TestCase):
         self.assertNotIn("audio_data", response.text)
         self.assertNotIn("must not be serialized", response.text)
 
+    def test_lease_requires_owned_existing_storage_and_never_migrates(self) -> None:
+        with patch.dict(os.environ, {"VERVFY_ENVIRONMENT": "test", "VERVFY_AUDIO_SECURITY_HARDENING": "1"}), patch.object(
+            server.audio_store, "create_audio_lease", return_value={"url": "https://example.test/storage/v1/object/sign/audio", "serverTime": 10, "expiresAt": 910}
+        ) as signer:
+            response = self.client.get("/api/tracks/track-id/playback-lease")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("no-store", response.headers["cache-control"])
+            signer.assert_called_once_with("user-a/track-id.mp3")
+            signer.reset_mock()
+            self.assertEqual(self.client.get("/api/tracks/not-owned/playback-lease").status_code, 404)
+            signer.assert_not_called()
+            self.library.info.storage_path = None
+            self.assertEqual(self.client.get("/api/tracks/track-id/playback-lease").status_code, 409)
+            self.assertEqual(self.library.ensure_calls, 0)
+            signer.assert_not_called()
+
+    def test_lease_is_unavailable_without_trial_and_requires_auth(self) -> None:
+        with patch.dict(os.environ, {"VERVFY_AUDIO_SECURITY_HARDENING": "0"}):
+            self.assertEqual(self.client.get("/api/tracks/track-id/playback-lease").status_code, 404)
+        server.app.dependency_overrides.pop(server.require_api_user)
+        self.assertEqual(self.client.get("/api/tracks/track-id/playback-lease").status_code, 401)
+
+    def test_trial_legacy_stream_never_migrates_even_with_writers_enabled(self) -> None:
+        self.library.info.storage_path = None
+        self.library.audio_bytes = lambda _id: (b"0123456789", "test.mp3")
+        with patch.dict(os.environ, {"VERVFY_ENVIRONMENT": "test", "VERVFY_AUDIO_SECURITY_HARDENING": "1", "VERVFY_STORAGE_WRITES_PAUSED": "0"}), patch.object(server.audio_store, "create_audio_lease") as signer:
+            response = self.client.get("/api/tracks/track-id/stream", headers={"Range": "bytes=2-5"})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"2345")
+        self.assertEqual(self.library.ensure_calls, 0)
+        signer.assert_not_called()
+
+    def test_production_canary_is_account_scoped_for_listing_and_issuance(self) -> None:
+        with patch.dict(os.environ, {"VERVFY_ENVIRONMENT": "production", "VERVFY_AUDIO_SECURITY_HARDENING": "canary", "VERVFY_AUDIO_SECURITY_CANARY_USERS": "other-account"}):
+            self.assertIsNone(self.client.get("/api/tracks").json()["tracks"][0]["lease_url"])
+            self.assertEqual(self.client.get("/api/tracks/track-id/playback-lease").status_code, 404)
+        with patch.dict(os.environ, {"VERVFY_ENVIRONMENT": "production", "VERVFY_AUDIO_SECURITY_HARDENING": "canary", "VERVFY_AUDIO_SECURITY_CANARY_USERS": "user-a"}):
+            self.assertEqual(self.client.get("/api/tracks").json()["tracks"][0]["lease_url"], "/api/tracks/track-id/playback-lease")
+
 
 class LazyAudioMigrationTests(unittest.TestCase):
     def test_uploads_legacy_audio_then_saves_managed_path(self) -> None:

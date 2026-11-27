@@ -15,6 +15,7 @@ import {
 } from "@/lib/passkey-client";
 import type { Account } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
+import { endLocalSession } from "@/lib/session-events";
 import { PasswordInput } from "@/components/auth/password-input";
 import AppLoadingSkeleton from "@/components/app-loading-skeleton";
 import HoldButton from "@/components/kokonutui/hold-button";
@@ -492,6 +493,7 @@ export default function AccountSettings({
     setLogoutMessage(t("Verifying with your passkey…"));
     try {
       const proof = await verifyPasskeyAction("logout_all");
+      endLocalSession();
       await sendJson("/api/account/logout-all", "POST", proof);
       router.replace("/login");
     } catch (reason) {
@@ -707,6 +709,7 @@ export default function AccountSettings({
   }
 
   async function logoutAll() {
+    endLocalSession();
     setPending(true);
     try {
       await sendJson("/api/account/logout-all", "POST", {

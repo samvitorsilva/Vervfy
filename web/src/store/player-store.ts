@@ -26,6 +26,7 @@ export interface TrackRecord {
   hasCover?: boolean;
   coverUrl: string;
   streamUrl: string;
+  leaseUrl?: string | null;
   coverSource?:
     | "embedded"
     | "upload"

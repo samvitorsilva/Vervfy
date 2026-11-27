@@ -16,6 +16,8 @@ import Link from "next/link";
 import { apiFetch, expectOk, fetchWithRetry, uploadWithRetry } from "@/lib/api/client";
 import type { Account, LibraryState } from "@/lib/api/types";
 import LogoutButton from "@/components/auth/logout-button";
+import { SESSION_ENDED } from "@/lib/session-events";
+import { AudioLease } from "@/lib/audio-lease";
 import AccountSettings from "@/components/account-settings";
 import ArtistExplorer, { artistNames } from "@/components/artist-explorer";
 import LyricsOverlay, { lookupLyrics, parseLyricsText } from "@/components/lyrics-overlay";
@@ -49,6 +51,7 @@ interface ServerTrack {
   cover_source?: TrackRecord["coverSource"];
   cover_url: string;
   stream_url: string;
+  lease_url?: string | null;
   custom_lyrics?: string | null;
 }
 
@@ -71,6 +74,7 @@ function recordsFromServer(tracks: ServerTrack[]): TrackRecord[] {
     coverUrl: coverUrlForTrack(track),
     remoteCoverUrl: coverUrlForTrack(track),
     streamUrl: track.stream_url,
+    leaseUrl: track.lease_url,
     coverSource: track.cover_source ?? "unknown",
     favorite: false,
     customLyrics: track.custom_lyrics ?? null,
@@ -1133,6 +1137,8 @@ export default function LibraryApp() {
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const offlineObjectUrlsRef = useRef(new Set<string>());
+  const sessionEndedRef = useRef(false);
+  const downloadAbortRef = useRef<AbortController | null>(null);
   const trackCoverPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackCoverPollAttemptsRef = useRef(0);
   const refreshTrackCoversRef = useRef<() => Promise<void>>(async () => undefined);
@@ -1502,6 +1508,7 @@ export default function LibraryApp() {
         coverUrl: keepCachedImage ? previous.coverUrl : fallback,
         remoteCoverUrl: keepCachedImage ? previous.remoteCoverUrl : fallback,
         streamUrl: track.stream_url,
+        leaseUrl: track.lease_url,
         coverSource: keepCachedImage ? "audiodb" : track.cover_source ?? "unknown",
         offlineUrl: previous?.offlineUrl ?? null,
         offline: previous?.offline ?? false,
@@ -2174,10 +2181,19 @@ export default function LibraryApp() {
 
   useEffect(() => {
     let cancelled = false;
+    const onSessionEnd = () => {
+      cancelled = true;
+      sessionEndedRef.current = true;
+      downloadAbortRef.current?.abort();
+      librarySnapshot = null;
+      offlineObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      offlineObjectUrlsRef.current.clear();
+    };
+    window.addEventListener(SESSION_ENDED, onSessionEnd);
     let inFlight = false;
     let lastRefresh = 0;
     async function loadLibrary() {
-      if (inFlight) return;
+      if (inFlight || cancelled) return;
       if (dirtyRef.current) {
         await saveMeta();
         if (dirtyRef.current || cancelled) return;
@@ -2359,6 +2375,7 @@ export default function LibraryApp() {
     void loadLibrary();
     return () => {
       cancelled = true;
+      window.removeEventListener(SESSION_ENDED, onSessionEnd);
       window.removeEventListener("vervfy:refresh", handleRefresh);
       window.removeEventListener("focus", backgroundRefresh);
       window.removeEventListener("online", handleRefresh);
@@ -2456,6 +2473,7 @@ export default function LibraryApp() {
   }
 
   async function toggleOfflineDownload(track: TrackRecord) {
+    if (sessionEndedRef.current) return;
     if (!profile?.id) {
       notify(t("Your account is still loading. Try again shortly."));
       return;
@@ -2482,19 +2500,26 @@ export default function LibraryApp() {
         return;
       }
 
-      const audioResponse = await expectOk(
-        await apiFetch(track.streamUrl, { cache: "no-store" }),
-      );
+      const downloadLease = track.leaseUrl ? new AudioLease(track.leaseUrl) : null;
+      let source: string;
+      try { source = downloadLease ? await downloadLease.source() : track.streamUrl; }
+      finally { downloadLease?.dispose(); }
+      if (sessionEndedRef.current) return;
+      downloadAbortRef.current ??= new AbortController();
+      const audioResponse = await expectOk(await apiFetch(source, {
+        cache: "no-store", signal: downloadAbortRef.current.signal,
+      }));
       const audio = await audioResponse.blob();
       if (!audio.size) throw new Error("The downloaded track was empty.");
 
       let cover: Blob | null = null;
       if (track.remoteCoverUrl?.startsWith("/api/tracks/")) {
-        const coverResponse = await apiFetch(track.remoteCoverUrl, { cache: "no-store" });
+        const coverResponse = await apiFetch(track.remoteCoverUrl, { cache: "no-store", signal: downloadAbortRef.current.signal });
         if (coverResponse.ok) cover = await coverResponse.blob();
         else console.warn(`Could not save the cover for “${track.title}” offline.`);
       }
 
+      if (sessionEndedRef.current) return;
       await writeOfflineTrack({
         id: `${profile.id}:${track.id}`,
         accountId: profile.id,
@@ -2508,6 +2533,7 @@ export default function LibraryApp() {
         cover,
         dateAdded: Date.now(),
       });
+      if (sessionEndedRef.current) return;
       const offlineUrl = URL.createObjectURL(audio);
       offlineObjectUrlsRef.current.add(offlineUrl);
       let coverUrl: string | undefined;
@@ -2525,6 +2551,7 @@ export default function LibraryApp() {
       );
       notify(t("Downloaded “{name}” for offline listening.").replace("{name}", track.title));
     } catch (error) {
+      if (sessionEndedRef.current) return;
       console.error("Could not save the offline track.", error);
       notify(translateError(error instanceof Error ? error.message : "", "Could not save this track offline."));
     } finally {
