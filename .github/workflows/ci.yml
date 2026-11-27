@@ -16,6 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install --require-hashes -r requirements.lock
+      - run: python -m pip install pytest
       - run: python -m unittest discover -s tests -v
         env:
           DATABASE_URL: "sqlite:///:memory:"
@@ -52,6 +53,38 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
         env:
+          SITE_URL: http://127.0.0.1:3100
+          VERVFY_ENVIRONMENT: test
           BACKEND_URL: http://127.0.0.1:8100
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  inventory-egress:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Select PostgreSQL 17 for private disposable clusters
+        run: |
+          if ! test -x /usr/lib/postgresql/17/bin/initdb; then
+            sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+            sudo apt-get install -y postgresql-17
+          fi
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+      - run: python -m pip install --require-hashes -r requirements.lock
+      - run: python -m pip install pytest
+      - name: Exercise inventory guards with synthetic objects and a private Unix socket
+        run: |
+          initdb --version | grep -E ' 17\.'
+          command -v pg_ctl
+          python -m pytest -v tests/test_storage_inventory.py tests/test_storage_inventory_observer.py --junitxml=inventory-results.xml
+          python - <<'PY'
+          from xml.etree import ElementTree
+          cases = ElementTree.parse("inventory-results.xml").findall(".//testcase")
+          database = [case for case in cases if case.get("classname", "").endswith(".InventoryTests")]
+          assert len(database) >= 12 and all(case.find("skipped") is None for case in cases)
+          PY

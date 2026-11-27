@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import random
+import threading
 import tempfile
 import ssl
 import stat
@@ -42,12 +43,20 @@ RETRY_MAX_SECONDS = 2.0
 class ReadOnlyObserver:
     """Two complete matching reads under one absolute network deadline."""
 
-    def __init__(self, client_factory, binding, *, max_bytes=10 * 1024**3, deadline=60):
+    def __init__(self, client_factory, binding, *, max_bytes=10 * 1024**3, deadline=60, max_gets=None, total_bytes=None):
         if type(max_bytes) is not int or max_bytes <= 0 or not 0 < deadline <= 60:
             raise InventoryBlocked(
                 "Positive bounded observation limits required",
                 reason_code="OBSERVATION_LIMITS_INVALID",
             )
+        if (max_gets, total_bytes) != (None, None) and any(
+            type(limit) is not int or limit <= 0 for limit in (max_gets, total_bytes)
+        ):
+            raise InventoryBlocked("Both download limits must be positive",
+                                   reason_code="OBSERVATION_LIMITS_INVALID")
+        self.remaining_bytes = total_bytes
+        self.remaining_gets = max_gets
+        self.budget_lock = threading.Lock()
         self.client_factory, self.binding = client_factory, binding
         self.max_bytes, self.deadline = max_bytes, deadline
 
@@ -136,9 +145,33 @@ class ReadOnlyObserver:
         raise AssertionError("bounded provider retry loop exhausted unexpectedly")
 
     async def _read_once(self, client, url):
+        headers = {"Accept-Encoding": "identity"}
+        size = self.max_bytes
+        expected_etag = None
+        if self.remaining_gets is not None:
+            async with client.stream("HEAD", url, headers=headers) as metadata:
+                length = metadata.headers.get("content-length", "")
+                expected_etag = metadata.headers.get("etag")
+                if (metadata.status_code != 200 or not length.isascii()
+                        or not length.isdecimal() or len(length) > 20
+                        or not 0 < int(length) <= self.max_bytes
+                        or not is_strong_etag(expected_etag)
+                        or metadata.headers.get("content-encoding", "identity") != "identity"):
+                    raise InventoryBlocked("Reliable object size and version required",
+                                           reason_code="OBJECT_METADATA_INVALID")
+                size = int(length)
+            # Charge the entire attempt before dispatch. An interrupted attempt
+            # may already have been served in full by the CDN.
+            with self.budget_lock:
+                if self.remaining_gets <= 0 or self.remaining_bytes < size:
+                    raise InventoryBlocked("Download budget exhausted",
+                                           reason_code="DOWNLOAD_BUDGET_EXHAUSTED")
+                self.remaining_gets -= 1
+                self.remaining_bytes -= size
+            headers["If-Match"] = expected_etag
         count, digest = 0, hashlib.sha256()
         async with client.stream(
-            "GET", url, headers={"Accept-Encoding": "identity"}
+            "GET", url, headers=headers
         ) as response:
             status = response.status_code
             if status == 429 or 500 <= status <= 599:
@@ -159,6 +192,10 @@ class ReadOnlyObserver:
                     reason_code="PROVIDER_HTTP_REJECTED",
                 )
             etag = response.headers.get("etag")
+            if expected_etag is not None and (
+                etag != expected_etag or response.headers.get("content-length") != str(size)
+            ):
+                raise InventoryBlocked("Object metadata changed", reason_code="OBJECT_METADATA_INVALID")
             if not is_strong_etag(etag):
                 raise InventoryBlocked(
                     "Object version is invalid",
@@ -171,7 +208,7 @@ class ReadOnlyObserver:
                 )
             async for chunk in response.aiter_bytes():
                 count += len(chunk)
-                if count > self.max_bytes:
+                if count > size:
                     raise InventoryBlocked(
                         "Object observation exceeded its size bound",
                         reason_code="OBJECT_SIZE_LIMIT",
@@ -275,11 +312,20 @@ def main(argv=None):
             f"(1-{MAX_CONCURRENT_OBSERVATIONS}; default: {MAX_CONCURRENT_OBSERVATIONS})"
         ),
     )
+    parser.add_argument("--max-object-gets", type=int, default=0,
+                        help="Plan download request budget, including verification reads and retries (default: 0)")
+    parser.add_argument("--max-download-bytes", type=int, default=0,
+                        help="Cumulative object-body byte budget for all GET attempts (default: 0)")
     parser.add_argument("--approved-sha256")
     parser.add_argument("--authorization-expires-at")
     args = parser.parse_args(argv)
     engine = None
     try:
+        if args.operation == "plan":
+            if os.path.lexists(args.plan_file):
+                raise InventoryBlocked("Plan already exists", reason_code="PLAN_ALREADY_EXISTS")
+            if min(args.max_object_gets, args.max_download_bytes) <= 0:
+                raise InventoryBlocked("Explicit download budget required", reason_code="DOWNLOAD_BUDGET_EXHAUSTED")
         runner.validate_migration_chain()
         target = runner.load_target()
         if args.confirm_project_ref != target.project_ref:
@@ -338,7 +384,8 @@ def main(argv=None):
 
             plan = measure_inventory(
                 before,
-                ReadOnlyObserver(client_factory, binding),
+                ReadOnlyObserver(client_factory, binding, max_gets=args.max_object_gets,
+                                 total_bytes=args.max_download_bytes),
                 max_workers=args.workers,
                 progress=report_progress,
                 on_observation=save_observation,

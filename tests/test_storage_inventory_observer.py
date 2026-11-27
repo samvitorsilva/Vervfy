@@ -518,6 +518,7 @@ def test_cli_configures_bounded_observation_workers(
                 "--confirm-project-ref",
                 target.project_ref,
                 "--confirm-uploads-paused",
+                "--max-object-gets", "2", "--max-download-bytes", "128",
                 *worker_args,
             ]
         )
@@ -555,6 +556,7 @@ def test_cli_does_not_overwrite_existing_plan(tmp_path, monkeypatch):
                 "--confirm-project-ref",
                 target.project_ref,
                 "--confirm-uploads-paused",
+                "--max-object-gets", "2", "--max-download-bytes", "128",
             ]
         )
     assert result == 1
@@ -605,6 +607,7 @@ def test_cli_rejects_observation_workers_out_of_bounds(workers, tmp_path):
                 "--confirm-project-ref",
                 "synthetic-project",
                 "--confirm-uploads-paused",
+                "--max-object-gets", "2", "--max-download-bytes", "128",
                 "--workers",
                 workers,
             ]
@@ -647,6 +650,7 @@ def test_cli_reports_fixed_reason_code_without_exception_details(tmp_path, monke
                 "--confirm-project-ref",
                 target.project_ref,
                 "--confirm-uploads-paused",
+                "--max-object-gets", "2", "--max-download-bytes", "128",
             ]
         )
 
@@ -656,3 +660,89 @@ def test_cli_reports_fixed_reason_code_without_exception_details(tmp_path, monke
     assert "credential" not in stderr.getvalue()
     assert not (tmp_path / "inventory-plan.json").exists()
     engine.dispose.assert_called_once()
+
+def test_default_plan_budget_blocks_before_target_lookup(tmp_path):
+    with patch.object(inventory_cli.runner, "load_target") as load:
+        assert inventory_cli.main(["plan", "--plan-file", str(tmp_path / "plan"),
+                                   "--confirm-project-ref", "synthetic", "--confirm-uploads-paused"]) == 1
+        load.assert_not_called()
+
+
+def test_retry_consumes_shared_get_budget():
+    calls = []
+    def respond(request):
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"etag": '"v"', "content-length": "4"})
+        calls.append(request)
+        return httpx.Response(503)
+    observer = ReadOnlyObserver(lambda: httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+                                BINDING, max_gets=5, total_bytes=4)
+    with pytest.raises(InventoryBlocked) as blocked:
+        observer("synthetic.mp3")
+    assert blocked.value.reason_code == "DOWNLOAD_BUDGET_EXHAUSTED"
+    assert len(calls) == 1
+
+@pytest.mark.parametrize("length", [None, "0", "-1", "?", "4,4"])
+def test_unknown_size_stops_before_get(length):
+    def handler(request):
+        assert request.method == "HEAD"
+        headers = {"etag": '"v"'}
+        if length is not None:
+            headers["content-length"] = length
+        return httpx.Response(200, headers=headers)
+    with pytest.raises(InventoryBlocked) as error:
+        observe(handler, max_gets=5, total_bytes=20)
+    assert error.value.reason_code == "OBJECT_METADATA_INVALID"
+
+
+def test_concurrent_verification_reads_share_one_byte_limit():
+    from concurrent.futures import ThreadPoolExecutor
+    barrier = threading.Barrier(2)
+    seen = set()
+    gets = []
+    lock = threading.Lock()
+
+    def serve(request):
+        path = request.url.path
+        headers = {"etag": '"v"', "content-length": "4"}
+        if request.method == "HEAD":
+            return httpx.Response(200, headers=headers)
+        assert request.headers["if-match"] == '"v"'
+        with lock:
+            first = path not in seen
+            seen.add(path)
+            gets.append(path)
+        if first:
+            barrier.wait(timeout=5)
+        return httpx.Response(200, content=b"data", headers=headers)
+
+    observer = ReadOnlyObserver(
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(serve)), BINDING,
+        max_gets=10, total_bytes=12)
+    with ThreadPoolExecutor(2) as pool:
+        results = [pool.submit(observer, path) for path in ("a", "b")]
+        errors = [result.exception() for result in results]
+    assert len(gets) == 3
+    assert errors.count(None) == 1
+    assert [error.reason_code for error in errors if error] == ["DOWNLOAD_BUDGET_EXHAUSTED"]
+
+
+@pytest.mark.parametrize("headers", [
+    {"etag": '"changed"', "content-length": "4"},
+    {"etag": '"v"', "content-length": "5"},
+    {"etag": '"v"'},
+])
+def test_budgeted_get_rejects_changed_or_missing_metadata_before_streaming(headers):
+    class Unreadable(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise AssertionError("Unexpected body consumption")
+            yield b""
+
+    def handler(request):
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"etag": '"v"', "content-length": "4"})
+        return httpx.Response(200, headers=headers, stream=Unreadable())
+
+    with pytest.raises(InventoryBlocked) as error:
+        observe(handler, max_gets=2, total_bytes=8)
+    assert error.value.reason_code == "OBJECT_METADATA_INVALID"
