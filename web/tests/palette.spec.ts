@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
 const axe = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
 
 for (const width of [390, 1440]) {
