@@ -53,6 +53,8 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
         env:
+          SITE_URL: http://127.0.0.1:3100
+          VERVFY_ENVIRONMENT: test
           BACKEND_URL: http://127.0.0.1:8100
       - run: npx playwright install --with-deps chromium
       - run: npm run test:audio-retry
