@@ -65,5 +65,5 @@ jobs:
           tests/palette.spec.ts
           tests/seo.spec.ts
           tests/smoke.spec.ts
-          --grep 'buttons ease into|dragging a sheet header dismisses|upward drags resist|Space opens playlist form|monthly listening record appears once|shared palette, contrast and responsive pages|language switching preserves consistent homepage metadata|public routes have useful metadata|expanded mobile player shows playback-synced lyric lines|listening recap visualizes recorded play counts|opening the library with an expired session|liquid glass stays translucent|mock-backend login, upload|authenticated views share the palette'
+          --grep 'buttons ease into|dragging a sheet header dismisses|upward drags resist|Space opens playlist form|monthly listening record appears once|shared palette, contrast and responsive pages|language switching preserves consistent homepage metadata|public routes have useful metadata|expanded mobile player shows playback-synced lyric lines|listening recap visualizes recorded play counts|expired session cannot open the private library|liquid glass stays translucent|mock-backend login, upload|authenticated views share the palette'
       - run: npm run test:e2e
