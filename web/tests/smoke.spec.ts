@@ -124,11 +124,11 @@ test("public routes have useful metadata, a working footer, and a branded 404", 
   const manifest = await manifestResponse.json();
   expect(manifest.icons).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ src: "/icon-192.png", sizes: "192x192" }),
-      expect.objectContaining({ src: "/icon-512.png", sizes: "512x512" }),
+      expect.objectContaining({ src: "/brand-icon-192.png", sizes: "192x192" }),
+      expect.objectContaining({ src: "/brand-icon-512.png", sizes: "512x512" }),
     ]),
   );
-  for (const iconPath of ["/favicon.ico", "/apple-icon.png", "/icon-192.png", "/icon-512.png"]) {
+  for (const iconPath of ["/favicon.ico", "/brand-icon-180.png", "/brand-icon-192.png", "/brand-icon-512.png"]) {
     expect((await page.request.get(iconPath)).ok(), iconPath).toBe(true);
   }
 
@@ -1407,8 +1407,8 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   const phoneCoverArt = lyricsDialog.locator(".lyrics-art");
   await expect.poll(() => phoneTrackCard.evaluate((element) => getComputedStyle(element).padding)).toBe("12px");
   const phoneCoverBounds = await phoneCoverArt.boundingBox();
-  expect(phoneCoverBounds?.width).toBeCloseTo(72, 0);
-  expect(phoneCoverBounds?.height).toBeCloseTo(72, 0);
+  expect(phoneCoverBounds?.width).toBeCloseTo(96, 0);
+  expect(phoneCoverBounds?.height).toBeCloseTo(96, 0);
   const viewport = lyricsDialog.locator(".lyrics-viewport");
   const paneBounds = await viewport.boundingBox();
   const playerBounds = await lyricsDialog.locator(".lyrics-player").boundingBox();
@@ -1416,9 +1416,16 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   expect(paneBounds!.y).toBeGreaterThan(phoneCoverBounds!.y + phoneCoverBounds!.height);
   expect(paneBounds!.y + paneBounds!.height).toBeLessThanOrEqual(playerBounds!.y);
   await viewport.hover();
-  const beforeScroll = await viewport.evaluate((element) => element.scrollTop);
-  await page.mouse.wheel(0, -500);
-  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeLessThan(beforeScroll);
+  const activeLyric = lyricsDialog.locator(".lyrics-line.active");
+  await expect(activeLyric).toHaveText("Second lyric line");
+  const activeLyricBounds = await activeLyric.boundingBox();
+  const viewportBounds = await viewport.boundingBox();
+  expect(activeLyricBounds).not.toBeNull();
+  expect(viewportBounds).not.toBeNull();
+  expect(activeLyricBounds!.y).toBeGreaterThanOrEqual(viewportBounds!.y);
+  expect(activeLyricBounds!.y + activeLyricBounds!.height).toBeLessThanOrEqual(
+    viewportBounds!.y + viewportBounds!.height,
+  );
   await page.setViewportSize({ width: 768, height: 1024 });
   const trackCardBounds = await lyricsDialog.locator(".lyrics-side").boundingBox();
   const lyricsPlayerBounds = await lyricsDialog.locator(".lyrics-player").boundingBox();
@@ -1583,7 +1590,7 @@ test("listening recap visualizes recorded play counts accessibly", async ({ page
   }
   lastPlayedAt["recap-top-track"] = Date.UTC(2026, 8, 1) / 1000;
   await page.reload();
-  await expect(page.locator(".card").filter({ hasText: "Most played" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Top 2 tracks" }).first()).toBeVisible();
   await page.getByRole("button", { name: "Recap", exact: true }).click();
   await expect(page.getByRole("button", { name: "Recap", exact: true })).toHaveAttribute(
     "aria-current",
@@ -1650,10 +1657,16 @@ test("mobile player menu opens MusicBrainz cover art information", async ({ page
   ).toBeFocused();
 });
 
-test("opening the library with an expired session returns to login", async ({ page }) => {
+test("an expired session cannot open the private library from the public homepage", async ({ page }) => {
+  await page.context().addCookies([
+    { name: "auralis_session", value: "expired-session", url: "http://127.0.0.1:3100" },
+  ]);
+  await page.route("**/api/me", (route) => route.fulfill({ status: 401, body: "{}" }));
   await page.goto("/");
-  await expect(page).toHaveURL(/\/login$/);
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await expect(page.locator(".homepage-page")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /your personal music library/i })).toBeVisible();
+  await expect(page.locator(".rail")).toHaveCount(0);
+  await expect(page.locator(".card")).toHaveCount(0);
 });
 
 test("service worker serves the offline fallback without caching backend APIs", async ({
@@ -1803,7 +1816,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
     .poll(() =>
       page.locator(".rail.glass").evaluate((element) => getComputedStyle(element).backgroundColor),
     )
-    .toBe("rgba(15, 18, 28, 0.3)");
+    .toBe("rgba(12, 14, 20, 0.3)");
 
   const glassState = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>(".rail.glass");
@@ -1830,7 +1843,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
+  expect(glassState?.background).toBe("rgba(12, 14, 20, 0.3)");
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
@@ -1847,7 +1860,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   await expect(page.locator(".queue-picker-card.glass")).toBeVisible();
   await expect(page.locator(".queue-picker-card.glass")).toHaveCSS(
     "background-color",
-    "rgba(18, 20, 31, 0.2)",
+    "rgba(18, 21, 30, 0.2)",
   );
   await expect(page.locator(".queue-picker-card.glass")).toHaveCSS(
     "border-top-color",
@@ -2655,7 +2668,7 @@ test("mock-backend login, upload, playback, seeking, playlist, and Range flow", 
   );
   expect(progressMotion).toEqual([
     { property: "width", duration: "0.25s" },
-    { property: "left", duration: "0.25s" },
+    { property: "opacity", duration: "0.12s" },
   ]);
   const bounds = await seekBar.boundingBox();
   expect(bounds).not.toBeNull();

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
+const require = createRequire(process.cwd() + "/package.json");
 const axe = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
 
 for (const width of [390, 1440]) {
@@ -54,7 +54,7 @@ for (const width of [390, 1440]) {
       await expect(page.locator("body")).toHaveCSS("color", "rgb(242, 243, 247)");
       await expect(page.locator("body")).toHaveCSS("background-color", "rgb(12, 14, 20)");
       if (width > 640) {
-        await expect(page.locator(".rail")).toHaveCSS("background-color", "rgb(18, 21, 30)");
+        await expect(page.locator(".rail.glass")).toHaveCSS("background-color", "rgba(12, 14, 20, 0.3)");
       }
       await page.addScriptTag({ content: axe });
       const contrast = await page.evaluate(async () => {

@@ -1506,7 +1506,6 @@ function currentLanguage(fallback: Language): Language {
 }
 
 function updateLanguage(language: Language): void {
-  if (activeLanguage === language) return;
   activeLanguage = language;
   for (const listener of languageListeners) listener();
 }

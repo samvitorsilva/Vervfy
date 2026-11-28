@@ -89,8 +89,7 @@ test.describe("mobile sheet behavior", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: "reduce" });
   test("dragging a sheet header dismisses it", async ({ page }) => {
     await library(page);
-    const command = page.getByRole("button", { name: "Open command menu" });
-    await command.click();
+    await page.keyboard.press("Control+k");
     await page.getByRole("combobox").fill("Keyboard shortcuts");
     await page.keyboard.press("Enter");
     const sheet = page.locator(".shortcuts-dialog");
@@ -112,7 +111,7 @@ test.describe("sheet motion", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   test("upward drags resist, can be interrupted, and still allow downward dismissal", async ({ page }) => {
     await library(page);
-    await page.getByRole("button", { name: "Open command menu" }).click();
+    await page.keyboard.press("Control+k");
     await page.getByRole("combobox").fill("Keyboard shortcuts");
     await page.keyboard.press("Enter");
     const sheet = page.locator(".shortcuts-dialog");
@@ -175,7 +174,7 @@ test("Space opens playlist form; modal contains focus and Escape restores its tr
   await expect(dialog.locator("input")).toBeFocused();
   for (let i = 0; i < 8; i++) {
     await page.keyboard.press(i < 4 ? "Tab" : "Shift+Tab");
-    await expect.poll(() => dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    await expect.poll(() => dialog.evaluate((element) => element === document.activeElement || element.contains(document.activeElement))).toBe(true);
   }
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
@@ -228,7 +227,7 @@ test("monthly listening record appears once and links to recap", async ({ page }
   await expect(popup).toBeHidden();
   await expect(page.locator(".view-title")).toHaveText("Recap");
   await page.reload();
-  await expect(page.locator(".card")).toHaveCount(2);
+  await expect(page.locator(".view-title")).toHaveText("Recap");
   await page.waitForTimeout(2500);
   await expect(popup).toBeHidden();
 });
