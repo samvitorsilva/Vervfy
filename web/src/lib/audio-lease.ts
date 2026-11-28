@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch, expectOk } from "@/lib/api/client";
+import { requestWithBoundedRetries } from "@/lib/audio-lease-retry.mjs";
 
 // Keep signed capabilities in memory only. Never persist or log a lease.
 export class AudioLease {
@@ -29,9 +30,27 @@ export class AudioLease {
     this.abort.signal.addEventListener("abort", onAbort, { once: true });
     const timeout = window.setTimeout(() => requestAbort.abort(), 10_000);
     this.pending = (async () => {
-      const response = await apiFetch(this.endpoint, {
-        cache: "no-store", signal: requestAbort.signal,
-      });
+      const response = await requestWithBoundedRetries(
+        (signal) => apiFetch(this.endpoint, {
+          cache: "no-store", signal,
+        }),
+        (milliseconds, signal) => new Promise<void>((resolve, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          const timer = window.setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, milliseconds);
+          const onAbort = () => {
+            window.clearTimeout(timer);
+            reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }),
+        requestAbort.signal,
+      );
       if (response.status === 409) {
         // Legacy audio stays on the authenticated application Range endpoint.
         // Never downgrade authentication errors to a redirect or public source.
