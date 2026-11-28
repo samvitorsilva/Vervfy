@@ -1624,3 +1624,4 @@ export function LanguageSelect({ className = "" }: { className?: string }) {
       </select>
     </label>
   );
+}
