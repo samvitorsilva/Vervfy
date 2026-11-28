@@ -52,7 +52,9 @@ test("language switching preserves consistent homepage metadata", async ({ page,
     { name: "vervfy-language", value: "en", url: new URL(baseURL!).origin },
   ]);
   await page.route("**/api/me", route => route.fulfill({ status: 401, body: "{}" }));
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const sessionCheck = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/me");
+  await page.goto("/");
+  await sessionCheck;
   for (const language of SUPPORTED_LANGUAGES) {
     await page.locator(".site-footer-language select").selectOption(language);
     await expect(page.locator("html")).toHaveAttribute("lang", language);
