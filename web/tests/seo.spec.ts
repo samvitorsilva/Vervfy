@@ -47,11 +47,15 @@ for (const language of SUPPORTED_LANGUAGES) {
   });
 }
 
-test("language switching preserves consistent homepage metadata", async ({ page }) => {
+test("language switching preserves consistent homepage metadata", async ({ page, baseURL }) => {
+  await page.context().addCookies([
+    { name: "vervfy-language", value: "en", url: new URL(baseURL!).origin },
+  ]);
   await page.route("**/api/me", route => route.fulfill({ status: 401, body: "{}" }));
   await page.goto("/", { waitUntil: "domcontentloaded" });
   for (const language of SUPPORTED_LANGUAGES) {
     await page.locator(".site-footer-language select").selectOption(language);
+    await expect(page.locator("html")).toHaveAttribute("lang", language);
     await expect(page.locator("h1")).toHaveText(headings[language]);
     await expect(page).toHaveTitle(homepageSeo[language].title);
     for (const selector of ['meta[name="description"]', 'meta[property="og:description"]', 'meta[name="twitter:description"]']) {

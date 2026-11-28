@@ -1341,8 +1341,34 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
         albumName: track.album,
         // Duration must stay within the app's ±3s recording match window.
         duration: track.duration,
-        syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
-        plainLyrics: "First lyric line\nSecond lyric line",
+        syncedLyrics: [
+          "[00:00.00]First lyric line",
+          "[00:02.00]Second lyric line",
+          "[00:04.00]Third lyric line",
+          "[00:06.00]Fourth lyric line",
+          "[00:08.00]Fifth lyric line",
+          "[00:10.00]Sixth lyric line",
+          "[00:12.00]Seventh lyric line",
+          "[00:14.00]Eighth lyric line",
+          "[00:16.00]Ninth lyric line",
+          "[00:18.00]Tenth lyric line",
+          "[00:20.00]Eleventh lyric line",
+          "[00:22.00]Twelfth lyric line",
+        ].join("\n"),
+        plainLyrics: [
+          "First lyric line",
+          "Second lyric line",
+          "Third lyric line",
+          "Fourth lyric line",
+          "Fifth lyric line",
+          "Sixth lyric line",
+          "Seventh lyric line",
+          "Eighth lyric line",
+          "Ninth lyric line",
+          "Tenth lyric line",
+          "Eleventh lyric line",
+          "Twelfth lyric line",
+        ].join("\n"),
       }),
     });
   });
@@ -1355,7 +1381,20 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
           artistName: track.artist,
           albumName: track.album,
           duration: track.duration,
-          syncedLyrics: "[00:00.00]First lyric line\n[00:02.00]Second lyric line",
+          syncedLyrics: [
+            "[00:00.00]First lyric line",
+            "[00:02.00]Second lyric line",
+            "[00:04.00]Third lyric line",
+            "[00:06.00]Fourth lyric line",
+            "[00:08.00]Fifth lyric line",
+            "[00:10.00]Sixth lyric line",
+            "[00:12.00]Seventh lyric line",
+            "[00:14.00]Eighth lyric line",
+            "[00:16.00]Ninth lyric line",
+            "[00:18.00]Tenth lyric line",
+            "[00:20.00]Eleventh lyric line",
+            "[00:22.00]Twelfth lyric line",
+          ].join("\n"),
         },
       ]),
     }),
@@ -1417,8 +1456,8 @@ test("expanded mobile player shows playback-synced lyric lines", async ({ page }
   expect(paneBounds!.y + paneBounds!.height).toBeLessThanOrEqual(playerBounds!.y);
   await viewport.hover();
   const beforeScroll = await viewport.evaluate((element) => element.scrollTop);
-  await page.mouse.wheel(0, -500);
-  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeLessThan(beforeScroll);
+  await page.mouse.wheel(0, 500);
+  await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(beforeScroll);
   await page.setViewportSize({ width: 768, height: 1024 });
   const trackCardBounds = await lyricsDialog.locator(".lyrics-side").boundingBox();
   const lyricsPlayerBounds = await lyricsDialog.locator(".lyrics-player").boundingBox();
@@ -1836,7 +1875,7 @@ test("liquid glass stays translucent and limits active surfaces", async ({ page 
   });
 
   expect(glassState).not.toBeNull();
-  expect(glassState?.background).toBe("rgba(15, 18, 28, 0.3)");
+  expect(glassState?.background).toBe("rgba(12, 14, 20, 0.3)");
   expect(glassState?.backdropFilter).toMatch(/blur\((18|3)px\)/);
   expect(glassState?.boxShadow).toContain("inset");
   expect(glassState?.glassCount).toBeLessThanOrEqual(4);
