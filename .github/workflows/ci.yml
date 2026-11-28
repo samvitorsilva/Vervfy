@@ -54,4 +54,5 @@ jobs:
         env:
           BACKEND_URL: http://127.0.0.1:8100
       - run: npx playwright install --with-deps chromium
+      - run: npm run test:audio-retry
       - run: npm run test:e2e

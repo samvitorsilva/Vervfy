@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch, expectOk } from "@/lib/api/client";
+import { ApiError, apiFetch, expectOk } from "@/lib/api/client";
 import { usePlayerStore, type TrackRecord } from "@/store/player-store";
 import { AudioLease } from "@/lib/audio-lease";
 import { listenForSessionEnd } from "@/lib/session-events";
@@ -9,6 +9,7 @@ interface PlaybackAttempt {
   lease: AudioLease | null;
   trackId: string;
   src: string;
+  offlineSrc: string | null;
   retrySource: string | null;
   retryCount: number;
   retryTimer: number | null;
@@ -736,6 +737,7 @@ export class PlaybackController {
       lease: !track.offlineUrl && track.leaseUrl ? new AudioLease(track.leaseUrl) : null,
       trackId,
       src,
+      offlineSrc: track.offlineUrl ? new URL(track.offlineUrl, window.location.href).href : null,
       retrySource: null,
       retryCount: 0,
       retryTimer: null,
@@ -770,7 +772,13 @@ export class PlaybackController {
         this.playResolvedAttempt(attempt, source, requestId);
       }).catch((error: unknown) => {
         if (this.attempt !== attempt || attempt.requestId !== requestId) return;
-        this.handlePlaybackFailure(attempt, { name: "NetworkError" }, "Playback authorization is unavailable.");
+        if (this.startOfflineFallback(attempt)) return;
+        const message = error instanceof ApiError && error.status === 402
+          ? "Storage quota is temporarily unavailable."
+          : error instanceof ApiError && error.status === 429
+            ? "Playback is rate limited. Please wait and try again."
+            : "Playback is temporarily unavailable. Please try again soon.";
+        this.handlePlaybackFailure(attempt, error, message);
         void error; // Never log capabilities, response bodies or network error URLs.
       });
       return;
@@ -890,6 +898,7 @@ export class PlaybackController {
       errorName === "NetworkError" ||
       mediaErrorCode === MediaError.MEDIA_ERR_ABORTED ||
       mediaErrorCode === MediaError.MEDIA_ERR_NETWORK;
+    if (retryableNetworkError && this.startOfflineFallback(attempt)) return;
     const unsupportedMediaError =
       errorName === "NotSupportedError" ||
       mediaErrorCode === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
@@ -950,6 +959,22 @@ export class PlaybackController {
       this.audio.pause();
       this.runPlaybackAttempt(attempt);
     }, delay);
+  }
+
+  private startOfflineFallback(attempt: PlaybackAttempt): boolean {
+    if (!attempt.offlineSrc || attempt.src === attempt.offlineSrc ||
+        this.attempt !== attempt || !attempt.wantsPlayback) return false;
+    attempt.lease?.dispose();
+    attempt.lease = null;
+    attempt.src = attempt.offlineSrc;
+    attempt.retrySource = attempt.offlineSrc;
+    attempt.retryCount = 0;
+    attempt.failed = false;
+    attempt.loading = false;
+    attempt.recovering = true;
+    usePlayerStore.getState().setPlaybackStatus("buffering");
+    this.runPlaybackAttempt(attempt);
+    return true;
   }
 
   private pauseAtQueueEnd(): void {

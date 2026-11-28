@@ -54,7 +54,10 @@ const notificationKeys = [
   "The track could not restart. Please try again.",
   "The track could not start. Please try again.",
   "Playback stopped while buffering. Check your connection and try again.",
-  "Press play to start."
+  "Press play to start.",
+  "Storage quota is temporarily unavailable.",
+  "Playback is rate limited. Please wait and try again.",
+  "Playback is temporarily unavailable. Please try again soon."
 ];
 
 test("notification keys exist in Brazilian Portuguese, French and Spanish", () => {

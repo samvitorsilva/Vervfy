@@ -25,6 +25,45 @@ async function library(page: Page) {
   await expect(page.getByRole("button", { name: "Play Security fixture", exact: true })).toBeVisible();
 }
 
+test("playback leases retry 429 and 503 a bounded number of times and explain quota responses", async ({ page }) => {
+  await library(page);
+  let calls = 0;
+  await page.route("**/api/tracks/*/playback-lease", async route => {
+    calls += 1;
+    if (calls === 1) {
+      await route.fulfill({ status: 429, headers: { "Retry-After": "0" }, body: "limited" });
+      return;
+    }
+    const now = Date.now() / 1000;
+    await route.fulfill({ json: {
+      url: "https://audio-test.supabase.co/storage/v1/object/sign/songs/playwright-track-1.wav?token=synthetic",
+      serverTime: now, expiresAt: now + 900,
+    } });
+  });
+  await page.getByRole("button", { name: "Play Security fixture", exact: true }).click();
+  await expect.poll(async () => (await audioState(page)).time).toBeGreaterThan(0);
+  expect(calls).toBe(2);
+
+  await page.reload();
+  await page.route("**/api/tracks/*/playback-lease", async route => {
+    calls += 1;
+    await route.fulfill({ status: 402, body: "quota unavailable" });
+  });
+  await page.getByRole("button", { name: "Play Security fixture", exact: true }).click();
+  await expect(page.getByText("Storage quota is temporarily unavailable.")).toBeVisible();
+  expect(calls).toBe(3);
+
+  await page.reload();
+  calls = 0;
+  await page.route("**/api/tracks/*/playback-lease", async route => {
+    calls += 1;
+    await route.fulfill({ status: 503, body: "temporarily unavailable" });
+  });
+  await page.getByRole("button", { name: "Play Security fixture", exact: true }).click();
+  await expect(page.getByText("Playback is temporarily unavailable. Please try again soon.")).toBeVisible();
+  expect(calls).toBe(3);
+});
+
 const audioState = (page: Page) => page.locator("audio").evaluate((e: HTMLAudioElement) => ({
   time: e.currentTime, paused: e.paused, src: e.getAttribute("src"), rate: e.playbackRate,
 }));

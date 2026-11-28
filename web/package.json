@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test:e2e": "playwright test",
     "test:e2e:google-auth": "PLAYWRIGHT_USE_PRODUCTION_SERVER=1 playwright test tests/google-auth.spec.ts",
-    "test:i18n": "node --test tests/toast-translations.test.mjs"
+    "test:i18n": "node --test tests/toast-translations.test.mjs",
+    "test:audio-retry": "node --test tests/audio-lease-retry.test.mjs"
   },
   "dependencies": {
     "@zxcvbn-ts/core": "^4.3.0",
